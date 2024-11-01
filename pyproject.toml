@@ -1,0 +1,44 @@
+[build-system]
+requires = ['hatchling', "hatch-fancy-pypi-readme", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "orbix"
+version = "0.0.1"
+description = "A JAX library of functions useful for exoplanet simulations"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["jax>=0.4.34", "numpy>=2.1.2"]
+
+
+[project.urls]
+Homepage = "https://github.com/CoreySpohn/orbix"
+Issues = "https://github.com/CoreySpohn/orbix/issues"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/orbix/_version.py"
+
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+[project.optional-dependencies]
+docs = [
+  "sphinx",
+  "myst-nb",
+  "sphinx-book-theme",
+  "sphinx-autoapi",
+  "sphinx_autodoc_typehints",
+  "matplotlib",
+]
+
+[tool.ruff.lint]
+select = ["D", "E", "F", "I"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
