@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "orbix"
-version = "0.0.1"
 description = "A JAX library of functions useful for exoplanet simulations"
-readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["jax>=0.4.34", "numpy>=2.1.2"]
+license = { file = "LICENSE" }
+dynamic = ['readme', 'version']
 
 
 [project.urls]

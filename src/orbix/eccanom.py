@@ -197,7 +197,6 @@ def get_E_lookup_hermite(e, n=1800):
     return E_lookup
 
 
-@jax.jit
 def shortsin(x):
     """Approximates the sine function using a short polynomial.
 
@@ -215,7 +214,6 @@ def shortsin(x):
     )
 
 
-@jax.jit
 def cut_M(M: jnp.ndarray):
     """Cut M to be between 0 and pi.
 
@@ -237,7 +235,6 @@ def cut_M(M: jnp.ndarray):
     return Esigns, _M
 
 
-@jax.jit
 def getbounds(e: float):
     """Create bounds and coefficients for the eccentric anomaly polynomial.
 
@@ -343,7 +340,6 @@ def getbounds(e: float):
     return bounds, coeffs
 
 
-@jax.jit
 def init_E_poly(M, e):
     """Initial guess for the eccentric anomaly.
 
@@ -384,7 +380,6 @@ def init_E_poly(M, e):
     return E * sqrt_ome
 
 
-@jax.jit
 def init_E_coeffs(M: jnp.ndarray, bounds: jnp.ndarray, coeffs: jnp.ndarray):
     """Create the initial guess for the eccentric anomaly using the polynomials."""
     # j_inds = jnp.searchsorted(bounds, M, side="right") - 1
@@ -401,7 +396,6 @@ def init_E_coeffs(M: jnp.ndarray, bounds: jnp.ndarray, coeffs: jnp.ndarray):
     )
 
 
-@jax.jit
 def dE_num_denom(M, E, e_inv, sinE, cosE):
     """Compute the numerator and denominator for dE."""
     num = (M - E) * e_inv + sinE
@@ -409,14 +403,12 @@ def dE_num_denom(M, E, e_inv, sinE, cosE):
     return num, denom
 
 
-@jax.jit
 def dE_2nd(M, E, e_inv, sinE, cosE):
     """Compute the second order approximation of dE."""
     num, denom = dE_num_denom(M, E, e_inv, sinE, cosE)
     return num * denom / (denom * denom + 0.5 * sinE * num)
 
 
-@jax.jit
 def dE_3rd(M, E, e_inv, sinE, cosE):
     """Compute the third order approximation of dE."""
     num, denom = dE_num_denom(M, E, e_inv, sinE, cosE)
@@ -452,7 +444,6 @@ compute_dE_vectorized = jax.vmap(
 )
 
 
-@jax.jit
 def le_E(M: jnp.ndarray, e: float):
     """Inverts Kepler's time equation for elliptical orbits using Orvara's method.
 
@@ -476,7 +467,6 @@ def le_E(M: jnp.ndarray, e: float):
     return E
 
 
-@jax.jit
 def le_E_trig(M: jnp.ndarray, e: float):
     """Inverts Kepler's time equation for elliptical orbits using Orvara's method.
 
@@ -507,7 +497,6 @@ def le_E_trig(M: jnp.ndarray, e: float):
     return E, sinE, cosE
 
 
-@jax.jit
 def he_E(M: jnp.ndarray, e: float):
     """Inverts Kepler's time equation for elliptical orbits with e > 0.78.
 
@@ -534,7 +523,6 @@ def he_E(M: jnp.ndarray, e: float):
     return E
 
 
-@jax.jit
 def he_E_trig(M: jnp.ndarray, e: float):
     """Inverts Kepler's time equation for elliptical orbits with e > 0.78.
 
@@ -567,7 +555,6 @@ def he_E_trig(M: jnp.ndarray, e: float):
     return E, sinE, cosE
 
 
-@jax.jit
 def Etrig_1(E):
     """When E <= pi_d_4."""
     sinE = shortsin(E)
@@ -575,7 +562,6 @@ def Etrig_1(E):
     return sinE, cosE
 
 
-@jax.jit
 def Etrig_2(E):
     """When E > pi_d_4 and E < three_pi_d_4."""
     cosE = shortsin(pi_d_2 - E)
@@ -583,7 +569,6 @@ def Etrig_2(E):
     return sinE, cosE
 
 
-@jax.jit
 def Etrig_3(E):
     """When E > pi_d_2 and E > three_pi_d_4."""
     sinE = shortsin(pi - E)
@@ -591,13 +576,11 @@ def Etrig_3(E):
     return sinE, cosE
 
 
-@jax.jit
 def Etrig(i, E):
     """Apply the correct trigonometric function based on the index."""
     return lax.switch(i, [Etrig_1, Etrig_2, Etrig_3], E)
 
 
-@jax.jit
 def fast_sinE_cosE(E):
     """Compute the sine and cosine of the eccentric anomaly using shortsin."""
     # Vectorize the computation across all elements
@@ -606,7 +589,6 @@ def fast_sinE_cosE(E):
     return sinE, cosE
 
 
-@jax.jit
 def identity_solver(M, e):
     """Returns M as E when e is 0."""
     return M
