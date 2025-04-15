@@ -609,22 +609,23 @@ def identity_solver_trig(M, e):
 
 
 def get_E_lookup_grid(n_e, n_M):
-    """Create a JIT'd function to approximate Kepler's equation using a 2D lookup grid.
+    """Creates a JIT func for E via nearest-neighbor 2D grid lookup.
 
-    This function precomputes eccentric anomaly values over a grid defined by
-    minimum/maximum eccentricity and the number of steps for both eccentricity
-    and mean anomaly. The returned function performs a nearest-neighbor lookup
-    on this grid.
+    This factory function precomputes eccentric anomaly (E) values over a 2D grid
+    of eccentricity (e) and mean anomaly (M). It returns a JIT-compiled function
+    that performs a nearest-neighbor lookup on this precomputed grid to quickly
+    estimate E for given scalar inputs M and e. This is the simplest grid lookup
+    method but offers the lowest accuracy.
 
     Args:
-        n_e (int):
-            Number of eccentricity steps in the grid.
-        n_M (int):
-            Number of mean anomaly steps in the grid.
+        n_e:
+            Number of eccentricity steps in the grid (0 <= e < 1).
+        n_M:
+            Number of mean anomaly steps in the grid (0 <= M < 2pi).
 
     Returns:
-        A JIT-compiled function that takes M and e as input and returns the
-        looked-up eccentric anomaly.
+        A JIT-compiled function `E_lookup_grid(M, e)` that takes scalar M and e
+        as input and returns the nearest-neighbor looked-up eccentric anomaly.
     """
     # Create grids for eccentricity and mean anomaly
     e_grid = jnp.linspace(0, 1, n_e, endpoint=False)
@@ -657,23 +658,24 @@ def get_E_lookup_grid(n_e, n_M):
 
 
 def get_E_lookup_grid_d(n_e=1000, n_M=3600):
-    """Create a JIT'd function to approximate Kepler's equation using a 2D lookup grid
-    with linear interpolation.
+    """Creates a JIT func for E via linear interpolated 2D grid lookup.
 
-    This function precomputes the eccentric anomaly values over a grid defined
-    by minimum/maximum eccentricity and the number of steps for both eccentricity
-    and mean anomaly. The returned function performs a linear interpolation
-    on this grid.
+    This factory function precomputes eccentric anomaly (E) values and their
+    derivatives with respect to the mean anomaly grid index (dE/dind) over a 2D
+    grid of eccentricity (e) and mean anomaly (M). It returns a JIT-compiled
+    function that performs linear interpolation on this grid to estimate E for
+    given scalar inputs M and e. This offers better accuracy than nearest-neighbor
+    lookup (`get_E_lookup_grid`).
 
     Args:
-        n_e (int):
-            Number of eccentricity steps in the grid.
-        n_M (int):
-            Number of mean anomaly steps in the grid.
+        n_e:
+            Number of eccentricity steps in the grid (0 <= e < 1). Default is 1000.
+        n_M:
+            Number of mean anomaly steps in the grid (0 <= M < 2pi). Default is 3600.
 
     Returns:
-        A JIT-compiled function that takes M and e as input and returns the
-        looked-up eccentric anomaly.
+        A JIT-compiled function `E_lookup_grid(M, e)` that takes scalar M and e
+        as input and returns the linearly interpolated eccentric anomaly.
     """
     # Create grids for eccentricity and mean anomaly
     e_grid = jnp.linspace(0, 1, n_e, endpoint=False)
@@ -687,7 +689,6 @@ def get_E_lookup_grid_d(n_e=1000, n_M=3600):
     # Handle the case where num_e = 1 separately to avoid division by zero
     dE = e_grid[1] - e_grid[0]
     inv_dE = 1.0 / dE
-    dE_int = jnp.int32(n_e)
 
     # Compute E values for the entire grid using vmap for efficiency
     # E_grid[i_e, i_M] corresponds to e_grid[i_e] and M_grid[i_M]
@@ -717,23 +718,26 @@ def get_E_lookup_grid_d(n_e=1000, n_M=3600):
 
 
 def get_E_trig_lookup_grid_d(n_e=1000, n_M=3600):
-    """Create a JIT'd function to approximate Kepler's equation using a 2D lookup grid
-    with linear interpolation.
+    """Creates JIT func for E, sinE, cosE via linear interpolated 2D grid.
 
-    This function precomputes the eccentric anomaly, sin(E), and cos(E) values
-    over a grid defined by minimum/maximum eccentricity and the number of steps
-    for both eccentricity and mean anomaly. The returned function performs a
-    linear interpolation on this grid.
+    Similar to `get_E_lookup_grid_d`, this factory function precomputes values
+    over a 2D grid of eccentricity (e) and mean anomaly (M). However, it computes
+    and stores E, sin(E), cos(E), and their derivatives with respect to the M grid
+    index. The returned JIT-compiled function performs linear interpolation to
+    estimate E, sin(E), and cos(E) simultaneously for given scalar inputs M and e.
+    This is useful when trigonometric values are needed alongside E, avoiding
+    separate calculations.
 
     Args:
-        n_e (int):
-            Number of eccentricity steps in the grid.
-        n_M (int):
-            Number of mean anomaly steps in the grid.
+        n_e:
+            Number of eccentricity steps in the grid (0 <= e < 1). Default is 1000.
+        n_M:
+            Number of mean anomaly steps in the grid (0 <= M < 2pi). Default is 3600.
 
     Returns:
-        A JIT-compiled function that takes M and e as input and returns the
-        looked-up eccentric anomaly.
+        A JIT-compiled function `E_lookup_grid(M, e)` that takes scalar M and e
+        as input and returns a tuple `(E, sinE, cosE)` containing the linearly
+        interpolated eccentric anomaly and its sine and cosine.
     """
     # Create grids for eccentricity and mean anomaly
     e_grid = jnp.linspace(0, 1, n_e, endpoint=False)
@@ -747,7 +751,6 @@ def get_E_trig_lookup_grid_d(n_e=1000, n_M=3600):
     # Handle the case where num_e = 1 separately to avoid division by zero
     dE = e_grid[1] - e_grid[0]
     inv_dE = 1.0 / dE
-    dE_int = jnp.int32(n_e)
 
     # Compute E values for the entire grid using vmap for efficiency
     # E_grid[i_e, i_M] corresponds to e_grid[i_e] and M_grid[i_M]
@@ -763,7 +766,7 @@ def get_E_trig_lookup_grid_d(n_e=1000, n_M=3600):
 
     @jax.jit
     def E_lookup_grid(M, e):
-        """Linear interpolation lookup on the precomputed E grid."""
+        """Linear interpolation lookup on the precomputed E, sinE, cosE grids."""
         # Scale M to index space
         ind_M = M * inv_dM
         # Get integer part of the index
@@ -785,21 +788,27 @@ def get_E_trig_lookup_grid_d(n_e=1000, n_M=3600):
 
 
 def E_grid(n_e=1000, n_M=3600):
-    """Create a JIT'd, vectorized function to approximate Kepler's equation
-    using a 2D lookup grid with linear interpolation.
+    """Creates vectorized JIT func for E, sinE, cosE via linear interp 2D grid.
 
-    This function precomputes grid values and returns a function that accepts
-    arrays M and e (of the same shape) and returns arrays E, sinE, cosE.
+    This factory function is a vectorized version of `get_E_trig_lookup_grid_d`.
+    It precomputes the same E, sin(E), cos(E) grids and their derivatives.
+    However, the returned function is designed to efficiently handle arrays of
+    inputs using `jax.vmap`. It accepts an array of mean anomalies `M_vals` (shape
+    (num_planets, num_times)) and an array of eccentricities `e_array` (shape
+    (num_planets,)) and returns arrays for E, sin(E), and cos(E), each with shape
+    (num_planets, num_times). This is highly efficient for processing multiple
+    orbits or time series simultaneously.
 
     Args:
-        n_e (int):
-            Number of eccentricity steps in the grid.
-        n_M (int):
-            Number of mean anomaly steps in the grid.
+        n_e:
+            Number of eccentricity steps in the grid (0 <= e < 1). Default is 1000.
+        n_M:
+            Number of mean anomaly steps in the grid (0 <= M < 2pi). Default is 3600.
 
     Returns:
-        A JIT-compiled, vmapped function that takes M and e arrays as input
-        and returns the looked-up E, sinE, cosE arrays.
+        A JIT-compiled, vectorized function `vectorized_lookup(M_vals, e_array)`
+        that takes array inputs and returns a tuple `(E_array, sinE_array, cosE_array)`
+        containing arrays of interpolated eccentric anomalies and their sines/cosines.
     """
     # --- Grid Creation (same as non-vectorized version) ---
     e_grid = jnp.linspace(0, 1, n_e, endpoint=False)
@@ -856,26 +865,41 @@ def E_grid(n_e=1000, n_M=3600):
 
 
 def fitting_grid(n_e=1000, n_M=3600):
-    """Create a set of grids for quantities dependent on M and e.
+    """Creates vectorized JIT func for orbit fitting quantities via 2D grid.
 
-    This function precomputes grid values and their derivatives w.r.t. M_index,
-    returning a function that accepts arrays M and e and returns interpolated
-    arrays X, Y, RV1, and RV2 using the grids.
+    This factory function precomputes several quantities relevant for orbit fitting
+    (X, Y, RV1, RV2) and their derivatives with respect to the mean anomaly grid
+    index over a 2D grid of eccentricity (e) and mean anomaly (M).
 
     Definitions:
         X = cosE - e
         Y = sinE * sqrt(1 - e**2)
-        g = sqrt((1+e)/(1-e)) * tan(E/2) = sqrt((1+e)/(1-e)) * (1-cosE)/sinE
-        RV1 = ((1-g**2)/(1+g^2) + e)
-        RV2 = (2*g/(1+g^2))
+        g = sqrt((1+e)/(1-e)) * tan(E/2)
+        RV1 = (1-g**2)/(1+g^2) + e  (equivalent to cos(f) + e)
+        RV2 = 2*g/(1+g^2)          (equivalent to sin(f))
+        Note: RV1 and RV2 are the coefficients of cos(omega) and -sin(omega)
+        respectively in the efficient radial velocity formula RV = k *
+        (RV1*cos(omega) - RV2*sin(omega)), derived from trigonometric
+        identities (see Eq. 21 in the Orvara paper).
+
+    The returned function is JIT-compiled and vectorized using `jax.vmap`. It accepts
+    an array of mean anomalies `M_vals` (shape (num_planets, num_times)) and an
+    array of eccentricities `e_array` (shape (num_planets,)) and returns arrays for
+    X, Y, RV1, and RV2, each with shape (num_planets, num_times), calculated via
+    linear interpolation on the precomputed grids. This is optimized for fitting
+    procedures involving multiple orbits.
 
     Args:
-        n_e (int): Number of eccentricity steps in the grid (0 <= e < 1).
-        n_M (int): Number of mean anomaly steps in the grid (0 <= M < 2pi).
+        n_e:
+            Number of eccentricity steps in the grid (0 <= e < 1). Default is 1000.
+        n_M:
+            Number of mean anomaly steps in the grid (0 <= M < 2pi). Default is 3600.
 
     Returns:
-        A JIT-compiled, vmapped function that takes M and e arrays as input
-        and returns the looked-up X, Y, RV1, RV2 arrays.
+        A JIT-compiled, vectorized function `vectorized_lookup(M_vals,
+        e_array)` that takes array inputs and returns a tuple `(X_array,
+        Y_array, RV1_array, RV2_array)` containing arrays of interpolated
+        fitting quantities.
     """
     # --- Grid Definition ---
     # Note: e_grid goes up to, but does not include 1
@@ -1016,14 +1040,16 @@ def fitting_grid(n_e=1000, n_M=3600):
 
     # --- Return JIT-compiled function ---
     # Update docstring return description
-    vectorized_lookup.__doc__ = """Looks up X, Y, RV1, and RV2 using precomputed grids.
+    vectorized_lookup.__doc__ = """Linear interp for X, Y, RV1, and RV2 using grids.
 
     Args:
-        M_vals (Array): Mean anomalies, shape (num_planets, num_times).
-        e_array (Array): Eccentricities, shape (num_planets,).
+        M_vals:
+            Mean anomalies, shape (num_planets, num_times).
+        e_array:
+            Eccentricities, shape (num_planets,).
 
     Returns:
-        Tuple[Array, Array, Array, Array]: Arrays for X, Y, RV1, RV2,
-                                          each with shape (num_planets, num_times).
+        Tuple[Array, Array, Array, Array]:
+            Arrays for X, Y, RV1, RV2, each with shape (num_planets, num_times).
     """
     return jax.jit(vectorized_lookup)
