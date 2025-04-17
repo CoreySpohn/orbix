@@ -3,7 +3,7 @@
 import jax.numpy as jnp
 
 # Mathematical constants
-twopi = 2 * jnp.pi
+two_pi = 2 * jnp.pi
 pi_over_2 = jnp.pi / 2
 eps = jnp.finfo(jnp.float32).eps
 

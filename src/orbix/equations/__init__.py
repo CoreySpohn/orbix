@@ -15,29 +15,8 @@ __all__ = [
     # Propagation functions
     "calculate_r_v",
     "calculate_r",
-    # Eccentric anomaly functions
-    "solve_E",
-    "solve_E_trig",
-    "get_E_solver",
-    "get_E_trig_solver",
-    "get_E_lookup_grid_d",
-    "get_E_trig_lookup_grid_d",
-    "get_E_trig_lookup_grid_d_vectorized",
-    "E_grid",
-    "fitting_grid",
 ]
 
-from .eccanom import (
-    E_grid,
-    fitting_grid,
-    get_E_lookup_grid_d,
-    get_E_solver,
-    get_E_trig_lookup_grid_d,
-    get_E_trig_lookup_grid_d_vectorized,
-    get_E_trig_solver,
-    solve_E,
-    solve_E_trig,
-)
 from .orbit import (
     AB_matrices,
     AB_matrices_reduced,
