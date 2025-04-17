@@ -1,3 +1,5 @@
+"""Common equations for orbital mechanics."""
+
 import jax.numpy as jnp
 
 from orbix.constants import G, twopi
