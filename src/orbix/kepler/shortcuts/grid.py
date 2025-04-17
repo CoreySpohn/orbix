@@ -10,7 +10,7 @@ Generally these are 3-5x faster than a vectorized/compiled form of `E_solve`
 when computing thousands of epochs but the difference is less pronounced at the
 few per-epoch level. The bilinear interpolation is ~1.5x slower than the linear
 interpolation, but is accurate to 32 bit precision, whereas the linear
-interpolation has maximum errors around 1e-3 near M=pi.
+interpolation has errors around 1e-4.
 """
 
 import jax
