@@ -7,20 +7,23 @@ __all__ = [
     "mean_motion",
     "semi_amplitude",
     "semi_amplitude_reduced",
-    "mean_anomaly",
+    "mean_anomaly_t0",
+    "mean_anomaly_tp",
     "AB_matrices",
     "AB_matrices_reduced",
     "thiele_innes_constants",
     "thiele_innes_constants_reduced",
     # Propagation functions
-    "calculate_r_v",
-    "calculate_r",
+    "system_r_v",
+    "system_r",
+    "single_r",
 ]
 
 from .orbit import (
     AB_matrices,
     AB_matrices_reduced,
-    mean_anomaly,
+    mean_anomaly_t0,
+    mean_anomaly_tp,
     mean_motion,
     period_a,
     period_n,
@@ -29,4 +32,4 @@ from .orbit import (
     thiele_innes_constants,
     thiele_innes_constants_reduced,
 )
-from .prop import calculate_r, calculate_r_v
+from .propagation import single_r, system_r, system_r_v

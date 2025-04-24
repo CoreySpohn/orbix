@@ -3,7 +3,7 @@
 import jax.numpy as jnp
 
 
-def calculate_r_v(A_mat_b, B_mat_b, e_vec_b, sinE_mat, cosE_mat, n_orb_vec_b):
+def system_r_v(A_mat_b, B_mat_b, e_vec_b, sinE_mat, cosE_mat, n_orb_vec_b):
     """Calculate position and velocity vectors for n planets over m time steps.
 
     Propagation is computed as:
@@ -63,7 +63,7 @@ def calculate_r_v(A_mat_b, B_mat_b, e_vec_b, sinE_mat, cosE_mat, n_orb_vec_b):
     return r, v
 
 
-def calculate_r(A_mat_b, B_mat_b, e_vec_b, sinE_mat, cosE_mat):
+def system_r(A_mat_b, B_mat_b, e_vec_b, sinE_mat, cosE_mat):
     """Calculate position vectors for n planets over m time steps.
 
     Propagation is computed as:
@@ -96,3 +96,20 @@ def calculate_r(A_mat_b, B_mat_b, e_vec_b, sinE_mat, cosE_mat):
     r = term1_r + term2_r  # Shape (3, n, m)
 
     return r
+
+
+def single_r(A, B, e, sinE, cosE):
+    """Calculate position vector for a single planet at a single time.
+
+    Args:
+        A (jax.Array): A matrix (3)
+        B (jax.Array): B matrix (3)
+        e (float): eccentricity ()
+        sinE (float): sine of the eccentric anomaly (ntimes)
+        cosE (float): cosine of the eccentric anomaly (ntimes)
+
+    Returns:
+        r (jax.Array): position vector (3, 1)
+    """
+    # Need to broadcast A, B to (3, 1) and sin/cos to (1, ntimes)
+    return A[:, None] * (cosE[None, :] - e) + B[:, None] * sinE[None, :]
