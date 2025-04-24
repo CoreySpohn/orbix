@@ -196,7 +196,7 @@ def AB_matrices_reduced(a, sqrt_one_minus_e2, sini, cosi, sinW, cosW, sinw, cosw
     sinwcosi = sinw * cosi
     coswcosi = cosw * cosi
     # Compute the A and B matrices as 3x1 JAX arrays
-    A = a * jnp.array(
+    A = a * jnp.asarray(
         [
             cosW * cosw - sinW * sinwcosi,
             sinW * cosw + cosW * sinwcosi,
@@ -206,7 +206,7 @@ def AB_matrices_reduced(a, sqrt_one_minus_e2, sini, cosi, sinW, cosW, sinw, cosw
     B = (
         a
         * sqrt_one_minus_e2
-        * jnp.array(
+        * jnp.asarray(
             [
                 -cosW * sinw - sinW * coswcosi,
                 -sinW * sinw + cosW * coswcosi,
