@@ -11,7 +11,7 @@ from jax import Array, jit, vmap
 import orbix.equations.orbit as oe
 from orbix.constants import G, Mearth2kg, Rearth2AU, pc2AU, rad2arcsec, two_pi
 from orbix.equations.phase import lambert_phase_poly
-from orbix.equations.propagation import single_r
+from orbix.equations.propagation import single_r, single_r_v
 
 
 @jit
@@ -185,7 +185,24 @@ class Planet(eqx.Module):
         r = vmap(single_r, (1, 1, 0, 0, 0))(A, B, self.e, sinE, cosE)
         return r, sinE, cosE
 
-    @partial(jit, static_argnums=(1,))
+    def _prop_v(self, trig_solver, t, A, B):
+        """Propagate the orbits to times t returning positions and velocities in AU.
+
+        Args:
+            trig_solver: function to solve Kepler's equation (M, e) -> (sinE, cosE)
+            t: Times to propagate the planet to. Shape (ntimes,)
+            A: A matrix
+            B: B matrix
+
+        Returns:
+            r: jnp.ndarray shape (norb, 3, ntimes)
+            v: jnp.ndarray shape (norb, 3, ntimes)
+        """
+        M = vmap(oe.mean_anomaly_tp, (None, 0, 0))(t, self.n, self.tp)
+        sinE, cosE = trig_solver(M, self.e)
+        r, v = vmap(single_r_v, (1, 1, 0, 0, 0, 0))(A, B, self.e, sinE, cosE, self.n)
+        return r, v
+
     def prop_AU(self, trig_solver, t):
         """Public jitted wrapper around _prop that returns positions in AU.
 
@@ -198,7 +215,6 @@ class Planet(eqx.Module):
         """
         return self._prop(trig_solver, t, self.A_AU, self.B_AU)[0]
 
-    @partial(jit, static_argnums=(1,))
     def prop_as(self, trig_solver, t):
         """Propagate the orbits to times t returning positions in arcsec.
 
@@ -211,7 +227,6 @@ class Planet(eqx.Module):
         """
         return self._prop(trig_solver, t, self.A_as, self.B_as)[0]
 
-    @partial(jit, static_argnums=(1,))
     def s_dMag(self, trig_solver, t):
         """Propagate the orbits to times t returning angular separation and dMag.
 
@@ -236,6 +251,40 @@ class Planet(eqx.Module):
 
         # # Approximate the Lambert phase function with cosbeta
         phase = lambert_phase_poly(cosbeta)
+
         # # Calculate dMag
         dMag = -2.5 * jnp.log10(self.pRp2[:, None] * phase / r**2)
         return s, dMag
+
+    def prop_vAU(self, trig_solver, t):
+        """Public wrapper around _prop_v that returns positions and velocities in AU.
+
+        Args:
+            trig_solver: function to solve Kepler's equation (M, e) -> (sinE, cosE)
+            t: Times to propagate the planet to. Shape (ntimes,)
+
+        Returns:
+            r: jnp.ndarray shape (norb, 3, ntimes)
+            v: jnp.ndarray shape (norb, 3, ntimes)
+        """
+        return self._prop_v(trig_solver, t, self.A_AU, self.B_AU)
+
+    @partial(jit, static_argnums=(1,))
+    def j_prop_AU(self, trig_solver, t):
+        """Jit wrapped version of prop_AU."""
+        return self.prop_AU(trig_solver, t)
+
+    @partial(jit, static_argnums=(1,))
+    def j_prop_as(self, trig_solver, t):
+        """Jit wrapped version of prop_as."""
+        return self.prop_as(trig_solver, t)
+
+    @partial(jit, static_argnums=(1,))
+    def j_s_dMag(self, trig_solver, t):
+        """Jit wrapped version of s_dMag."""
+        return self.s_dMag(trig_solver, t)
+
+    @partial(jit, static_argnums=(1,))
+    def j_prop_vAU(self, trig_solver, t):
+        """Jit wrapped version of prop_vAU."""
+        return self.prop_vAU(trig_solver, t)

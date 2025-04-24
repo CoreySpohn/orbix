@@ -113,3 +113,27 @@ def single_r(A, B, e, sinE, cosE):
     """
     # Need to broadcast A, B to (3, 1) and sin/cos to (1, ntimes)
     return A[:, None] * (cosE[None, :] - e) + B[:, None] * sinE[None, :]
+
+
+def single_r_v(A, B, e, sinE, cosE, n_orb):
+    """Calculate position and velocity vectors for a single planet at a single time.
+
+    Args:
+        A (jax.Array): A matrix (3)
+        B (jax.Array): B matrix (3)
+        e (float): eccentricity ()
+        sinE (float): sine of the eccentric anomaly (ntimes)
+        cosE (float): cosine of the eccentric anomaly (ntimes)
+        n_orb (float): mean orbital motion (ntimes)
+
+    Returns:
+        r (jax.Array): position vector (3, 1)
+        v (jax.Array): velocity vector (3, 1)
+    """
+    r = A[:, None] * (cosE[None, :] - e) + B[:, None] * sinE[None, :]
+    v = (
+        n_orb
+        / (1.0 - e * cosE[None, :])
+        * (-A[:, None] * sinE[None, :] + B[:, None] * cosE[None, :])
+    )
+    return r, v
