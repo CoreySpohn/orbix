@@ -13,18 +13,73 @@ interpolation, but is accurate to 32 bit precision, whereas the linear
 interpolation has errors around 1e-4.
 """
 
+import sys
+from functools import lru_cache, partial
+
 import jax
 import jax.numpy as jnp
+from jax import lax
 
 from orbix.constants import two_pi
 from orbix.kepler.core import E_solve_jit
 
 
-def _jaxify_scalar_func(func):
-    """Vectorize a scalar E function over time, then planets, then compile."""
-    _vmapped_time = jax.vmap(func, in_axes=(0, None))
-    _lookup_planet = jax.vmap(_vmapped_time, in_axes=(0, 0))
-    return jax.jit(_lookup_planet)
+# lru_cache here lets us give the same solver to multiple planets
+@lru_cache(maxsize=None)
+def get_grid_solver(
+    level="scalar", jit=False, kind="bilinear", E=True, trig=True, n_e=512, n_M=2048
+):
+    """Helper function to get a grid-based solver and cache it.
+
+    Args:
+        level:
+            How the solver should be batching things.
+                - "scalar" means the inputs will be a single (M, e) pair and
+                  the output will be a single E, sinE, cosE value.
+                - "planet" will vectorize over times first and then over
+                  orbits.
+                    - M: (n_orbits, n_times)
+                    - e: (n_orbits,)
+        jit:
+            Whether to jit the solver.
+        kind:
+            The kind of solver to use, either "linear" or "bilinear".
+        E:
+            Whether to compute the eccentric anomaly.
+        trig:
+            Whether to compute the sine and cosine of the eccentric anomaly.
+        n_e:
+            The number of eccentricity steps in the grid.
+        n_M:
+            The number of mean anomaly steps in the grid.
+    """
+    if E and trig:
+        name = "E_trig"
+    elif E:
+        name = "E"
+    elif trig:
+        name = "trig"
+    if kind == "bilinear":
+        name += "_bilin"
+    elif kind == "linear":
+        name += "_lin"
+    else:
+        raise ValueError(f"Unknown solver kind: {kind}")
+    # Get the correct function
+    func = getattr(sys.modules[__name__], name)
+    func = func(n_e=n_e, n_M=n_M)
+    if level == "scalar":
+        pass
+    elif level == "planet":
+        # Mean anomaly/time axis map M->(n_times,), e -> scalar
+        func = jax.vmap(func, in_axes=(0, None))
+        # orbit axis map M->(n_orbits, n_times), e -> (n_orbits,)
+        func = jax.vmap(func, in_axes=(0, 0))
+    else:
+        raise ValueError(f"Unknown solver level: {level}")
+    if jit:
+        func = jax.jit(func)
+    return func
 
 
 def _setup(n_e: int = 1000, n_M: int = 3600):
@@ -59,6 +114,11 @@ def _d_dind_grids(e_grid, E_grid, sinE_grid, cosE_grid, dM):
     return dE_dind_grid, dsinE_dind, dcosE_dind
 
 
+################################################################################
+# Linear interpolation functions
+################################################################################
+
+
 def _ind(scalar, inv_d):
     """Returns the indices and fractional difference for linear interpolation."""
     ind = scalar * inv_d
@@ -67,7 +127,6 @@ def _ind(scalar, inv_d):
     return i0, di
 
 
-# linear interpolation function
 def _lin(tab, dtab, e_ind, M_ind, dM):
     """Linear interpolation for a single (M, e) pair."""
     return tab[e_ind, M_ind] + dtab[e_ind, M_ind] * dM
@@ -81,7 +140,7 @@ def _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, dM_int):
     return e0, M0, dM
 
 
-def grid_E_trig_lin(n_e=1024, n_M=4096):
+def E_trig_lin(n_e=1024, n_M=4096):
     """Creates vectorized JIT func for E, sinE, cosE via linear interp 2D grid.
 
     This function precomputes the same E, sin(E), cos(E) grids and their derivatives.
@@ -119,10 +178,10 @@ def grid_E_trig_lin(n_e=1024, n_M=4096):
             _lin(cosE_grid, dcosE_dind, *p),
         )
 
-    return _jaxify_scalar_func(_lookup_scalar)
+    return _lookup_scalar
 
 
-def grid_E_lin(n_e=1024, n_M=4096):
+def E_lin(n_e=1024, n_M=4096):
     """Creates vectorized JIT func for E via linear interp 2D grid."""
     # Setup
     e_grid, M_grid, dM, inv_dM, dM_int, de, inv_de = _setup(n_e, n_M)
@@ -134,10 +193,10 @@ def grid_E_lin(n_e=1024, n_M=4096):
         p = _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, dM_int)
         return _lin(E_grid, dE_dind_grid, *p)
 
-    return _jaxify_scalar_func(_lookup_scalar)
+    return _lookup_scalar
 
 
-def grid_trig_lin(n_e=1024, n_M=4096):
+def trig_lin(n_e=1024, n_M=4096):
     """Creates vectorized JIT func for sinE, cosE via linear interp 2D grid."""
     # Setup
     e_grid, M_grid, dM, inv_dM, dM_int, de, inv_de = _setup(n_e, n_M)
@@ -149,10 +208,14 @@ def grid_trig_lin(n_e=1024, n_M=4096):
         p = _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, dM_int)
         return _lin(sinE_grid, dsinE_dind, *p), _lin(cosE_grid, dcosE_dind, *p)
 
-    return _jaxify_scalar_func(_lookup_scalar)
+    return _lookup_scalar
 
 
+################################################################################
 # Bilinear interpolation functions
+################################################################################
+
+
 def _ind_bilin(scalar, inv_d, n):
     """Returns the indices and fractional difference for bilinear interpolation."""
     i0, di = _ind(scalar, inv_d)
@@ -211,43 +274,113 @@ def _bilin_per(table, e0, e1, M0, M1, de, dM):
     return jnp.mod(val, two_pi)
 
 
-def grid_E_trig_bilin(n_e=1024, n_M=4096):
-    """Creates vectorized JIT func for E, sinE, cosE via bilinear 2D interp."""
-    e_grid, M_grid, _, inv_dM, dM_int, _, inv_de = _setup(n_e, n_M)
-    E_grid, sinE_grid, cosE_grid = _E_grids(e_grid, M_grid)
-
-    def _lookup_scalar(M_scalar, e_scalar):
-        """Bilinear lookup for a single (M, e) pair."""
-        # Get all the necessary indices and fractional differences
-        p = _grid_bilin_params(M_scalar, e_scalar, inv_dM, inv_de, dM_int)
-        return _bilin_per(E_grid, *p), _bilin(sinE_grid, *p), _bilin(cosE_grid, *p)
-
-    return _jaxify_scalar_func(_lookup_scalar)
+################################################################################
+# Bilinear interpolation with stacked grids
+################################################################################
 
 
-def grid_E_bilin(n_e=1024, n_M=4096):
-    """Creates vectorized JIT func for E via bilinear 2D interp."""
-    e_grid, M_grid, _, inv_dM, dM_int, _, inv_de = _setup(n_e, n_M)
-    E_grid, *_ = _E_grids(e_grid, M_grid)
+def _indices_frac(M, e, inv_dM, inv_de, n_M, n_e):
+    # Convert to index space
+    M_ind = M * inv_dM
+    e_ind = e * inv_de
+    # Get integer indices
+    M_int = M_ind.astype(jnp.int32)
+    e_int = e_ind.astype(jnp.int32)
+    # Get fractional differences
+    dM = M_ind - M_int
+    de = e_ind - e_int
+    # Get base indices
+    e0 = e_int % n_e
+    M0 = M_int % n_M
+    return e0, M0, de, dM
 
-    def _lookup_scalar(M_scalar, e_scalar):
-        """Bilinear lookup for a single (M, e) pair."""
-        # Get all the necessary indices and fractional differences
-        p = _grid_bilin_params(M_scalar, e_scalar, inv_dM, inv_de, dM_int)
-        return _bilin(E_grid, *p)
 
-    return _jaxify_scalar_func(_lookup_scalar)
+def _E_grid_base(n_e: int, n_M: int, *, dtype=jnp.float32):
+    e_grid = jnp.linspace(0.0, 1.0, n_e, dtype=dtype, endpoint=False)
+    M_grid = jnp.linspace(0.0, two_pi, n_M, dtype=dtype, endpoint=False)
+    E_grid = jax.vmap(lambda e: E_solve_jit(M_grid, e))(e_grid)
+    # Append last column of 2pi-eps to make the grid complete with one more
+    # column because we always pull in a square patch of 2x2
+    _last_E_col = jnp.repeat(two_pi - jnp.finfo(dtype).eps, n_e, axis=0)
+    E_grid = jnp.concatenate([E_grid, _last_E_col[:, jnp.newaxis]], axis=1)
+    inv_dM = 1.0 / (M_grid[1] - M_grid[0])
+    inv_de = 1.0 / (e_grid[1] - e_grid[0])
+    return E_grid, inv_dM, inv_de
 
 
-def grid_trig_bilin(n_e=1024, n_M=4096):
-    """Creates vectorized JIT func for sinE, cosE via bilinear 2D interp."""
-    e_grid, M_grid, _, inv_dM, dM_int, _, inv_de = _setup(n_e, n_M)
-    _, sinE_grid, cosE_grid = _E_grids(e_grid, M_grid)
+def _build_E_grid(n_e: int, n_M: int, *, dtype=jnp.float32):
+    E_grid, inv_dM, inv_de = _E_grid_base(n_e, n_M, dtype=dtype)
+    return jax.device_put(E_grid), inv_dM, inv_de
 
-    def _lookup_scalar(M_scalar, e_scalar):
-        """Bilinear lookup for a single (M, e) pair."""
-        # Get all the necessary indices and fractional differences
-        p = _grid_bilin_params(M_scalar, e_scalar, inv_dM, inv_de, dM_int)
-        return _bilin(sinE_grid, *p), _bilin(cosE_grid, *p)
 
-    return _jaxify_scalar_func(_lookup_scalar)
+def _build_E_trig_grid(n_e: int, n_M: int, *, dtype=jnp.float32):
+    E_grid, inv_dM, inv_de = _E_grid_base(n_e, n_M, dtype=dtype)
+    triple = jnp.stack([E_grid, jnp.sin(E_grid), jnp.cos(E_grid)], axis=0)
+    return jax.device_put(triple), inv_dM, inv_de
+
+
+def _build_trig_grid(n_e: int, n_M: int, *, dtype=jnp.float32):
+    """Return sinE-cosE tensor of shape (2, n_e, n_M+1) and inverse steps."""
+    E_grid, inv_dM, inv_de = _E_grid_base(n_e, n_M, dtype=dtype)
+    trig = jnp.stack([jnp.sin(E_grid), jnp.cos(E_grid)], axis=0)
+    return jax.device_put(trig), inv_dM, inv_de
+
+
+def _weights(de, dM, dtype):
+    return jnp.array(
+        [[(1 - de) * (1 - dM), (1 - de) * dM], [de * (1 - dM), de * dM]],
+        dtype=dtype,
+    )
+
+
+def _scalar_E_trig_bilin(triple, inv_dM, inv_de, n_M, n_e, M_scalar, e_scalar):
+    # indices and fractions
+    e0, M0, de, dM = _indices_frac(M_scalar, e_scalar, inv_dM, inv_de, n_M, n_e)
+    # dynamic slice to avoid multiple table lookups
+    w = _weights(de, dM, triple.dtype)
+    # This should get batched to the right shape by vmap
+    patch = lax.dynamic_slice(triple, (jnp.int32(0), e0, M0), (3, 2, 2))
+
+    result = jnp.sum(patch * w, axis=(-2, -1))
+
+    return result[0], result[1], result[2]
+
+
+def _scalar_E_bilin(E_grid, inv_dM, inv_de, n_M, n_e, M_scalar, e_scalar):
+    e0, M0, de, dM = _indices_frac(M_scalar, e_scalar, inv_dM, inv_de, n_M, n_e)
+    patch = lax.dynamic_slice(E_grid, (e0, M0), (2, 2))
+    w = _weights(de, dM, E_grid.dtype)
+    result = jnp.sum(patch * w, axis=(-2, -1))
+    return result
+
+
+def _scalar_trig_bilin(trig, inv_dM, inv_de, n_M, n_e, M_scalar, e_scalar):
+    # indices and fractions
+    e0, M0, de, dM = _indices_frac(M_scalar, e_scalar, inv_dM, inv_de, n_M, n_e)
+    # dynamic slice to avoid multiple table lookups
+    w = _weights(de, dM, trig.dtype)
+    # This should get batched to the right shape by vmap
+    patch = lax.dynamic_slice(trig, (jnp.int32(0), e0, M0), (2, 2, 2))
+    result = jnp.sum(patch * w, axis=(-2, -1))
+    return result[0], result[1]
+
+
+def E_trig_bilin(n_e=1024, n_M=4096):
+    """E, sinE, cosE via bilinear interp of packed grid."""
+    triple, inv_dM, inv_de = _build_E_trig_grid(n_e, n_M)
+    scalar_fun = partial(_scalar_E_trig_bilin, triple, inv_dM, inv_de, n_M, n_e)
+    return scalar_fun
+
+
+def E_bilin(n_e=1024, n_M=4096):
+    """E via bilinear interp of packed grid."""
+    E_grid, inv_dM, inv_de = _build_E_grid(n_e, n_M)
+    scalar_fun = partial(_scalar_E_bilin, E_grid, inv_dM, inv_de, n_M, n_e)
+    return scalar_fun
+
+
+def trig_bilin(n_e=1024, n_M=4096):
+    """sinE, cosE via bilinear interp of packed grid."""
+    trig, inv_dM, inv_de = _build_trig_grid(n_e, n_M)
+    scalar_fun = partial(_scalar_trig_bilin, trig, inv_dM, inv_de, n_M, n_e)
+    return scalar_fun
