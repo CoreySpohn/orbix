@@ -23,3 +23,7 @@ pc2AU = 2.062648062470964e05  # AU
 # Time conversion factors
 d2s = 86400.0  # s
 s2d = 1.157407407407407e-05  # d
+
+# Angular conversion factors
+rad2arcsec = 206264.80624709636  # arcsec
+arcsec2rad = 4.84813681109536e-06  # rad
