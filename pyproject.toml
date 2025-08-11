@@ -36,6 +36,7 @@ docs = [
   "sphinx_autodoc_typehints",
   "matplotlib",
 ]
+exosims = ["EXOSIMS>=3.4.1"]
 
 [tool.ruff.lint]
 select = ["D", "E", "F", "I"]
