@@ -285,12 +285,11 @@ def _indices_frac(M, e, inv_dM, inv_de, n_M, n_e):
     e_ind = e * inv_de
     # Get integer indices
     M_int = M_ind.astype(jnp.int32)
-    e_int = e_ind.astype(jnp.int32)
+    e0 = e_ind.astype(jnp.int32)
     # Get fractional differences
     dM = M_ind - M_int
-    de = e_ind - e_int
-    # Get base indices
-    e0 = e_int % n_e
+    de = e_ind - e0
+    # M is periodic so wrap it
     M0 = M_int % n_M
     return e0, M0, de, dM
 

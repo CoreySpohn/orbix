@@ -1,7 +1,7 @@
 """Planetary system objects."""
 
-__all__ = ["Planet", "Star", "System"]
+__all__ = ["Planets", "Star", "System"]
 
-from .planet import Planet
+from .planets import Planets
 from .star import Star
 from .system import System

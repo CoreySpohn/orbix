@@ -6,7 +6,7 @@ import equinox as eqx
 
 from orbix.kepler.shortcuts.grid import get_grid_solver
 
-from .planet import Planet
+from .planets import Planets
 from .star import Star
 
 
@@ -26,7 +26,7 @@ class System(eqx.Module):
     """
 
     star: Star
-    planets: Tuple[Planet, ...]
+    planets: Tuple[Planets, ...]
     trig_solver: callable = eqx.static_field()
 
     def __init__(
@@ -60,7 +60,7 @@ class System(eqx.Module):
             A new System object with the added planet
         """
         # Create a new planet with the star's mass
-        new_planet = Planet(Ms=self.star.Ms, dist=self.star.dist, **kwargs)
+        new_planet = Planets(Ms=self.star.Ms, dist=self.star.dist, **kwargs)
 
         # Create a new system with the new planet added, preserving the E_solver
         return System(

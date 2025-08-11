@@ -10,13 +10,15 @@ from jax import Array, jit, vmap
 
 import orbix.equations.orbit as oe
 from orbix.constants import G, Mearth2kg, Rearth2AU, pc2AU, rad2arcsec, two_pi
-from orbix.equations.phase import lambert_phase_poly
+from orbix.equations.phase import (
+    lambert_phase_exact,
+)
 from orbix.equations.propagation import single_r, single_r_v
 
 
 @jit
-class Planet(eqx.Module):
-    """A JAX‑friendly, fully‑jit‑table planet model.
+class Planets(eqx.Module):
+    """A JAX-friendly, fully-jit-table planet model.
 
     This object treats all orbital parameters as arrays, which lets us use one
     model to represent a single planet as, well, one planet OR a cloud of n
@@ -40,7 +42,9 @@ class Planet(eqx.Module):
     """
 
     # Input parameters
+    Ms: Array
     dist: Array
+
     a: Array
     e: Array
     W: Array
@@ -83,7 +87,8 @@ class Planet(eqx.Module):
     A_as: Array  # A matrix in arcsec
     B_as: Array  # B matrix in arcsec
     a_as: Array  # semi-major axis in arcsec
-    pRp2: Array  # geometric albedo * planet radius squared
+    # pRp2: Array  # geometric albedo * planet radius squared
+    _rad2arcsec_dist: Array  # rad2arcsec / dist
 
     def __init__(self, Ms, dist, a, e, W, i, w, M0, t0, Mp, Rp, p):
         """Initialize a planet with orbital elements as JAX arrays.
@@ -103,6 +108,7 @@ class Planet(eqx.Module):
             p: Geometric albedo
 
         """
+        self.Ms, self.dist = Ms, dist
         ##### Orbital elements
         self.a, self.e, self.t0 = a, e, t0
         # Angles should be in radians already
@@ -156,15 +162,13 @@ class Planet(eqx.Module):
         # since dist >> a, and a_ang = arctan(a/dist), the small angle approximation
         # says a_ang = a / dist, so to get the approximate angular/on-sky angular
         # separation, we can just divide the A/B matrices by dist
-        self.dist = dist * pc2AU
+        _dist = dist * pc2AU
         # projected semi-major axis in radians, used to get projected DEC and RA
-        _rad2arcsec_dist = rad2arcsec / self.dist
-        self.a_as = self.a * _rad2arcsec_dist
+        self._rad2arcsec_dist = rad2arcsec / _dist
+        self.a_as = self.a * self._rad2arcsec_dist
         # A and B matrices for on-sky angular separation
-        self.A_as = self.A_AU * _rad2arcsec_dist
-        self.B_as = self.B_AU * _rad2arcsec_dist
-        # Used for the dMag calculations
-        self.pRp2 = self.p * self.Rp**2
+        self.A_as = self.A_AU * self._rad2arcsec_dist
+        self.B_as = self.B_AU * self._rad2arcsec_dist
 
     def _prop(self, trig_solver, t, A, B):
         """Propagate the orbits to times t returning positions in AU.
@@ -228,33 +232,60 @@ class Planet(eqx.Module):
         return self._prop(trig_solver, t, self.A_as, self.B_as)[0]
 
     def s_dMag(self, trig_solver, t):
-        """Propagate the orbits to times t returning angular separation and dMag.
+        """Propagate to times t and return the apparent separation and dMag.
 
         Args:
             trig_solver: function to solve Kepler's equation (M, e) -> (sinE, cosE)
             t: Times to propagate the planet to. Shape (ntimes,)
 
         Returns:
-            s: jnp.ndarray shape (norb, ntimes)
+            s: jnp.ndarray shape (norb, ntimes) in AU
             dMag: jnp.ndarray shape (norb, ntimes)
         """
-        r_as, _, cosE = self._prop(trig_solver, t, self.A_as, self.B_as)
+        r_AU, _, cosE = self._prop(trig_solver, t, self.A_AU, self.B_AU)
 
-        # Get planet's radial distance
-        r = self.a_as[:, None] * (1 - self.e[:, None] * cosE)
+        # Get planet's radial distance in AU (d = a * (1 - e*cosE))
+        d_AU = self.a[:, None] * (1 - self.e[:, None] * cosE)
 
-        # Get cos(beta) from the z-component of the position vector
-        cosbeta = -r_as[:, 2] / r
+        # Get cos(beta) using the z-component (line-of-sight) from AU position
+        # Use r_AU[:, 2] / d_AU convention consistent with EXOSIMS
+        cosbeta = r_AU[:, 2] / d_AU
 
-        # Calculate the angular separation
-        s = r * jnp.sqrt(1 - cosbeta**2)
+        # Clip cosbeta to handle floating point issue near +/- 1
+        # that can cause sqrt(1 - cosbeta**2) to be nan
+        cosbeta = jnp.clip(cosbeta, -1.0, 1.0)
+        sinbeta = jnp.sqrt(1 - cosbeta**2)
+        # Calculate the apparent separation alpha in AU
+        s = d_AU * sinbeta
 
-        # # Approximate the Lambert phase function with cosbeta
-        phase = lambert_phase_poly(cosbeta)
+        # Calculate Lambert phase function using cosbeta and sinbeta
+        phase = lambert_phase_exact(cosbeta, sinbeta)
 
-        # # Calculate dMag
-        dMag = -2.5 * jnp.log10(self.pRp2[:, None] * phase / r**2)
+        # Calculate dMag using AU units
+        # dMag = -2.5 * log10( p * (Rp_AU / d_AU)**2 * Phi )
+        # This should be non-negative. Add epsilon for log10 stability.
+        log_arg = self.p[:, None] * (self.Rp[:, None] / d_AU) ** 2 * phase
+        epsilon = jnp.finfo(log_arg.dtype).tiny
+        dMag = -2.5 * jnp.log10(log_arg + epsilon)
         return s, dMag
+
+    def alpha_dMag(self, trig_solver, t):
+        """Propagate to times t and return the apparent angular separation and dMag.
+
+        Args:
+            trig_solver: function to solve Kepler's equation (M, e) -> (sinE, cosE)
+            t: Times to propagate the planet to. Shape (ntimes,)
+
+        Returns:
+            alpha: jnp.ndarray shape (norb, ntimes) in arcsec
+            dMag: jnp.ndarray shape (norb, ntimes)
+        """
+        s, dMag = self.s_dMag(trig_solver, t)
+
+        # Convert the apparent separation s to arcsec
+        alpha = s * self._rad2arcsec_dist[:, None]
+
+        return alpha, dMag
 
     def prop_vAU(self, trig_solver, t):
         """Public wrapper around _prop_v that returns positions and velocities in AU.
@@ -283,6 +314,11 @@ class Planet(eqx.Module):
     def j_s_dMag(self, trig_solver, t):
         """Jit wrapped version of s_dMag."""
         return self.s_dMag(trig_solver, t)
+
+    @partial(jit, static_argnums=(1,))
+    def j_alpha_dMag(self, trig_solver, t):
+        """Jit wrapped version of alpha_dMag."""
+        return self.alpha_dMag(trig_solver, t)
 
     @partial(jit, static_argnums=(1,))
     def j_prop_vAU(self, trig_solver, t):
