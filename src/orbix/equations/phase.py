@@ -3,12 +3,23 @@
 import jax.numpy as jnp
 
 
-def lambert_phase_exact(c):
-    """Exact Lambert phase function using an arccos and sqrt call."""
-    beta = jnp.arccos(c)
-    # sin = (1-cos^2)^{1/2}
-    sinb = jnp.sqrt(1.0 - c * c)
-    return (sinb + (jnp.pi - beta) * c) / jnp.pi
+def lambert_phase_exact(cosbeta, sinbeta):
+    """Exact Lambert phase function using an arccos and sqrt call.
+
+    Args:
+        cosbeta:
+            The cosine of the phase angle.
+        sinbeta:
+            The sine of the phase angle.
+
+    Returns:
+         The Lambert phase function value, clipped to be non-negative.
+    """
+    beta = jnp.arccos(cosbeta)
+    # beta = jnp.arctan2(sinbeta, cosbeta)
+    phase_raw = (sinbeta + (jnp.pi - beta) * cosbeta) / jnp.pi
+    # Clip result to ensure phase is physically non-negative
+    return jnp.maximum(phase_raw, 0.0)
 
 
 def lambert_phase_poly(c):
