@@ -63,11 +63,11 @@ class dMag0Grid(eqx.Module):
     """A simple Equinox module packing a 4D dMag grid and its coordinate axes."""
 
     # Regular array fields
-    nEZs: jnp.ndarray  # shape (N_nEZ,)
+    kEZs: jnp.ndarray  # shape (N_kEZ,)
     # days
     int_times: jnp.ndarray  # shape (N_t,)
-    # shape (N_fZ, N_nEZ, N_alpha, N_t)
-    # NOTE: transposed from (N_fZ, N_nEZ, N_t, N_alpha) in the init
+    # shape (N_fZ, N_kEZ, N_alpha, N_t)
+    # NOTE: transposed from (N_fZ, N_kEZ, N_t, N_alpha) in the init
     #  which it gets calculated as
     grid: jnp.ndarray
     log_fZs: jnp.ndarray
@@ -79,11 +79,12 @@ class dMag0Grid(eqx.Module):
     n_fZ: int
     inv_log_alpha_step: float
     n_alpha: int
+    n_kEZ: int
 
-    def __init__(self, fZs, nEZs, alphas, int_times, grid):
+    def __init__(self, fZs, kEZs, alphas, int_times, grid):
         """Create necessary parameters from the grid."""
         # Store original arrays
-        self.nEZs = nEZs
+        self.kEZs = kEZs
         self.alphas = alphas
         self.int_times = int_times
         self.grid = grid.transpose(0, 1, 3, 2)
@@ -91,6 +92,7 @@ class dMag0Grid(eqx.Module):
         # Store dimensions for bounds checking
         self.n_fZ = len(fZs)
         self.n_alpha = len(alphas)
+        self.n_kEZ = len(kEZs)
 
         # fZ is log-spaced - store log values and step
         self.log_fZs = jnp.log10(fZs)
@@ -102,7 +104,7 @@ class dMag0Grid(eqx.Module):
         log_alpha_step = self.log_alphas[1] - self.log_alphas[0]
         self.inv_log_alpha_step = 1.0 / log_alpha_step
 
-    def _alpha_dMag_mask_sing(self, trig_solver, alpha, dMag, fZ):
+    def _alpha_dMag_mask_sing(self, trig_solver, alpha, dMag, fZ, kEZ):
         """Calculate detection probability directly from this grid.
 
         Returns:
@@ -124,24 +126,27 @@ class dMag0Grid(eqx.Module):
         a_ind = (log_alpha - self.log_alphas[0]) * self.inv_log_alpha_step
         a0 = jnp.clip(a_ind.astype(jnp.int32), 0, self.n_alpha - 1)
 
+        # kEZ indices in grid
+        kEZ_ind = jnp.searchsorted(self.kEZs, kEZ, side="right") - 1
+
         # Calculate interpolation weights once
         dalpha = (a_ind - a0).astype(self.grid.dtype)
 
         # Gather & interpolate
         # Function for a single (orbit, time) pair
-        def get_slice_single(a0_val, dalpha_val, fz):
-            # TODO: Implement nEZ handling (2nd dimension)
+        def get_slice_single(a0_val, dalpha_val, fz, kEZ_ind):
+            # TODO: Implement kEZ handling (2nd dimension)
             patch = lax.dynamic_slice(
-                self.grid, (fz, 0, 0, a0_val), (1, 1, self.grid.shape[-2], 2)
+                self.grid, (fz, kEZ_ind, 0, a0_val), (1, 1, self.grid.shape[-2], 2)
             )[0, 0]
             # Linear interpolation
             return patch[:, 0] + dalpha_val * (patch[:, 1] - patch[:, 0])
 
         # Vectorize over all orbits (for a given time point and zodiacal index)
-        get_slice_orbits = vmap(get_slice_single, in_axes=(0, 0, None))
+        get_slice_orbits = vmap(get_slice_single, in_axes=(0, 0, None, None))
 
         # Apply the fully vectorized function to all data at once
-        result = get_slice_orbits(a0, dalpha, fZ0)
+        result = get_slice_orbits(a0, dalpha, fZ0, kEZ_ind)
 
         # Calculate the detection values for each orbit
         # NOTE: signbit returns True if the value is negative
@@ -149,7 +154,7 @@ class dMag0Grid(eqx.Module):
 
         return det_mask
 
-    def _alpha_dMag_mask(self, alpha, dMag, fZ_vals):
+    def _alpha_dMag_mask(self, alpha, dMag, fZ_vals, kEZ_val):
         """Calculate detection probability directly from this grid.
 
         Returns:
@@ -171,27 +176,30 @@ class dMag0Grid(eqx.Module):
         a_ind = (log_alpha - self.log_alphas[0]) * self.inv_log_alpha_step
         a0 = jnp.clip(a_ind.astype(jnp.int32), 0, self.n_alpha - 1)
 
+        # kEZ index in grid
+        kEZ_ind = jnp.searchsorted(self.kEZs, kEZ_val, side="right") - 1
+
         # Calculate interpolation weights once
         dalpha = (a_ind - a0).astype(self.grid.dtype)
 
         # Gather & interpolate
         # Function for a single (orbit, time) pair
-        def get_slice_single(a0_val, dalpha_val, fz):
-            # TODO: Implement nEZ handling (2nd dimension)
+        def get_slice_single(a0_val, dalpha_val, fz, kEZ_ind):
+            # TODO: Implement kEZ handling (2nd dimension)
             patch = lax.dynamic_slice(
-                self.grid, (fz, 0, 0, a0_val), (1, 1, self.grid.shape[-2], 2)
+                self.grid, (fz, kEZ_ind, 0, a0_val), (1, 1, self.grid.shape[-2], 2)
             )[0, 0]
             # Linear interpolation
             return patch[:, 0] + dalpha_val * (patch[:, 1] - patch[:, 0])
 
         # Vectorize over all orbits (for a given time point and zodiacal index)
-        get_slice_orbits = vmap(get_slice_single, in_axes=(0, 0, None))
+        get_slice_orbits = vmap(get_slice_single, in_axes=(0, 0, None, None))
 
         # Vectorize over all time points
-        get_slice_all = vmap(get_slice_orbits, in_axes=(1, 1, 0))
+        get_slice_all = vmap(get_slice_orbits, in_axes=(1, 1, 0, None))
 
         # Apply the fully vectorized function to all data at once
-        result = get_slice_all(a0, dalpha, fZ0)
+        result = get_slice_all(a0, dalpha, fZ0, kEZ_ind)
 
         # Transpose from (nt, norb, n_tint) to (norb, nt, n_tint)
         dim = jnp.transpose(result, (1, 0, 2))
@@ -202,39 +210,39 @@ class dMag0Grid(eqx.Module):
 
         return det_mask
 
-    def _pdet_alpha_dMag_sing(self, trig_solver, alpha, dMag, fZ):
+    def _pdet_alpha_dMag_sing(self, trig_solver, alpha, dMag, fZ, kEZ):
         """Calculate detection probability directly from this grid.
 
         Returns:
         -------
         pdet : (n_tint)
         """
-        det_mask = self._alpha_dMag_mask_sing(trig_solver, alpha, dMag, fZ)
+        det_mask = self._alpha_dMag_mask_sing(trig_solver, alpha, dMag, fZ, kEZ)
 
         # Average over all orbits to get probability of detection
         pdet = det_mask.mean(axis=0)
         return pdet
 
     @eqx.filter_jit
-    def pdet_alpha_dMag_sing(self, trig_solver, alpha, dMag, fZ):
+    def pdet_alpha_dMag_sing(self, trig_solver, alpha, dMag, fZ, kEZ):
         """JIT-compiled version of _pdet_alpha_dMag_sing."""
-        return self._pdet_alpha_dMag_sing(trig_solver, alpha, dMag, fZ)
+        return self._pdet_alpha_dMag_sing(trig_solver, alpha, dMag, fZ, kEZ)
 
-    def _pdet_alpha_dMag(self, trig_solver, alpha, dMag, fZ_vals):
+    def _pdet_alpha_dMag(self, trig_solver, alpha, dMag, fZ_vals, kEZ_vals):
         """Calculate detection probability directly from this grid.
 
         Returns:
         -------
         pdet : (ntimes, n_tint)
         """
-        det_mask = self._alpha_dMag_mask(alpha, dMag, fZ_vals)
+        det_mask = self._alpha_dMag_mask(alpha, dMag, fZ_vals, kEZ_vals)
 
         # Average over all orbits to get probability of detection
         # (ntimes, n_tint)
         pdet = det_mask.mean(axis=0)
         return pdet
 
-    def _pdet_planets(self, trig_solver, times, planets, fZ_vals):
+    def _pdet_planets(self, trig_solver, times, planets, fZ_vals, kEZ_vals):
         """Calculate detection probability directly from this grid.
 
         Returns:
@@ -244,22 +252,22 @@ class dMag0Grid(eqx.Module):
         # Propagation
         alpha, dMag = planets.alpha_dMag(trig_solver, times)
 
-        return self._pdet_alpha_dMag(trig_solver, alpha, dMag, fZ_vals)
+        return self._pdet_alpha_dMag(trig_solver, alpha, dMag, fZ_vals, kEZ_vals)
 
     @eqx.filter_jit
-    def pdet_planets(self, trig_solver, times, planets, fZ_vals):
+    def pdet_planets(self, trig_solver, times, planets, fZ_vals, kEZ_vals):
         """JIT-compiled version of img_pdet_grid."""
-        return self._pdet_planets(trig_solver, times, planets, fZ_vals)
+        return self._pdet_planets(trig_solver, times, planets, fZ_vals, kEZ_vals)
 
     @eqx.filter_jit
-    def pdet_alpha_dMag(self, trig_solver, alpha, dMag, fZ_vals):
+    def pdet_alpha_dMag(self, trig_solver, alpha, dMag, fZ_vals, kEZ_vals):
         """JIT-compiled version of img_pdet_grid."""
-        return self._pdet_alpha_dMag(trig_solver, alpha, dMag, fZ_vals)
+        return self._pdet_alpha_dMag(trig_solver, alpha, dMag, fZ_vals, kEZ_vals)
 
     @eqx.filter_jit
-    def alpha_dMag_mask(self, alpha, dMag, fZ_vals):
+    def alpha_dMag_mask(self, alpha, dMag, fZ_vals, kEZ_vals):
         """JIT-compiled version of img_pdet_grid."""
-        return self._alpha_dMag_mask(alpha, dMag, fZ_vals)
+        return self._alpha_dMag_mask(alpha, dMag, fZ_vals, kEZ_vals)
 
     def _dyn_comp_single(
         self,
@@ -267,6 +275,7 @@ class dMag0Grid(eqx.Module):
         alpha: jnp.ndarray,  # (N_orb,)
         dmag: jnp.ndarray,  # (N_orb,)
         fz: float,
+        kEZ: float,
         valid_mask: jnp.ndarray,  # (N_orb,) bool
     ):
         """Dynamic completeness for **one** star at one epoch.
@@ -274,35 +283,44 @@ class dMag0Grid(eqx.Module):
         All input vectors have the fixed length N_orb
         `valid_mask` is True for the orbits that are still plausible.
         """
-        # --- detection mask for every orbit, every tint ------------
-        det_mask = self._alpha_dMag_mask_sing(trig_solver, alpha, dmag, fz)
+        # Reduce peak memory by streaming across orbits instead of
+        # materialising a (N_orb, N_tint) array. Accumulate in float32 to
+        # avoid inadvertent float64 upcasts.
+        acc_dtype = jnp.float32
+        init = jnp.zeros(self.int_times.shape, dtype=acc_dtype)
 
-        # --- keep only still‑valid orbits --------------------------
-        # cast to int so we can do arithmetic
-        # valid_mask_i = valid_mask.astype(det_mask.dtype)
-        det_mask = det_mask * valid_mask[:, None]  # (N_orb, N_tint)
+        def body(carry, inputs):
+            a_i, d_i, v_i = inputs
+            # Call the vectorised helper with a length-1 batch to reuse logic
+            a1 = jnp.reshape(a_i, (1,))
+            d1 = jnp.reshape(d_i, (1,))
+            det_i = self._alpha_dMag_mask_sing(trig_solver, a1, d1, fz, kEZ)[0]
+            det_i = det_i.astype(acc_dtype) * v_i.astype(acc_dtype)
+            return carry + det_i, None
 
-        # multiply by fraction of total orbits that are still valid
-        dyn_comp = det_mask.mean(axis=0)
+        summed, _ = lax.scan(body, init, (alpha, dmag, valid_mask))
+        dyn_comp = summed / alpha.shape[0]
 
         # integration-time-normalised figure of merit
-        comp_div_t = dyn_comp / self.int_times
+        comp_div_t = dyn_comp / self.int_times.astype(acc_dtype)
         return comp_div_t
 
     @eqx.filter_jit
-    def dyn_comp(self, trig_solver, alpha_all, dmag_all, fz, valid_mask):
+    def dyn_comp(self, trig_solver, alpha_all, dmag_all, fz, kEZ, valid_mask):
         """JIT-compiled version of _dyn_comp_single."""
-        return self._dyn_comp_single(trig_solver, alpha_all, dmag_all, fz, valid_mask)
+        return self._dyn_comp_single(
+            trig_solver, alpha_all, dmag_all, fz, kEZ, valid_mask
+        )
 
     @eqx.filter_jit
-    def dyn_comp_vec(self, trig_solver, alpha_all, dmag_all, fz, valid_mask):
+    def dyn_comp_vec(self, trig_solver, alpha_all, dmag_all, fz, kEZ, valid_mask):
         """Vectorized version of dyn_comp over multiple times."""
-        return vmap(self._dyn_comp_single, in_axes=(None, 1, 1, 0, None))(
-            trig_solver, alpha_all, dmag_all, fz, valid_mask
+        return vmap(self._dyn_comp_single, in_axes=(None, 1, 1, 0, None, None))(
+            trig_solver, alpha_all, dmag_all, fz, kEZ, valid_mask
         )
 
 
-def dMag0_grid(SS, mode, int_times, nEZs, n_fZs=10, n_alphas=50):
+def dMag0_grid(SS, mode, int_times, nEZ_range, n_fZs=10, n_alphas=50, n_kEZs=3):
     """Wraps the call to EXOSIMS.calc_dMag_per_intTime."""
     # Get the range of fZ and JEZ values to use in the grid
     TL = SS.TargetList
@@ -324,21 +342,19 @@ def dMag0_grid(SS, mode, int_times, nEZs, n_fZs=10, n_alphas=50):
         + dMag0_hex  # Use our new hex instead of mode["hex"]
         + f"n_fZs_{n_fZs}"
         + f"n_alphas_{n_alphas}"
-        + f"nEZs_{nEZs[0]}{nEZs[-1]}{nEZs.shape[0]}"
+        + f"n_EZ_range_{nEZ_range[0]}-{nEZ_range[-1]}"
         + f"int_times{int_times_d[0]:.2f}{int_times_d[-1]:.2f}{int_times_d.shape[0]}"
     )
 
-    # alpha values are the range between IWA and OWA
+    # Get the JEZ values as a copy to avoid modifying the original value
     JEZ0 = TL.JEZ0[mode["hex"]].copy()
-    # Remove the fbeta factor from JEZ0 since we'll treat it on a per-planet
-    # basis since we won't know the inclination of the planet which EXOSIMS does
-    system_fbetas = ZL.calc_fbeta(TL.systemInclination)
-    # To keep Pdet calculations from underestimating the JEZ values, we
-    # multiply by the maximum fbeta value (which is at most a factor of 3 change)
-    fbeta_range = ZL.calc_fbeta(np.linspace(0, 180, 180) * u.deg)
-    JEZ0 *= fbeta_range.mean() / system_fbetas
-    # NOTE: These JEZ values don't account for the 1/r^2 factor which get
-    # calculated in the loop
+    # Calculate the range of kEZ values
+    inclinations = np.linspace(0, 180, 180) * u.deg
+    fbeta_range = ZL.calc_fbeta(inclinations)
+    kEZ_inc = fbeta_range * (1 - (np.sin(inclinations) ** 2) / 2)
+    kEZs = np.linspace(
+        np.min(kEZ_inc) * np.min(nEZ_range), np.max(kEZ_inc) * np.max(nEZ_range), n_kEZs
+    )
 
     # Get the fZMap which has all stars
     fZMap = ZL.fZMap[mode["systName"]]
@@ -349,7 +365,7 @@ def dMag0_grid(SS, mode, int_times, nEZs, n_fZs=10, n_alphas=50):
 
     # Create the jax arrays for the dMag0_grid module
     alphas_jnp = jnp.array(alphas.to_value(u.arcsec))
-    nEZs_jnp = jnp.array(nEZs)
+    kEZs_jnp = jnp.array(kEZs)
     int_times_jnp = jnp.array(int_times.to_value(u.d))
 
     # Dictionary to store all grid objects
@@ -373,17 +389,18 @@ def dMag0_grid(SS, mode, int_times, nEZs, n_fZs=10, n_alphas=50):
 
         # If not in cache, compute the grid for this star
         _dMag0s = np.zeros(
-            [n_fZs, len(nEZs), n_alphas, len(int_times)], dtype=np.float32
+            [n_fZs, len(kEZs), n_alphas, len(int_times)], dtype=np.float32
         )
         # Get the 0.01 and 0.99 quantiles of fZMap for the star
         fZ_range = np.quantile(fZMap[sInd], [0.01, 0.99])
         fZs = np.logspace(np.log10(fZ_range[0]), np.log10(fZ_range[1]), n_fZs)
         _sInd = np.repeat(sInd, len(int_times))
         fZs_jnp = jnp.array(fZs)
+        approx_r2 = (alphas.to_value(u.rad) * TL.dist[sInd].to_value(u.AU)) ** 2
         for fZ_ind, fZ in enumerate(fZs):
             # repeat the fZ value for each integration time
             _fZ = np.repeat(fZ, len(int_times)) << SS.fZ_unit
-            for nEZ_ind, _nEZ in enumerate(nEZs):
+            for kEZ_ind, _kEZ in enumerate(kEZs):
                 for alpha_ind, _alpha in enumerate(alphas):
                     # Add a tiny amount to the first alpha to avoid nans
                     if alpha_ind == 0:
@@ -393,12 +410,11 @@ def dMag0_grid(SS, mode, int_times, nEZs, n_fZs=10, n_alphas=50):
                     elif alpha_ind == len(alphas) - 1:
                         _alpha -= 1e-6 * u.arcsec
 
-                    # JEZ is a function of nEZ and alpha and is the same for all
+                    # JEZ is a function of kEZ and alpha and is the same for all
                     # integration times but depends on the star and observing mode
-                    approx_r = _alpha.to_value(u.rad) * TL.dist[sInd].to_value(u.AU)
-                    _JEZ = _nEZ * JEZ0[sInd] / approx_r**2
+                    _JEZ = _kEZ * JEZ0[sInd] / approx_r2[alpha_ind]
                     # All inputs should have the same shape as int_times
-                    _dMag0s[fZ_ind, nEZ_ind, alpha_ind] = OS.calc_dMag_per_intTime(
+                    _dMag0s[fZ_ind, kEZ_ind, alpha_ind] = OS.calc_dMag_per_intTime(
                         int_times,
                         TL,
                         _sInd,
@@ -412,7 +428,7 @@ def dMag0_grid(SS, mode, int_times, nEZs, n_fZs=10, n_alphas=50):
         _dMag0s_jnp = jnp.array(_dMag0s, dtype=jnp.float16)
         star_grid = dMag0Grid(
             fZs=fZs_jnp,
-            nEZs=nEZs_jnp,
+            kEZs=kEZs_jnp,
             alphas=alphas_jnp,
             int_times=int_times_jnp,
             grid=_dMag0s_jnp,
