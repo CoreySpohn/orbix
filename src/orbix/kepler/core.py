@@ -112,6 +112,28 @@ E_solve_trig_vec = jax.jit(
 )
 
 
+def solve_trig(M, e):
+    """Wrapper around E_solve_trig that returns only (sinE, cosE).
+
+    Args:
+        M (jnp.ndarray): Mean anomaly. Shape: (n,).
+        e (float): Eccentricity.
+
+    Returns:
+        sinE (jnp.ndarray): Sine of the eccentric anomaly. Shape: (n,).
+        cosE (jnp.ndarray): Cosine of the eccentric anomaly. Shape: (n,).
+    """
+    _, sinE, cosE = E_solve_trig(M, e)
+    return sinE, cosE
+
+
+solve_trig_jit = jax.jit(solve_trig)
+
+solve_trig_vec = jax.jit(
+    jax.vmap(lambda M_row, e: solve_trig(M_row, e), in_axes=(0, 0))
+)
+
+
 def shortsin(x):
     """Approximates the sine function using a short polynomial.
 
