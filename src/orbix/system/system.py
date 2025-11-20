@@ -27,7 +27,7 @@ class System(eqx.Module):
 
     star: Star
     planets: Tuple[Planets, ...]
-    trig_solver: callable = eqx.static_field()
+    trig_solver: callable = eqx.field(static=True)
 
     def __init__(
         self,
