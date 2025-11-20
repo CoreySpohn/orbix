@@ -6,13 +6,12 @@ from functools import partial
 
 import equinox as eqx
 import jax.numpy as jnp
-from jax import Array, jit, vmap
+from jax import jit, vmap
+from jaxtyping import Array
 
 import orbix.equations.orbit as oe
 from orbix.constants import G, Mearth2kg, Rearth2AU, pc2AU, rad2arcsec, two_pi
-from orbix.equations.phase import (
-    lambert_phase_exact,
-)
+from orbix.equations.phase import lambert_phase_exact
 from orbix.equations.propagation import single_r, single_r_v
 
 
@@ -174,7 +173,10 @@ class Planets(eqx.Module):
         """Propagate the orbits to times t returning positions in AU.
 
         Args:
-            trig_solver: function to solve Kepler's equation (M, e) -> (sinE, cosE)
+            trig_solver:
+                Scalar function to solve Kepler's equation (M, e) -> (sinE, cosE).
+                Accepts scalar inputs M (mean anomaly) and e (eccentricity), returns
+                scalar outputs (sinE, cosE).
             t: Times to propagate the planet to. Shape (ntimes,)
             A: A matrix
             B: B matrix
@@ -184,8 +186,16 @@ class Planets(eqx.Module):
             sinE: jnp.ndarray shape (norb, ntimes)
             cosE: jnp.ndarray shape (norb, ntimes)
         """
+        # M has shape (norb, ntimes)
         M = vmap(oe.mean_anomaly_tp, (None, 0, 0))(t, self.n, self.tp)
-        sinE, cosE = trig_solver(M, self.e)
+        # Vectorize trig_solver: first over times, then over orbits
+        # After first vmap: (M: (ntimes,), e: scalar) ->
+        # (sinE: (ntimes,), cosE: (ntimes,))
+        trig_solver_times = vmap(trig_solver, in_axes=(0, None))
+        # After second vmap: (M: (norb, ntimes), e: (norb,)) ->
+        # (sinE: (norb, ntimes), cosE: (norb, ntimes))
+        trig_solver_orbits = vmap(trig_solver_times, in_axes=(0, 0))
+        sinE, cosE = trig_solver_orbits(M, self.e)
         r = vmap(single_r, (1, 1, 0, 0, 0))(A, B, self.e, sinE, cosE)
         return r, sinE, cosE
 
@@ -193,7 +203,8 @@ class Planets(eqx.Module):
         """Propagate the orbits to times t returning positions and velocities in AU.
 
         Args:
-            trig_solver: function to solve Kepler's equation (M, e) -> (sinE, cosE)
+            trig_solver:
+                Scalar function to solve Kepler's equation (M, e) -> (sinE, cosE).
             t: Times to propagate the planet to. Shape (ntimes,)
             A: A matrix
             B: B matrix
@@ -203,7 +214,10 @@ class Planets(eqx.Module):
             v: jnp.ndarray shape (norb, 3, ntimes)
         """
         M = vmap(oe.mean_anomaly_tp, (None, 0, 0))(t, self.n, self.tp)
-        sinE, cosE = trig_solver(M, self.e)
+        # Vectorize trig_solver: first over times, then over orbits
+        trig_solver_times = vmap(trig_solver, in_axes=(0, None))
+        trig_solver_orbits = vmap(trig_solver_times, in_axes=(0, 0))
+        sinE, cosE = trig_solver_orbits(M, self.e)
         r, v = vmap(single_r_v, (1, 1, 0, 0, 0, 0))(A, B, self.e, sinE, cosE, self.n)
         return r, v
 
@@ -211,7 +225,8 @@ class Planets(eqx.Module):
         """Public jitted wrapper around _prop that returns positions in AU.
 
         Args:
-            trig_solver: function to solve Kepler's equation (M, e) -> (sinE, cosE)
+            trig_solver:
+                Scalar function to solve Kepler's equation (M, e) -> (sinE, cosE).
             t: Times to propagate the planet to. Shape (ntimes,)
 
         Returns:
@@ -223,7 +238,8 @@ class Planets(eqx.Module):
         """Propagate the orbits to times t returning positions in arcsec.
 
         Args:
-            trig_solver: function to solve Kepler's equation (M, e) -> (sinE, cosE)
+            trig_solver:
+                Scalar function to solve Kepler's equation (M, e) -> (sinE, cosE).
             t: Times to propagate the planet to. Shape (ntimes,)
 
         Returns:
@@ -231,11 +247,27 @@ class Planets(eqx.Module):
         """
         return self._prop(trig_solver, t, self.A_as, self.B_as)[0]
 
+    def prop_ra_dec(self, trig_solver, t):
+        """Propagate the orbits to times t returning positions in RA and DEC.
+
+        Args:
+            trig_solver:
+                Scalar function to solve Kepler's equation (M, e) -> (sinE, cosE).
+            t: Times to propagate the planet to. Shape (ntimes,)
+
+        Returns:
+            ra: jnp.ndarray shape (norb, ntimes) in arcsec
+            dec: jnp.ndarray shape (norb, ntimes) in arcsec
+        """
+        r = self.prop_as(trig_solver, t)
+        return r[:, 0], r[:, 1]
+
     def s_dMag(self, trig_solver, t):
         """Propagate to times t and return the apparent separation and dMag.
 
         Args:
-            trig_solver: function to solve Kepler's equation (M, e) -> (sinE, cosE)
+            trig_solver:
+                Scalar function to solve Kepler's equation (M, e) -> (sinE, cosE).
             t: Times to propagate the planet to. Shape (ntimes,)
 
         Returns:
@@ -273,7 +305,8 @@ class Planets(eqx.Module):
         """Propagate to times t and return the apparent angular separation and dMag.
 
         Args:
-            trig_solver: function to solve Kepler's equation (M, e) -> (sinE, cosE)
+            trig_solver:
+                Scalar function to solve Kepler's equation (M, e) -> (sinE, cosE).
             t: Times to propagate the planet to. Shape (ntimes,)
 
         Returns:
@@ -291,7 +324,8 @@ class Planets(eqx.Module):
         """Public wrapper around _prop_v that returns positions and velocities in AU.
 
         Args:
-            trig_solver: function to solve Kepler's equation (M, e) -> (sinE, cosE)
+            trig_solver:
+                Scalar function to solve Kepler's equation (M, e) -> (sinE, cosE).
             t: Times to propagate the planet to. Shape (ntimes,)
 
         Returns:
@@ -309,6 +343,11 @@ class Planets(eqx.Module):
     def j_prop_as(self, trig_solver, t):
         """Jit wrapped version of prop_as."""
         return self.prop_as(trig_solver, t)
+
+    @partial(jit, static_argnums=(1,))
+    def j_prop_ra_dec(self, trig_solver, t):
+        """Jit wrapped version of prop_ra_dec."""
+        return self.prop_ra_dec(trig_solver, t)
 
     @partial(jit, static_argnums=(1,))
     def j_s_dMag(self, trig_solver, t):
