@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0](https://github.com/CoreySpohn/orbix/compare/v0.1.0...v0.2.0) (2025-11-20)
+
+
+### Features
+
+* Add solve_trig function for computing just sine and cosine of eccentric anomaly ([e7388c4](https://github.com/CoreySpohn/orbix/commit/e7388c413d5f8f95f0ace14df915c3c2f029a464))
+
+
+### Bug Fixes
+
+* update trig_solver field to static in System class ([24be3f0](https://github.com/CoreySpohn/orbix/commit/24be3f05723f1a62f4044f2de1fb921085b8b1e7))
+
 ## [0.1.0](https://github.com/CoreySpohn/orbix/compare/v0.0.2...v0.1.0) (2025-10-07)
 
 
