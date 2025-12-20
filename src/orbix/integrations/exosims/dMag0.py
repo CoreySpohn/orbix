@@ -66,8 +66,8 @@ class dMag0Grid(eqx.Module):
     kEZs: jnp.ndarray  # shape (N_kEZ,)
     # days
     int_times: jnp.ndarray  # shape (N_t,)
-    # shape (N_fZ, N_kEZ, N_alpha, N_t)
-    # NOTE: transposed from (N_fZ, N_kEZ, N_t, N_alpha) in the init
+    # shape (N_fZ, N_kEZ, N_t, N_alpha)
+    # NOTE: transposed from (N_fZ, N_kEZ, N_alpha, N_t) in the init
     #  which it gets calculated as
     grid: jnp.ndarray
     log_fZs: jnp.ndarray
@@ -170,6 +170,7 @@ class dMag0Grid(eqx.Module):
         log_fZ = jnp.log10(fZ_vals)
         fZ_ind = (log_fZ - self.log_fZs[0]) * self.inv_log_fZ_step
         fZ0 = jnp.clip(jnp.floor(fZ_ind).astype(jnp.int32) + 1, 0, self.n_fZ - 2)
+        # fZ0 = jnp.clip(jnp.round(fZ_ind).astype(jnp.int32), 0, self.n_fZ - 1)
 
         # alpha indices in grid
         log_alpha = jnp.log10(alpha)
@@ -269,6 +270,130 @@ class dMag0Grid(eqx.Module):
         """JIT-compiled version of img_pdet_grid."""
         return self._alpha_dMag_mask(alpha, dMag, fZ_vals, kEZ_vals)
 
+    def _diagnose_detectability(self, trig_solver, alpha, dMag, fZ_vals, kEZ_val):
+        """Diagnose why orbits fail detection.
+
+        Separates failures into geometric (outside IWA/OWA) vs photometric
+        (too faint) constraints.
+
+        Args:
+            trig_solver: Trigonometric solver (unused but kept for API consistency)
+            alpha: Angular separation array, shape (norb, ntimes)
+            dMag: Delta magnitude array, shape (norb, ntimes)
+            fZ_vals: Zodiacal light values, shape (ntimes,)
+            kEZ_val: Exozodi scaling factor (scalar)
+
+        Returns:
+            dict: Diagnostic information with keys:
+                - 'frac_geom_fail': Fraction of (orbit, time) pairs failing geometry
+                - 'frac_phot_fail': Fraction failing photometry (given good geometry)
+                - 'frac_detectable': Fraction that pass both constraints
+                - 'geom_fail_iwa': Fraction inside IWA (too close)
+                - 'geom_fail_owa': Fraction outside OWA (too far)
+                - 'primary_failure': 'geometric' or 'photometric' or 'none'
+        """
+        # Get IWA/OWA from grid bounds
+        alpha_min = self.alphas[0]  # IWA
+        alpha_max = self.alphas[-1]  # OWA
+
+        # Geometric mask: True if within IWA/OWA
+        geom_mask = (alpha >= alpha_min) & (alpha <= alpha_max)
+
+        # Count geometric failures by type
+        fails_iwa = alpha < alpha_min  # Inside IWA (too close to star)
+        fails_owa = alpha > alpha_max  # Outside OWA (too far from star)
+
+        # Get the limiting dMag from the grid (same interpolation as _alpha_dMag_mask)
+        log_fZ = jnp.log10(fZ_vals)
+        fZ_ind = (log_fZ - self.log_fZs[0]) * self.inv_log_fZ_step
+        fZ0 = jnp.clip(jnp.floor(fZ_ind).astype(jnp.int32) + 1, 0, self.n_fZ - 2)
+
+        log_alpha = jnp.log10(alpha)
+        a_ind = (log_alpha - self.log_alphas[0]) * self.inv_log_alpha_step
+        a0 = jnp.clip(a_ind.astype(jnp.int32), 0, self.n_alpha - 1)
+
+        kEZ_ind = jnp.searchsorted(self.kEZs, kEZ_val, side="right") - 1
+
+        dalpha = (a_ind - a0).astype(self.grid.dtype)
+
+        def get_slice_single(a0_val, dalpha_val, fz, kEZ_ind):
+            patch = lax.dynamic_slice(
+                self.grid, (fz, kEZ_ind, 0, a0_val), (1, 1, self.grid.shape[-2], 2)
+            )[0, 0]
+            return patch[:, 0] + dalpha_val * (patch[:, 1] - patch[:, 0])
+
+        get_slice_orbits = vmap(get_slice_single, in_axes=(0, 0, None, None))
+        get_slice_all = vmap(get_slice_orbits, in_axes=(1, 1, 0, None))
+
+        # dim has shape (nt, norb, n_tint) -> transpose to (norb, nt, n_tint)
+        dim = jnp.transpose(get_slice_all(a0, dalpha, fZ0, kEZ_ind), (1, 0, 2))
+
+        # Photometric mask: True if planet is bright enough (dMag < limiting dMag)
+        # We check at the longest integration time (most sensitive)
+        phot_mask = jnp.signbit(dMag[..., None] - dim)
+        # Take the "any integration time works" approach
+        phot_mask_any_int = phot_mask.any(axis=-1)
+
+        # Combined detection mask
+        det_mask = geom_mask & phot_mask_any_int
+
+        # Calculate fractions
+        total_samples = float(alpha.size)
+
+        frac_geom_fail = float((~geom_mask).sum()) / total_samples
+        frac_iwa_fail = float(fails_iwa.sum()) / total_samples
+        frac_owa_fail = float(fails_owa.sum()) / total_samples
+
+        # Photometric failures among those with good geometry
+        geom_pass_count = float(geom_mask.sum())
+        if geom_pass_count > 0:
+            phot_fail_given_geom = (
+                float((geom_mask & ~phot_mask_any_int).sum()) / geom_pass_count
+            )
+        else:
+            phot_fail_given_geom = 0.0
+
+        frac_detectable = float(det_mask.sum()) / total_samples
+
+        # Determine primary failure mode
+        if frac_detectable > 0:
+            primary_failure = "none"
+        elif frac_geom_fail > 0.5:
+            # More than half fail geometry
+            if frac_iwa_fail > frac_owa_fail:
+                primary_failure = "geometric_iwa"
+            else:
+                primary_failure = "geometric_owa"
+        else:
+            primary_failure = "photometric"
+
+        return {
+            "frac_geom_fail": frac_geom_fail,
+            "frac_phot_fail": phot_fail_given_geom,
+            "frac_detectable": frac_detectable,
+            "geom_fail_iwa": frac_iwa_fail,
+            "geom_fail_owa": frac_owa_fail,
+            "primary_failure": primary_failure,
+            "iwa_arcsec": float(alpha_min),
+            "owa_arcsec": float(alpha_max),
+        }
+
+    def diagnose_planets(self, trig_solver, times, planets, fZ_vals, kEZ_val):
+        """Diagnose detectability for a set of planet orbits.
+
+        Args:
+            trig_solver: Trigonometric solver for orbital propagation
+            times: Array of times to evaluate
+            planets: Planets object with orbital parameters
+            fZ_vals: Zodiacal light values at each time
+            kEZ_val: Exozodi scaling factor
+
+        Returns:
+            dict: Diagnostic information (see _diagnose_detectability)
+        """
+        alpha, dMag = planets.alpha_dMag(trig_solver, times)
+        return self._diagnose_detectability(trig_solver, alpha, dMag, fZ_vals, kEZ_val)
+
     def _dyn_comp_single(
         self,
         trig_solver,
@@ -277,11 +402,35 @@ class dMag0Grid(eqx.Module):
         fz: float,
         kEZ: float,
         valid_mask: jnp.ndarray,  # (N_orb,) bool
+        overhead: float = 0.0,  # overhead time in same units as int_times (days)
     ):
         """Dynamic completeness for **one** star at one epoch.
 
         All input vectors have the fixed length N_orb
         `valid_mask` is True for the orbits that are still plausible.
+
+        Args:
+            trig_solver:
+                Trigonometric solver for orbital calculations
+            alpha:
+                Angular separation in arcsec, shape (N_orb,)
+            dmag:
+                Delta magnitude, shape (N_orb,)
+            fz:
+                Zodiacal light brightness
+            kEZ:
+                Exozodiacal light factor
+            valid_mask:
+                Boolean mask of valid orbits, shape (N_orb,)
+            overhead:
+                Overhead time per observation in days (settling + instrument).
+                When > 0, returns comp/(int_time + overhead) instead of
+                comp/int_time. This helps optimize for total observation time
+                rather than just integration time.
+
+        Returns:
+            comp_div_t:
+                Completeness divided by observation time, shape (N_tint,)
         """
         # Reduce peak memory by streaming across orbits instead of
         # materialising a (N_orb, N_tint) array. Accumulate in float32 to
@@ -301,22 +450,50 @@ class dMag0Grid(eqx.Module):
         summed, _ = lax.scan(body, init, (alpha, dmag, valid_mask))
         dyn_comp = summed / alpha.shape[0]
 
-        # integration-time-normalised figure of merit
-        comp_div_t = dyn_comp / self.int_times.astype(acc_dtype)
+        # Observation-time-normalised figure of merit
+        # obs_time = int_time + overhead
+        obs_times = self.int_times.astype(acc_dtype) + overhead
+        comp_div_t = dyn_comp / obs_times
         return comp_div_t
 
     @eqx.filter_jit
-    def dyn_comp(self, trig_solver, alpha_all, dmag_all, fz, kEZ, valid_mask):
+    def dyn_comp(
+        self, trig_solver, alpha_all, dmag_all, fz, kEZ, valid_mask, overhead=0.0
+    ):
         """JIT-compiled version of _dyn_comp_single."""
         return self._dyn_comp_single(
-            trig_solver, alpha_all, dmag_all, fz, kEZ, valid_mask
+            trig_solver, alpha_all, dmag_all, fz, kEZ, valid_mask, overhead
         )
 
     @eqx.filter_jit
-    def dyn_comp_vec(self, trig_solver, alpha_all, dmag_all, fz, kEZ, valid_mask):
-        """Vectorized version of dyn_comp over multiple times."""
-        return vmap(self._dyn_comp_single, in_axes=(None, 1, 1, 0, None, None))(
-            trig_solver, alpha_all, dmag_all, fz, kEZ, valid_mask
+    def dyn_comp_vec(
+        self, trig_solver, alpha_all, dmag_all, fz, kEZ, valid_mask, overhead=0.0
+    ):
+        """Vectorized version of dyn_comp over multiple times.
+
+        Args:
+            trig_solver:
+                Trigonometric solver for orbital calculations
+            alpha_all:
+                Angular separation in arcsec, shape (N_orb, N_times)
+            dmag_all:
+                Delta magnitude, shape (N_orb, N_times)
+            fz:
+                Zodiacal light brightness, shape (N_times,)
+            kEZ:
+                Exozodiacal light factor (scalar)
+            valid_mask:
+                Boolean mask of valid orbits, shape (N_orb,)
+            overhead:
+                Overhead time per observation in days. When > 0, returns
+                comp/(int_time + overhead) instead of comp/int_time.
+
+        Returns:
+            comp_div_t:
+                Completeness divided by observation time, shape (N_times, N_tint)
+        """
+        return vmap(self._dyn_comp_single, in_axes=(None, 1, 1, 0, None, None, None))(
+            trig_solver, alpha_all, dmag_all, fz, kEZ, valid_mask, overhead
         )
 
 
@@ -362,6 +539,8 @@ def dMag0_grid(SS, mode, int_times, nEZ_range, n_fZs=10, n_alphas=50, n_kEZs=3):
     # Create the grid of alpha values
     IWA, OWA = mode["IWA"].to_value(u.arcsec), mode["OWA"].to_value(u.arcsec)
     alphas = np.linspace(IWA, OWA, n_alphas) << u.arcsec
+    # Try log-spaced alphas
+    alphas = np.geomspace(IWA, OWA, n_alphas) << u.arcsec
 
     # Create the jax arrays for the dMag0_grid module
     alphas_jnp = jnp.array(alphas.to_value(u.arcsec))
