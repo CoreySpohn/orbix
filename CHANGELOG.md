@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/CoreySpohn/orbix/compare/v0.2.0...v0.3.0) (2025-12-20)
+
+
+### Features
+
+* Adding overhead time as an optional component of the dMag0 values. Fixing alpha log spacing issue ([2c0aeb8](https://github.com/CoreySpohn/orbix/commit/2c0aeb858cfd10fdcdd29ed678efe6d683a05603))
+
 ## [0.2.0](https://github.com/CoreySpohn/orbix/compare/v0.1.0...v0.2.0) (2025-11-20)
 
 
