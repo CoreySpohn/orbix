@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/CoreySpohn/orbix/compare/v0.3.0...v0.4.0) (2026-02-09)
+
+
+### Features
+
+* Adding observatory halo orbit and zodiacal light functions ([d853b5d](https://github.com/CoreySpohn/orbix/commit/d853b5d34a5ae4b2a3ecd148f4af8687881fbedc))
+
 ## [0.3.0](https://github.com/CoreySpohn/orbix/compare/v0.2.0...v0.3.0) (2025-12-20)
 
 
