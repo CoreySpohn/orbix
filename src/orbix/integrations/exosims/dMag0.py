@@ -497,12 +497,37 @@ class dMag0Grid(eqx.Module):
         )
 
 
-def dMag0_grid(SS, mode, int_times, nEZ_range, n_fZs=10, n_alphas=50, n_kEZs=3):
-    """Wraps the call to EXOSIMS.calc_dMag_per_intTime."""
+def dMag0_grid(
+    SS, mode, int_times, nEZ_range, n_fZs=10, n_alphas=50, n_kEZs=3, snr_margin=0.0
+):
+    """Wraps the call to EXOSIMS.calc_dMag_per_intTime.
+
+    Args:
+        SS:
+            SurveySimulation object
+        mode:
+            Observing mode dictionary
+        int_times:
+            Array of integration times
+        nEZ_range:
+            Range of exozodiacal dust levels
+        n_fZs:
+            Number of zodiacal light flux values
+        n_alphas:
+            Number of angular separation values
+        n_kEZs:
+            Number of kEZ values
+        snr_margin:
+            Margin to add to the mode's required SNR for dMag calculations
+    """
     # Get the range of fZ and JEZ values to use in the grid
     TL = SS.TargetList
     OS = TL.OpticalSystem
     ZL = SS.ZodiacalLight
+
+    # Make a copy of the mode and add the SNR margin
+    mode = mode.copy()
+    mode["SNR"] = mode["SNR"] + snr_margin
 
     int_times_d = int_times.to_value(u.d)
     # Generate a hex string that only includes parameters affecting dMag0
@@ -521,6 +546,8 @@ def dMag0_grid(SS, mode, int_times, nEZ_range, n_fZs=10, n_alphas=50, n_kEZs=3):
         + f"n_alphas_{n_alphas}"
         + f"n_EZ_range_{nEZ_range[0]}-{nEZ_range[-1]}"
         + f"int_times{int_times_d[0]:.2f}{int_times_d[-1]:.2f}{int_times_d.shape[0]}"
+        + f"SNR_{mode['SNR']:.2f}"
+        + f"snr_margin_{snr_margin:.2f}"
     )
 
     # Get the JEZ values as a copy to avoid modifying the original value
@@ -538,7 +565,6 @@ def dMag0_grid(SS, mode, int_times, nEZ_range, n_fZs=10, n_alphas=50, n_kEZs=3):
 
     # Create the grid of alpha values
     IWA, OWA = mode["IWA"].to_value(u.arcsec), mode["OWA"].to_value(u.arcsec)
-    alphas = np.linspace(IWA, OWA, n_alphas) << u.arcsec
     # Try log-spaced alphas
     alphas = np.geomspace(IWA, OWA, n_alphas) << u.arcsec
 
