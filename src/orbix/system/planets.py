@@ -13,9 +13,11 @@ from functools import partial
 import equinox as eqx
 import jax.numpy as jnp
 from hwoutils.constants import (
+    AU2m,
     G,
     Mearth2kg,
     Rearth2AU,
+    d2s,
     pc2AU,
     rad2arcsec,
     two_pi,
@@ -135,11 +137,17 @@ class Planets(eqx.Module):
         self.secosw = se * jnp.cos(w_rad)
         self.sesinw = se * jnp.sin(w_rad)
         self.Mp_min_kg = self.Mp_kg * jnp.sin(i_rad)
-        self.K_mps = oe.semi_amplitude_reduced(
-            self.T_d,
-            Ms_kg,
-            self.Mp_min_kg,
-            sqrt_1me2,
+        # semi_amplitude_reduced returns K in AU/d (G is in AU^3/(kg·d^2)).
+        # Convert to m/s for the canonical RV-literature unit.
+        self.K_mps = (
+            oe.semi_amplitude_reduced(
+                self.T_d,
+                Ms_kg,
+                self.Mp_min_kg,
+                sqrt_1me2,
+            )
+            * AU2m
+            / d2s
         )
 
         # On-sky projection scale
