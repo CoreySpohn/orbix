@@ -12,10 +12,18 @@ from __future__ import annotations
 from abc import abstractmethod
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 from jaxtyping import Array
 
-from orbix.equations.orbit import AB_matrices_reduced
+from orbix.constants import G, two_pi
+from orbix.equations.orbit import (
+    AB_matrices_reduced,
+    mean_anomaly_tp,
+    mean_motion,
+    period_n,
+)
+from orbix.equations.propagation import single_r
 
 
 class AbstractOrbit(eqx.Module):
@@ -114,5 +122,44 @@ class KeplerianOrbit(AbstractOrbit):
         *,
         Ms_kg: Array,
     ) -> tuple[Array, Array, Array]:
-        """Not yet implemented; will propagate orbit to times ``t_jd``."""
-        raise NotImplementedError
+        """Propagate Keplerian orbit to times ``t_jd``.
+
+        Returns:
+            r_AU: (K, 3, T) position vectors.
+            phase_angle_rad: (K, T) phase angle beta = arccos(r_z / |r|).
+            dist_AU: (K, T) star-planet distance.
+        """
+        t_jd = jnp.atleast_1d(t_jd)
+
+        # Derived quantities that depend on stellar context
+        mu = G * Ms_kg
+        n = mean_motion(self.a_AU, mu)
+        T_d = period_n(n)
+        tp_d = self.t0_d - T_d * self.M0_rad / two_pi
+
+        # Mean anomaly at each time, shape (K, T)
+        M = jax.vmap(mean_anomaly_tp, (None, 0, 0))(t_jd, n, tp_d)
+
+        # Kepler solve -> sinE, cosE each shape (K, T)
+        solver_t = jax.vmap(trig_solver, in_axes=(0, None))
+        solver_kt = jax.vmap(solver_t, in_axes=(0, 0))
+        sinE, cosE = solver_kt(M, self.e)
+
+        # Position shape (K, 3, T)
+        r_AU = jax.vmap(single_r, (1, 1, 0, 0, 0))(
+            self.A_AU,
+            self.B_AU,
+            self.e,
+            sinE,
+            cosE,
+        )
+
+        # Star-planet distance from Kepler, shape (K, T).
+        # d = a * (1 - e * cosE)
+        dist_AU = self.a_AU[:, None] * (1.0 - self.e[:, None] * cosE)
+
+        # Phase angle: cos(beta) = r_z / d, clipped for fp safety.
+        cosbeta = jnp.clip(r_AU[:, 2] / dist_AU, -1.0, 1.0)
+        phase_angle_rad = jnp.arccos(cosbeta)
+
+        return r_AU, phase_angle_rad, dist_AU
