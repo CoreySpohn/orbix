@@ -8,8 +8,8 @@ as `E_guess_jit`.
 
 import jax
 import jax.numpy as jnp
+from hwoutils.constants import two_pi
 
-from orbix.constants import two_pi
 from orbix.kepler.core import cut_M, getbounds, init_E_coeffs
 
 

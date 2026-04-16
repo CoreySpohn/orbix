@@ -2,8 +2,8 @@
 
 import jax
 import jax.numpy as jnp
+from hwoutils.constants import eps, two_pi
 
-from orbix.constants import eps, two_pi
 from orbix.kepler.core import E_solve
 from orbix.kepler.shortcuts.grid import jaxify_scalar_func
 

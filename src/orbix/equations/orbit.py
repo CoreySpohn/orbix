@@ -1,8 +1,7 @@
 """Common equations for orbital mechanics."""
 
 import jax.numpy as jnp
-
-from orbix.constants import G, two_pi
+from hwoutils.constants import G, two_pi
 
 two_pi_G = two_pi * G
 
