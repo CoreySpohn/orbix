@@ -139,3 +139,45 @@ def test_propagate_raises_without_Ms_kg_keyword():
 
     with pytest.raises(TypeError):
         orbit.propagate(trig_solver, t_jd, 1.988409870698051e30)
+
+
+def test_keplerian_orbit_parity_with_planets_internal_prop():
+    """KeplerianOrbit.propagate matches orbix.Planets._prop on equivalent inputs.
+
+    Shared physics, different API.
+    """
+    from orbix.kepler.shortcuts.grid import get_grid_solver
+    from orbix.system.orbit import KeplerianOrbit
+    from orbix.system.planets import Planets
+
+    params = _earthlike_orbit_params()
+    Ms_kg = jnp.atleast_1d(1.988409870698051e30)
+    dist_pc = jnp.atleast_1d(10.0)
+
+    # Build Planets with the same orbital elements; dummy
+    # photometry since we only compare geometry.
+    planets = Planets(
+        Ms=Ms_kg,
+        dist=dist_pc,
+        a=params["a_AU"],
+        e=params["e"],
+        W=params["W_rad"],
+        i=params["i_rad"],
+        w=params["w_rad"],
+        M0=params["M0_rad"],
+        t0=params["t0_d"],
+        Mp=jnp.atleast_1d(1.0),
+        Rp=jnp.atleast_1d(1.0),
+        p=jnp.atleast_1d(0.3),
+    )
+
+    orbit = KeplerianOrbit(**params)
+    trig_solver = get_grid_solver(level="scalar", E=False, trig=True, jit=True)
+    t_jd = jnp.linspace(0.0, 365.0, 20)
+
+    # Planets._prop returns (r_AU, sinE, cosE)
+    r_planets, _, _ = planets._prop(trig_solver, t_jd, planets.A_AU, planets.B_AU)
+
+    r_orbit, _, _ = orbit.propagate(trig_solver, t_jd, Ms_kg=Ms_kg)
+
+    np.testing.assert_allclose(r_planets, r_orbit, rtol=1e-6, atol=1e-8)
