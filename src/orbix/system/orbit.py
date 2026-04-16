@@ -14,7 +14,7 @@ from abc import abstractmethod
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from hwoutils.constants import G, two_pi
+from hwoutils.constants import G, pc2AU, rad2arcsec, two_pi
 from jaxtyping import Array
 
 from orbix.equations.orbit import (
@@ -163,3 +163,40 @@ class KeplerianOrbit(AbstractOrbit):
         phase_angle_rad = jnp.arccos(cosbeta)
 
         return r_AU, phase_angle_rad, dist_AU
+
+    def position_arcsec(
+        self,
+        trig_solver,
+        t_jd: Array,
+        *,
+        Ms_kg: Array,
+        dist_pc: Array,
+    ) -> tuple[Array, Array]:
+        """On-sky (RA, Dec) in arcsec, each shape ``(K, T)``.
+
+        Thin wrapper around ``propagate`` for callers that only
+        need projected position.
+        """
+        r_AU, _, _ = self.propagate(trig_solver, t_jd, Ms_kg=Ms_kg)
+        dist_AU = dist_pc * pc2AU
+        scale = rad2arcsec / dist_AU
+        ra_arcsec = r_AU[:, 0] * scale[:, None]
+        dec_arcsec = r_AU[:, 1] * scale[:, None]
+        return ra_arcsec, dec_arcsec
+
+    def separation_arcsec(
+        self,
+        trig_solver,
+        t_jd: Array,
+        *,
+        Ms_kg: Array,
+        dist_pc: Array,
+    ) -> Array:
+        """Projected angular separation in arcsec, shape ``(K, T)``."""
+        ra, dec = self.position_arcsec(
+            trig_solver,
+            t_jd,
+            Ms_kg=Ms_kg,
+            dist_pc=dist_pc,
+        )
+        return jnp.sqrt(ra**2 + dec**2)

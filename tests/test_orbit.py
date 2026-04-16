@@ -181,3 +181,52 @@ def test_keplerian_orbit_parity_with_planets_internal_prop():
     r_orbit, _, _ = orbit.propagate(trig_solver, t_jd, Ms_kg=Ms_kg)
 
     np.testing.assert_allclose(r_planets, r_orbit, rtol=1e-6, atol=1e-8)
+
+
+def test_position_arcsec_shape_and_units():
+    """position_arcsec returns (RA_arcsec, Dec_arcsec) each (K, T)."""
+    from orbix.kepler.shortcuts.grid import get_grid_solver
+    from orbix.system.orbit import KeplerianOrbit
+
+    orbit = KeplerianOrbit(**_earthlike_orbit_params())
+    trig_solver = get_grid_solver(level="scalar", E=False, trig=True, jit=True)
+    t_jd = jnp.linspace(0.0, 365.0, 5)
+
+    Ms_kg = jnp.atleast_1d(1.988409870698051e30)
+    dist_pc = jnp.atleast_1d(10.0)
+
+    ra, dec = orbit.position_arcsec(
+        trig_solver,
+        t_jd,
+        Ms_kg=Ms_kg,
+        dist_pc=dist_pc,
+    )
+    assert ra.shape == (1, 5)
+    assert dec.shape == (1, 5)
+
+
+def test_separation_arcsec_matches_projected_distance():
+    """separation_arcsec == sqrt(RA^2 + Dec^2) from position_arcsec."""
+    from orbix.kepler.shortcuts.grid import get_grid_solver
+    from orbix.system.orbit import KeplerianOrbit
+
+    orbit = KeplerianOrbit(**_earthlike_orbit_params())
+    trig_solver = get_grid_solver(level="scalar", E=False, trig=True, jit=True)
+    t_jd = jnp.linspace(0.0, 365.0, 5)
+
+    Ms_kg = jnp.atleast_1d(1.988409870698051e30)
+    dist_pc = jnp.atleast_1d(10.0)
+
+    ra, dec = orbit.position_arcsec(
+        trig_solver,
+        t_jd,
+        Ms_kg=Ms_kg,
+        dist_pc=dist_pc,
+    )
+    sep = orbit.separation_arcsec(
+        trig_solver,
+        t_jd,
+        Ms_kg=Ms_kg,
+        dist_pc=dist_pc,
+    )
+    np.testing.assert_allclose(sep, jnp.sqrt(ra**2 + dec**2), rtol=1e-10)
