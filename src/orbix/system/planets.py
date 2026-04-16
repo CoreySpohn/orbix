@@ -37,103 +37,121 @@ class Planets(eqx.Module):
     ``KeplerianOrbit`` today). RV and photometric derived quantities
     stay on ``Planets`` for the orbit-only fitting pipeline.
 
-    Inputs (unchanged API for backwards compatibility; unit-suffix
-    rename is Phase 0c of the migration):
-        Ms: stellar mass in kg
-        dist: distance to star in pc
-        a, e, W, i, w, M0, t0: orbital elements (same units /
-            conventions as before)
-        Mp: planet mass in Earth masses
-        Rp: planet radius in Earth radii
-        p: geometric albedo
+    Constructor arguments (unit-suffix naming, phase 0c of the
+    skyscapes migration):
+        Ms_kg: stellar mass in kg
+        dist_pc: distance to star in pc
+        a_AU, e, W_rad, i_rad, w_rad, M0_rad, t0_d: orbital elements
+        Mp_Mearth: planet mass in Earth masses (stored as Mp_kg)
+        Rp_Rearth: planet radius in Earth radii (stored as Rp_AU)
+        Ag: geometric albedo (dimensionless)
     """
 
     # Composed geometry
     orbit: AbstractOrbit
 
-    # Retained public fields (unchanged names this phase)
-    Ms: Array
-    dist: Array
-    a: Array
+    # Retained public fields (unit-suffixed)
+    Ms_kg: Array
+    dist_pc: Array
+    a_AU: Array
     e: Array
-    W: Array
-    i: Array
-    w: Array
-    M0: Array
-    t0: Array
-    Mp: Array  # stored in kg (converted from Mearth)
-    Rp: Array  # stored in AU (converted from Rearth)
-    p: Array
+    W_rad: Array
+    i_rad: Array
+    w_rad: Array
+    M0_rad: Array
+    t0_d: Array
+    Mp_kg: Array
+    Rp_AU: Array
+    Ag: Array
 
     # Derived
     mu: Array
-    n: Array
-    T: Array
-    tp: Array
-    w_p: Array
-    w_s: Array
+    n_radpd: Array
+    T_d: Array
+    tp_d: Array
+    w_p_rad: Array
+    w_s_rad: Array
     secosw: Array
     sesinw: Array
-    K: Array
-    Mp_min: Array
-    a_as: Array
+    K_mps: Array
+    Mp_min_kg: Array
+    a_arcsec: Array
     _rad2arcsec_dist: Array
 
-    def __init__(self, Ms, dist, a, e, W, i, w, M0, t0, Mp, Rp, p):
+    def __init__(
+        self,
+        Ms_kg,
+        dist_pc,
+        a_AU,
+        e,
+        W_rad,
+        i_rad,
+        w_rad,
+        M0_rad,
+        t0_d,
+        Mp_Mearth,
+        Rp_Rearth,
+        Ag,
+    ):
         """Build a Planets instance with a composed KeplerianOrbit.
 
         See the class docstring for parameter units.
         """
-        self.Ms = Ms
-        self.dist = dist
-        self.a = a
+        self.Ms_kg = Ms_kg
+        self.dist_pc = dist_pc
+        self.a_AU = a_AU
         self.e = e
-        self.W = W
-        self.i = i
-        self.w = w
-        self.M0 = M0
-        self.t0 = t0
-        self.Mp = Mp * Mearth2kg
-        self.Rp = Rp * Rearth2AU
-        self.p = p
+        self.W_rad = W_rad
+        self.i_rad = i_rad
+        self.w_rad = w_rad
+        self.M0_rad = M0_rad
+        self.t0_d = t0_d
+        self.Mp_kg = Mp_Mearth * Mearth2kg
+        self.Rp_AU = Rp_Rearth * Rearth2AU
+        self.Ag = Ag
 
         # Geometry via KeplerianOrbit
         self.orbit = KeplerianOrbit(
-            a_AU=a,
+            a_AU=a_AU,
             e=e,
-            W_rad=W,
-            i_rad=i,
-            w_rad=w,
-            M0_rad=M0,
-            t0_d=t0,
+            W_rad=W_rad,
+            i_rad=i_rad,
+            w_rad=w_rad,
+            M0_rad=M0_rad,
+            t0_d=t0_d,
         )
 
         # Derived quantities that need stellar context
-        self.mu = G * Ms
-        self.n = oe.mean_motion(a, self.mu)
-        self.T = oe.period_n(self.n)
-        T_e = self.T * self.M0 / two_pi
-        self.tp = self.t0 - T_e
-        self.w_p = self.w
-        self.w_s = (self.w + jnp.pi) % two_pi
+        self.mu = G * Ms_kg
+        self.n_radpd = oe.mean_motion(a_AU, self.mu)
+        self.T_d = oe.period_n(self.n_radpd)
+        T_e = self.T_d * self.M0_rad / two_pi
+        self.tp_d = self.t0_d - T_e
+        self.w_p_rad = self.w_rad
+        self.w_s_rad = (self.w_rad + jnp.pi) % two_pi
 
         sqrt_1me2 = jnp.sqrt(1 - e**2)
         se = jnp.sqrt(e)
-        self.secosw = se * jnp.cos(w)
-        self.sesinw = se * jnp.sin(w)
-        self.Mp_min = self.Mp * jnp.sin(i)
-        self.K = oe.semi_amplitude_reduced(self.T, Ms, self.Mp_min, sqrt_1me2)
+        self.secosw = se * jnp.cos(w_rad)
+        self.sesinw = se * jnp.sin(w_rad)
+        self.Mp_min_kg = self.Mp_kg * jnp.sin(i_rad)
+        self.K_mps = oe.semi_amplitude_reduced(
+            self.T_d,
+            Ms_kg,
+            self.Mp_min_kg,
+            sqrt_1me2,
+        )
 
         # On-sky projection scale
-        _dist_AU = dist * pc2AU
+        _dist_AU = dist_pc * pc2AU
         self._rad2arcsec_dist = rad2arcsec / _dist_AU
-        self.a_as = self.a * self._rad2arcsec_dist
+        self.a_arcsec = self.a_AU * self._rad2arcsec_dist
 
     # --- Propagation (delegates to self.orbit) ---
 
     def prop_AU(self, trig_solver, t):
         """Position vectors in AU, shape ``(K, 3, T)``."""
-        r_AU, _, _ = self.orbit.propagate(trig_solver, t, Ms_kg=self.Ms)
+        r_AU, _, _ = self.orbit.propagate(trig_solver, t, Ms_kg=self.Ms_kg)
         return r_AU
 
     def prop_as(self, trig_solver, t):
@@ -151,16 +169,15 @@ class Planets(eqx.Module):
         r_AU, phase_angle_rad, dist_AU = self.orbit.propagate(
             trig_solver,
             t,
-            Ms_kg=self.Ms,
+            Ms_kg=self.Ms_kg,
         )
-        # Projected separation from x, y components
         s = jnp.sqrt(r_AU[:, 0] ** 2 + r_AU[:, 1] ** 2)
 
         cosbeta = jnp.cos(phase_angle_rad)
         sinbeta = jnp.sin(phase_angle_rad)
         phase = lambert_phase_exact(cosbeta, sinbeta)
 
-        log_arg = self.p[:, None] * (self.Rp[:, None] / dist_AU) ** 2 * phase
+        log_arg = self.Ag[:, None] * (self.Rp_AU[:, None] / dist_AU) ** 2 * phase
         eps = jnp.finfo(log_arg.dtype).tiny
         dMag = -2.5 * jnp.log10(log_arg + eps)
         return s, dMag

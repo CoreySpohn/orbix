@@ -157,18 +157,18 @@ def test_keplerian_orbit_parity_with_planets_internal_prop():
     # Build Planets with the same orbital elements; dummy
     # photometry since we only compare geometry.
     planets = Planets(
-        Ms=Ms_kg,
-        dist=dist_pc,
-        a=params["a_AU"],
+        Ms_kg=Ms_kg,
+        dist_pc=dist_pc,
+        a_AU=params["a_AU"],
         e=params["e"],
-        W=params["W_rad"],
-        i=params["i_rad"],
-        w=params["w_rad"],
-        M0=params["M0_rad"],
-        t0=params["t0_d"],
-        Mp=jnp.atleast_1d(1.0),
-        Rp=jnp.atleast_1d(1.0),
-        p=jnp.atleast_1d(0.3),
+        W_rad=params["W_rad"],
+        i_rad=params["i_rad"],
+        w_rad=params["w_rad"],
+        M0_rad=params["M0_rad"],
+        t0_d=params["t0_d"],
+        Mp_Mearth=jnp.atleast_1d(1.0),
+        Rp_Rearth=jnp.atleast_1d(1.0),
+        Ag=jnp.atleast_1d(0.3),
     )
 
     orbit = KeplerianOrbit(**params)
@@ -190,18 +190,18 @@ def test_planets_exposes_orbit_field():
 
     params = _earthlike_orbit_params()
     planets = Planets(
-        Ms=jnp.atleast_1d(1.988409870698051e30),
-        dist=jnp.atleast_1d(10.0),
-        a=params["a_AU"],
+        Ms_kg=jnp.atleast_1d(1.988409870698051e30),
+        dist_pc=jnp.atleast_1d(10.0),
+        a_AU=params["a_AU"],
         e=params["e"],
-        W=params["W_rad"],
-        i=params["i_rad"],
-        w=params["w_rad"],
-        M0=params["M0_rad"],
-        t0=params["t0_d"],
-        Mp=jnp.atleast_1d(1.0),
-        Rp=jnp.atleast_1d(1.0),
-        p=jnp.atleast_1d(0.3),
+        W_rad=params["W_rad"],
+        i_rad=params["i_rad"],
+        w_rad=params["w_rad"],
+        M0_rad=params["M0_rad"],
+        t0_d=params["t0_d"],
+        Mp_Mearth=jnp.atleast_1d(1.0),
+        Rp_Rearth=jnp.atleast_1d(1.0),
+        Ag=jnp.atleast_1d(0.3),
     )
 
     assert isinstance(planets.orbit, AbstractOrbit)
@@ -218,18 +218,18 @@ def test_planets_propagation_matches_standalone_orbit():
     Ms_kg = jnp.atleast_1d(1.988409870698051e30)
     dist_pc = jnp.atleast_1d(10.0)
     planets = Planets(
-        Ms=Ms_kg,
-        dist=dist_pc,
-        a=params["a_AU"],
+        Ms_kg=Ms_kg,
+        dist_pc=dist_pc,
+        a_AU=params["a_AU"],
         e=params["e"],
-        W=params["W_rad"],
-        i=params["i_rad"],
-        w=params["w_rad"],
-        M0=params["M0_rad"],
-        t0=params["t0_d"],
-        Mp=jnp.atleast_1d(1.0),
-        Rp=jnp.atleast_1d(1.0),
-        p=jnp.atleast_1d(0.3),
+        W_rad=params["W_rad"],
+        i_rad=params["i_rad"],
+        w_rad=params["w_rad"],
+        M0_rad=params["M0_rad"],
+        t0_d=params["t0_d"],
+        Mp_Mearth=jnp.atleast_1d(1.0),
+        Rp_Rearth=jnp.atleast_1d(1.0),
+        Ag=jnp.atleast_1d(0.3),
     )
     orbit = KeplerianOrbit(**params)
 

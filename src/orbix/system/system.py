@@ -48,15 +48,15 @@ class System(eqx.Module):
 
         Args:
             **kwargs: Keyword arguments for Planets constructor.
-                Should not include ``Ms`` or ``dist`` -- those are
+                Should not include ``Ms_kg`` or ``dist_pc`` -- those are
                 taken from ``self.star``.
 
         Returns:
             A new System object with the added planet.
         """
         new_planet = Planets(
-            Ms=self.star.Ms_kg,
-            dist=self.star.dist_pc,
+            Ms_kg=self.star.Ms_kg,
+            dist_pc=self.star.dist_pc,
             **kwargs,
         )
         return System(
