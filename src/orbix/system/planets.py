@@ -12,11 +12,7 @@ from functools import partial
 
 import equinox as eqx
 import jax.numpy as jnp
-from jax import jit
-from jaxtyping import Array
-
-import orbix.equations.orbit as oe
-from orbix.constants import (
+from hwoutils.constants import (
     G,
     Mearth2kg,
     Rearth2AU,
@@ -24,6 +20,10 @@ from orbix.constants import (
     rad2arcsec,
     two_pi,
 )
+from jax import jit
+from jaxtyping import Array
+
+import orbix.equations.orbit as oe
 from orbix.equations.phase import lambert_phase_exact
 
 from .orbit import AbstractOrbit, KeplerianOrbit
