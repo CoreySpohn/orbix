@@ -14,9 +14,9 @@ from abc import abstractmethod
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from hwoutils.constants import G, two_pi
 from jaxtyping import Array
 
-from orbix.constants import G, two_pi
 from orbix.equations.orbit import (
     AB_matrices_reduced,
     mean_anomaly_tp,
