@@ -13,16 +13,11 @@ from .star import Star
 class System(eqx.Module):
     """System of a star and a set of planets.
 
-    Args:
-        star:
-            Star object
-        planets:
-            Tuple of Planet objects
-        E_solver:
-            Function to solve Kepler's equation (M, e) -> E.
-            Defaults to `orbix.kepler.core.E_solve`.
-        name:
-            Name of the system
+    Attributes:
+        star: Star object.
+        planets: Tuple of Planets objects.
+        trig_solver: Scalar solver for Kepler's equation,
+            signature ``(M, e) -> (sinE, cosE)``. Static field.
     """
 
     star: Star
