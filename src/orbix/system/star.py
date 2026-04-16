@@ -1,31 +1,32 @@
 """Star class."""
 
 import equinox as eqx
-
-from orbix.constants import G, Msun2kg, pc2AU
+from hwoutils.constants import G, Msun2kg, pc2AU
 
 
 class Star(eqx.Module):
     """Star class representing a central body in a system.
 
     Attributes:
-        Ms: Mass of the star in solar masses.
-        dist: Distance to the star in pc.
-        mu: Gravitational parameter (G * M) in AU^3/(kg*d^2).
+        Ms_kg: Mass of the star in kg.
+        dist_pc: Distance to the star in pc.
+        dist_AU: Distance to the star in AU (derived).
+        mu: Gravitational parameter G * Ms (AU^3 / (kg * d^2)).
     """
 
-    Ms: float
-    dist: float
+    Ms_kg: float
+    dist_pc: float
+    dist_AU: float
     mu: float
 
-    def __init__(self, Ms, dist):
-        """Create necessary parameters for the star.
+    def __init__(self, Ms_Msun, dist_pc):
+        """Create a Star.
 
         Args:
-            Ms: Mass of the star in solar masses.
-            dist: Distance to the star in pc.
+            Ms_Msun: Mass of the star in solar masses.
+            dist_pc: Distance to the star in pc.
         """
-        # Convert mass to kg internally
-        self.Ms = Ms * Msun2kg
-        self.mu = G * self.Ms
-        self.dist = dist * pc2AU
+        self.Ms_kg = Ms_Msun * Msun2kg
+        self.dist_pc = dist_pc
+        self.dist_AU = dist_pc * pc2AU
+        self.mu = G * self.Ms_kg
