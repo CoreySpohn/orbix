@@ -30,7 +30,7 @@ class AbstractOrbit(eqx.Module):
     """Abstract orbital-motion model.
 
     Subclasses own whatever parameters describe "this kind of
-    orbital motion" (Keplerian, Kozai, TTV, interpolated ephemeris).
+    orbital motion" (Keplerian, TTV, interpolated ephemeris).
     Stellar context is threaded in at call time.
     """
 
