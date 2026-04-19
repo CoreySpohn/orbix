@@ -1,13 +1,15 @@
 """Observatory module for telescope orbit modeling and observing conditions.
 
 Provides:
-    - :class:`ObservatoryL2Halo` — L2 halo orbit equinox module
+    - :class:`ObservatoryL2Halo` - L2 halo orbit equinox module
+    - :class:`Observatory` - Orbit + operational scalars composition wrapper
     - Zodiacal light model (Leinert et al. 1998)
     - Keepout zone calculations (Sun/Earth/Moon)
     - ETC-ready zodiacal flux helpers
 """
 
 from orbix.observatory.keepout import body_angle, is_observable
+from orbix.observatory.observatory import Observatory
 from orbix.observatory.orbit import ObservatoryL2Halo
 from orbix.observatory.zodi_fzodi import zodi_fzodi_ayo, zodi_fzodi_leinert
 from orbix.observatory.zodiacal import (
@@ -24,6 +26,7 @@ from orbix.observatory.zodiacal import (
 )
 
 __all__ = [
+    "Observatory",
     "ObservatoryL2Halo",
     "is_observable",
     "body_angle",
