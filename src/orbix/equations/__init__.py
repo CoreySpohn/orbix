@@ -13,6 +13,7 @@ __all__ = [
     "AB_matrices_reduced",
     "thiele_innes_constants",
     "thiele_innes_constants_reduced",
+    "state_vector_to_keplerian",
     # Propagation functions
     "system_r_v",
     "system_r",
@@ -29,6 +30,7 @@ from .orbit import (
     period_n,
     semi_amplitude,
     semi_amplitude_reduced,
+    state_vector_to_keplerian,
     thiele_innes_constants,
     thiele_innes_constants_reduced,
 )

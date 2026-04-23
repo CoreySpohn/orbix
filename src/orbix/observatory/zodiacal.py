@@ -64,8 +64,22 @@ LEINERT_WAVELENGTH_UM = jnp.array(
 
 LEINERT_B_LAMBDA = jnp.array(
     [
-        2.5e-8, 5.3e-7, 2.2e-6, 2.6e-6, 2.0e-6, 1.3e-6, 1.2e-6, 8.1e-7,
-        1.7e-7, 5.2e-8, 1.2e-7, 7.5e-7, 3.2e-7, 1.8e-8, 3.2e-9, 6.9e-10,
+        2.5e-8,
+        5.3e-7,
+        2.2e-6,
+        2.6e-6,
+        2.0e-6,
+        1.3e-6,
+        1.2e-6,
+        8.1e-7,
+        1.7e-7,
+        5.2e-8,
+        1.2e-7,
+        7.5e-7,
+        3.2e-7,
+        1.8e-8,
+        3.2e-9,
+        6.9e-10,
     ]
 )
 
@@ -104,16 +118,22 @@ def zodi_color_correction(
         Flux ratio (target / reference).
     """
     target_log = interpax.interp1d(
-        jnp.log10(wavelength_nm / 1000.0), _LOG_WAVELENGTH_UM, _LOG_B_LAMBDA,
+        jnp.log10(wavelength_nm / 1000.0),
+        _LOG_WAVELENGTH_UM,
+        _LOG_B_LAMBDA,
         method="linear",
     )
     ref_log = interpax.interp1d(
-        jnp.log10(reference_wavelength_nm / 1000.0), _LOG_WAVELENGTH_UM, _LOG_B_LAMBDA,
+        jnp.log10(reference_wavelength_nm / 1000.0),
+        _LOG_WAVELENGTH_UM,
+        _LOG_B_LAMBDA,
         method="linear",
     )
     power_correction = 10.0 ** (target_log - ref_log)
     photon_factor = jnp.where(
-        photon_units, wavelength_nm / reference_wavelength_nm, 1.0,
+        photon_units,
+        wavelength_nm / reference_wavelength_nm,
+        1.0,
     )
     return power_correction * photon_factor
 
@@ -166,10 +186,12 @@ def leinert_zodi_spectral_radiance(
         Spectral radiance in W/(m² sr µm).
     """
     log_radiance = interpax.interp1d(
-        jnp.log10(wavelength_nm / 1000.0), _LOG_WAVELENGTH_UM, _LOG_B_LAMBDA,
+        jnp.log10(wavelength_nm / 1000.0),
+        _LOG_WAVELENGTH_UM,
+        _LOG_B_LAMBDA,
         method="linear",
     )
-    base_radiance = 10.0 ** log_radiance
+    base_radiance = 10.0**log_radiance
     position_factor = leinert_zodi_factor(ecliptic_lat_deg, solar_lon_deg)
     return base_radiance * position_factor
 
@@ -211,7 +233,9 @@ def ayo_default_zodi_mag(wavelength_nm: float) -> float:
         Surface brightness in mag/arcsec².
     """
     color_correction = zodi_color_correction(
-        wavelength_nm, V_BAND_WAVELENGTH_NM, photon_units=False,
+        wavelength_nm,
+        V_BAND_WAVELENGTH_NM,
+        photon_units=False,
     )
     return AYO_DEFAULT_ZODI_MAG_V - 2.5 * jnp.log10(color_correction)
 
@@ -250,11 +274,15 @@ def create_zodi_spectrum_jax(
     reference_um = reference_wavelength_nm / 1000.0
 
     target_log = interpax.interp1d(
-        jnp.log10(wavelengths_um), _LOG_WAVELENGTH_UM, _LOG_B_LAMBDA,
+        jnp.log10(wavelengths_um),
+        _LOG_WAVELENGTH_UM,
+        _LOG_B_LAMBDA,
         method="linear",
     )
     ref_log = interpax.interp1d(
-        jnp.log10(reference_um), _LOG_WAVELENGTH_UM, _LOG_B_LAMBDA,
+        jnp.log10(reference_um),
+        _LOG_WAVELENGTH_UM,
+        _LOG_B_LAMBDA,
         method="linear",
     )
 

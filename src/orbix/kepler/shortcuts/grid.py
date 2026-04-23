@@ -18,9 +18,9 @@ from functools import lru_cache, partial
 
 import jax
 import jax.numpy as jnp
+from hwoutils.constants import two_pi
 from jax import lax
 
-from orbix.constants import two_pi
 from orbix.kepler.core import E_solve_jit
 
 

@@ -205,10 +205,16 @@ def _pack_planet(raw: dict) -> jnp.ndarray:
 
     Row order: a, e, I, O, w, lM.
     """
-    return jnp.array([
-        _pad(raw["a"]), _pad(raw["e"]), _pad(raw["I"]),
-        _pad(raw["O"]), _pad(raw["w"]), _pad(raw["lM"]),
-    ])
+    return jnp.array(
+        [
+            _pad(raw["a"]),
+            _pad(raw["e"]),
+            _pad(raw["I"]),
+            _pad(raw["O"]),
+            _pad(raw["w"]),
+            _pad(raw["lM"]),
+        ]
+    )
 
 
 # Pre-pack all planets into JAX arrays at module load time.
@@ -258,13 +264,13 @@ def planet_position_ecliptic(body: str, mjd: float) -> jnp.ndarray:
     elems = _eval_elements(coeffs, TDB)
     a = elems[0]
     e = elems[1]
-    I = jnp.radians(elems[2])
-    O = jnp.radians(elems[3])
-    w_tilde = jnp.radians(elems[4])   # longitude of perihelion
-    lM = jnp.radians(elems[5])        # mean longitude
+    inc = jnp.radians(elems[2])
+    W = jnp.radians(elems[3])
+    w_tilde = jnp.radians(elems[4])  # longitude of perihelion
+    lM = jnp.radians(elems[5])  # mean longitude
 
     # Argument of perihelion and mean anomaly
-    w = w_tilde - O
+    w = w_tilde - W
     M = (lM - w_tilde) % (2.0 * jnp.pi)
 
     # Solve Kepler's equation using orbix solver
@@ -278,18 +284,18 @@ def planet_position_ecliptic(body: str, mjd: float) -> jnp.ndarray:
     # Distance
     r_mag = a * (1.0 - e * cosE)
 
-    # Rotation to ecliptic frame (Perifocal → Ecliptic)
-    cos_O = jnp.cos(O)
-    sin_O = jnp.sin(O)
-    cos_I = jnp.cos(I)
-    sin_I = jnp.sin(I)
+    # Rotation to ecliptic frame (Perifocal -> Ecliptic)
+    cos_W = jnp.cos(W)
+    sin_W = jnp.sin(W)
+    cos_inc = jnp.cos(inc)
+    sin_inc = jnp.sin(inc)
 
     cos_wnu = jnp.cos(w + nu)
     sin_wnu = jnp.sin(w + nu)
 
-    x = r_mag * (cos_O * cos_wnu - sin_O * sin_wnu * cos_I)
-    y = r_mag * (sin_O * cos_wnu + cos_O * sin_wnu * cos_I)
-    z = r_mag * (sin_wnu * sin_I)
+    x = r_mag * (cos_W * cos_wnu - sin_W * sin_wnu * cos_inc)
+    y = r_mag * (sin_W * cos_wnu + cos_W * sin_wnu * cos_inc)
+    z = r_mag * (sin_wnu * sin_inc)
 
     return jnp.array([x, y, z])
 
@@ -364,7 +370,8 @@ def sun_target_angle(
     """Angular separation between the Sun and a target as seen from the observatory.
 
     Args:
-        obs_position_eclip: Observatory position in heliocentric ecliptic (AU), shape ``(3,)``.
+        obs_position_eclip: Observatory position in heliocentric ecliptic (AU),
+            shape ``(3,)``.
         ra_rad: Target right ascension in radians.
         dec_rad: Target declination in radians.
         mjd: MJD for coordinate conversion.
@@ -379,11 +386,13 @@ def sun_target_angle(
     # Target direction (at infinity, so just the unit vector in ecliptic frame)
     # Convert RA/Dec to ecliptic Cartesian
     lam, beta = radec_to_ecliptic(ra_rad, dec_rad, mjd)
-    target_dir = jnp.array([
-        jnp.cos(beta) * jnp.cos(lam),
-        jnp.cos(beta) * jnp.sin(lam),
-        jnp.sin(beta),
-    ])
+    target_dir = jnp.array(
+        [
+            jnp.cos(beta) * jnp.cos(lam),
+            jnp.cos(beta) * jnp.sin(lam),
+            jnp.sin(beta),
+        ]
+    )
 
     # Angular separation
     cos_angle = jnp.dot(sun_dir, target_dir)
@@ -409,11 +418,13 @@ def solar_elongation_ecliptic(
     sun_dir = -obs_position_eclip
     sun_dir = sun_dir / jnp.linalg.norm(sun_dir)
 
-    target_dir = jnp.array([
-        jnp.cos(ecliptic_lat_rad) * jnp.cos(ecliptic_lon_rad),
-        jnp.cos(ecliptic_lat_rad) * jnp.sin(ecliptic_lon_rad),
-        jnp.sin(ecliptic_lat_rad),
-    ])
+    target_dir = jnp.array(
+        [
+            jnp.cos(ecliptic_lat_rad) * jnp.cos(ecliptic_lon_rad),
+            jnp.cos(ecliptic_lat_rad) * jnp.sin(ecliptic_lon_rad),
+            jnp.sin(ecliptic_lat_rad),
+        ]
+    )
 
     cos_angle = jnp.dot(sun_dir, target_dir)
     cos_angle = jnp.clip(cos_angle, -1.0, 1.0)

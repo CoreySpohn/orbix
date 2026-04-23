@@ -36,8 +36,7 @@ Li, G. Mirek Brandt, Yunlin Zeng, Daniel Michalik, and Virginia Raposo-Pulido.
 import jax
 import jax.lax as lax
 import jax.numpy as jnp
-
-from orbix.constants import two_pi
+from hwoutils.constants import two_pi
 
 # Define coefficients used in the shortsin function
 if3 = 1.0 / 6.0

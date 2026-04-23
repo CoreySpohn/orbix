@@ -13,16 +13,11 @@ from .star import Star
 class System(eqx.Module):
     """System of a star and a set of planets.
 
-    Args:
-        star:
-            Star object
-        planets:
-            Tuple of Planet objects
-        E_solver:
-            Function to solve Kepler's equation (M, e) -> E.
-            Defaults to `orbix.kepler.core.E_solve`.
-        name:
-            Name of the system
+    Attributes:
+        star: Star object.
+        planets: Tuple of Planets objects.
+        trig_solver: Scalar solver for Kepler's equation,
+            signature ``(M, e) -> (sinE, cosE)``. Static field.
     """
 
     star: Star
@@ -39,33 +34,33 @@ class System(eqx.Module):
         """Initialize a system with a star and optional planets.
 
         Args:
-            star: Star object
-            planets: List of Planet objects (optional)
-            E_solver: Function to solve Kepler's equation (M, e) -> E.
-                      Defaults to `orbix.eccanom.solve_E`.
-            name: Name of the system (optional)
+            star: Star object.
+            planets: Tuple of Planet objects (optional).
+            solver: Function to solve Kepler's equation (M, e) -> E.
+                Defaults to ``get_grid_solver()``.
         """
         self.star = star
         self.planets = tuple(planets or [])
         self.trig_solver = get_grid_solver() if solver is None else solver
 
     def add_planet(self, **kwargs) -> "System":
-        """Add a planet to the system and return a new system.
+        """Add a planet to the system and return a new System.
 
         Args:
-            **kwargs: Keyword arguments for Planet constructor.
-                     Should not include 'star_mass' as it will be taken from the star.
+            **kwargs: Keyword arguments for Planets constructor.
+                Should not include ``Ms_kg`` or ``dist_pc`` -- those are
+                taken from ``self.star``.
 
         Returns:
-            A new System object with the added planet
+            A new System object with the added planet.
         """
-        # Create a new planet with the star's mass
-        new_planet = Planets(Ms=self.star.Ms, dist=self.star.dist, **kwargs)
-
-        # Create a new system with the new planet added, preserving the E_solver
+        new_planet = Planets(
+            Ms_kg=self.star.Ms_kg,
+            dist_pc=self.star.dist_pc,
+            **kwargs,
+        )
         return System(
             star=self.star,
             planets=self.planets + (new_planet,),
-            E_solver=self.E_solver,
-            name=self.name,
+            solver=self.trig_solver,
         )

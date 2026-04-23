@@ -1,4 +1,10 @@
-"""Base planet model."""
+"""Base planet model.
+
+Composes :class:`orbix.system.orbit.KeplerianOrbit` for geometric
+propagation; RV-specific derived quantities (semi-amplitude, minimum
+mass, ``secosw`` / ``sesinw``) live on ``Planets`` for the orbit-only
+fitting pipeline.
+"""
 
 from __future__ import annotations
 
@@ -6,360 +12,213 @@ from functools import partial
 
 import equinox as eqx
 import jax.numpy as jnp
-from jax import jit, vmap
+from hwoutils.constants import (
+    AU2m,
+    G,
+    Mearth2kg,
+    Rearth2AU,
+    d2s,
+    pc2AU,
+    rad2arcsec,
+    two_pi,
+)
+from jax import jit
 from jaxtyping import Array
 
 import orbix.equations.orbit as oe
-from orbix.constants import G, Mearth2kg, Rearth2AU, pc2AU, rad2arcsec, two_pi
 from orbix.equations.phase import lambert_phase_exact
-from orbix.equations.propagation import single_r, single_r_v
+
+from .orbit import AbstractOrbit, KeplerianOrbit
 
 
 @jit
 class Planets(eqx.Module):
-    """A JAX-friendly, fully-jit-table planet model.
+    """JAX-friendly planet model that composes an orbit.
 
-    This object treats all orbital parameters as arrays, which lets us use one
-    model to represent a single planet as, well, one planet OR a cloud of n
-    orbits that are consistent with observed data. The later case is useful for
-    propagating an orbital fit into the future which can be used to calculate
-    the probability of detection.
+    Geometry lives on ``self.orbit`` (an ``AbstractOrbit``, concretely
+    ``KeplerianOrbit`` today). RV and photometric derived quantities
+    stay on ``Planets`` for the orbit-only fitting pipeline.
 
-    Inputs:
-        star_mass: mass of the star in kg
-        dist: distance to the star in pc
-        a: semi-major axis in AU
-        e: eccentricity
-        W: longitude of the ascending node (degrees)
-        i: inclination (degrees)
-        w: argument of periapsis (degrees)
-        M0: mean anomaly at t0 (degrees)
-        t0: epoch of M0 (days since J2000)
-        Mp: planet mass in Earth masses
-        Rp: planet radius in Earth radii
-        p: geometric albedo
+    Constructor arguments (unit-suffix naming, phase 0c of the
+    skyscapes migration):
+        Ms_kg: stellar mass in kg
+        dist_pc: distance to star in pc
+        a_AU, e, W_rad, i_rad, w_rad, M0_rad, t0_d: orbital elements
+        Mp_Mearth: planet mass in Earth masses (stored as Mp_kg)
+        Rp_Rearth: planet radius in Earth radii (stored as Rp_AU)
+        Ag: geometric albedo (dimensionless)
     """
 
-    # Input parameters
-    Ms: Array
-    dist: Array
+    # Composed geometry
+    orbit: AbstractOrbit
 
-    a: Array
+    # Retained public fields (unit-suffixed)
+    Ms_kg: Array
+    dist_pc: Array
+    a_AU: Array
     e: Array
-    W: Array
-    i: Array
-    w: Array
-    M0: Array
-    t0: Array
-    Mp: Array
-    Rp: Array
-    p: Array
+    W_rad: Array
+    i_rad: Array
+    w_rad: Array
+    M0_rad: Array
+    t0_d: Array
+    Mp_kg: Array
+    Rp_AU: Array
+    Ag: Array
 
-    # Derived parameters
-    # Cosines and sines of the angles
-    cosW: Array
-    sinW: Array
-    cosi: Array
-    sini: Array
-    cosw: Array
-    sinw: Array
+    # Derived
+    mu: Array
+    n_radpd: Array
+    T_d: Array
+    tp_d: Array
+    w_p_rad: Array
+    w_s_rad: Array
+    secosw: Array
+    sesinw: Array
+    K_mps: Array
+    Mp_min_kg: Array
+    a_arcsec: Array
+    _rad2arcsec_dist: Array
 
-    # Common orbital quantities
-    mu: Array  # Standard gravitational parameter
-    n: Array  # Mean motion
-    T: Array  # Orbital period
+    def __init__(
+        self,
+        Ms_kg,
+        dist_pc,
+        a_AU,
+        e,
+        W_rad,
+        i_rad,
+        w_rad,
+        M0_rad,
+        t0_d,
+        Mp_Mearth,
+        Rp_Rearth,
+        Ag,
+    ):
+        """Build a Planets instance with a composed KeplerianOrbit.
 
-    # A and B matrices for orbit propagation
-    A_AU: Array  # A matrix in AU
-    B_AU: Array  # B matrix in AU
-
-    # RV related quantities
-    w_p: Array  # Planet's argument of periapsis (same as w)
-    w_s: Array  # Star's argument of periapsis
-    secosw: Array  # sqrt(e) * cos(w_p)
-    sesinw: Array  # sqrt(e) * sin(w_p)
-    tp: Array  # Time of periapsis passage
-    K: Array  # Radial velocity amplitude
-    Mp_min: Array  # Minimum mass of the planet
-
-    # A and B matrices for on-sky angular separation
-    A_as: Array  # A matrix in arcsec
-    B_as: Array  # B matrix in arcsec
-    a_as: Array  # semi-major axis in arcsec
-    # pRp2: Array  # geometric albedo * planet radius squared
-    _rad2arcsec_dist: Array  # rad2arcsec / dist
-
-    def __init__(self, Ms, dist, a, e, W, i, w, M0, t0, Mp, Rp, p):
-        """Initialize a planet with orbital elements as JAX arrays.
-
-        Args:
-            Ms: Mass of the star in kg
-            dist: Distance to the star in pc
-            a: Semi-major axis in AU
-            e: Eccentricity
-            W: Longitude of the ascending node in radians
-            i: Inclination in radians
-            w: Argument of periapsis in radians
-            M0: Mean anomaly at t0 in radians
-            t0: Epoch of M0 in days since J2000
-            Mp: Planet mass in Earth masses
-            Rp: Planet radius in Earth radii
-            p: Geometric albedo
-
+        See the class docstring for parameter units.
         """
-        self.Ms, self.dist = Ms, dist
-        ##### Orbital elements
-        self.a, self.e, self.t0 = a, e, t0
-        # Angles should be in radians already
-        self.W, self.i, self.w, self.M0 = W, i, w, M0
+        self.Ms_kg = Ms_kg
+        self.dist_pc = dist_pc
+        self.a_AU = a_AU
+        self.e = e
+        self.W_rad = W_rad
+        self.i_rad = i_rad
+        self.w_rad = w_rad
+        self.M0_rad = M0_rad
+        self.t0_d = t0_d
+        self.Mp_kg = Mp_Mearth * Mearth2kg
+        self.Rp_AU = Rp_Rearth * Rearth2AU
+        self.Ag = Ag
 
-        self.Mp, self.Rp, self.p = Mp * Mearth2kg, Rp * Rearth2AU, p
-
-        # Standard gravitational parameter
-        self.mu = G * Ms
-
-        # Mean angular motion
-        self.n = oe.mean_motion(self.a, self.mu)
-
-        # Orbital period
-        self.T = oe.period_n(self.n)
-
-        # Angle cosines and sines
-        self.sinW, self.cosW = jnp.sin(self.W), jnp.cos(self.W)
-        self.sini, self.cosi = jnp.sin(self.i), jnp.cos(self.i)
-        self.sinw, self.cosw = jnp.sin(self.w), jnp.cos(self.w)
-
-        sqrt_one_minus_e2 = jnp.sqrt(1 - self.e**2)
-
-        ##### Propagation information
-        # A and B matrices for orbit position/velocity vectors
-        # These have shape (3, n) where n is the number of orbits
-        self.A_AU, self.B_AU = oe.AB_matrices_reduced(
-            self.a,
-            sqrt_one_minus_e2,
-            self.sini,
-            self.cosi,
-            self.sinW,
-            self.cosW,
-            self.sinw,
-            self.cosw,
+        # Geometry via KeplerianOrbit
+        self.orbit = KeplerianOrbit(
+            a_AU=a_AU,
+            e=e,
+            W_rad=W_rad,
+            i_rad=i_rad,
+            w_rad=w_rad,
+            M0_rad=M0_rad,
+            t0_d=t0_d,
         )
 
-        ##### RV quantities
-        # Calculate the time of periapsis passage
-        T_e = self.T * self.M0 / two_pi
-        self.tp = self.t0 - T_e
-        self.w_p = self.w
-        self.w_s = (self.w + jnp.pi) % two_pi
-        se = jnp.sqrt(self.e)
-        self.secosw = se * self.cosw
-        self.sesinw = se * self.sinw
-        self.Mp_min = self.Mp * self.sini
-        self.K = oe.semi_amplitude_reduced(self.T, Ms, self.Mp_min, sqrt_one_minus_e2)
+        # Derived quantities that need stellar context
+        self.mu = G * Ms_kg
+        self.n_radpd = oe.mean_motion(a_AU, self.mu)
+        self.T_d = oe.period_n(self.n_radpd)
+        T_e = self.T_d * self.M0_rad / two_pi
+        self.tp_d = self.t0_d - T_e
+        self.w_p_rad = self.w_rad
+        self.w_s_rad = (self.w_rad + jnp.pi) % two_pi
 
-        ##### Direct imaging quantities
-        # since dist >> a, and a_ang = arctan(a/dist), the small angle approximation
-        # says a_ang = a / dist, so to get the approximate angular/on-sky angular
-        # separation, we can just divide the A/B matrices by dist
-        _dist = dist * pc2AU
-        # projected semi-major axis in radians, used to get projected DEC and RA
-        self._rad2arcsec_dist = rad2arcsec / _dist
-        self.a_as = self.a * self._rad2arcsec_dist
-        # A and B matrices for on-sky angular separation
-        self.A_as = self.A_AU * self._rad2arcsec_dist
-        self.B_as = self.B_AU * self._rad2arcsec_dist
+        sqrt_1me2 = jnp.sqrt(1 - e**2)
+        se = jnp.sqrt(e)
+        self.secosw = se * jnp.cos(w_rad)
+        self.sesinw = se * jnp.sin(w_rad)
+        self.Mp_min_kg = self.Mp_kg * jnp.sin(i_rad)
+        # semi_amplitude_reduced returns K in AU/d (G is in AU^3/(kg·d^2)).
+        # Convert to m/s for the canonical RV-literature unit.
+        self.K_mps = (
+            oe.semi_amplitude_reduced(
+                self.T_d,
+                Ms_kg,
+                self.Mp_min_kg,
+                sqrt_1me2,
+            )
+            * AU2m
+            / d2s
+        )
 
-    def _prop(self, trig_solver, t, A, B):
-        """Propagate the orbits to times t returning positions in AU.
+        # On-sky projection scale
+        _dist_AU = dist_pc * pc2AU
+        self._rad2arcsec_dist = rad2arcsec / _dist_AU
+        self.a_arcsec = self.a_AU * self._rad2arcsec_dist
 
-        Args:
-            trig_solver:
-                Scalar function to solve Kepler's equation (M, e) -> (sinE, cosE).
-                Accepts scalar inputs M (mean anomaly) and e (eccentricity), returns
-                scalar outputs (sinE, cosE).
-            t: Times to propagate the planet to. Shape (ntimes,)
-            A: A matrix
-            B: B matrix
-
-        Returns:
-            r: jnp.ndarray shape (norb, 3, ntimes)
-            sinE: jnp.ndarray shape (norb, ntimes)
-            cosE: jnp.ndarray shape (norb, ntimes)
-        """
-        # M has shape (norb, ntimes)
-        M = vmap(oe.mean_anomaly_tp, (None, 0, 0))(t, self.n, self.tp)
-        # Vectorize trig_solver: first over times, then over orbits
-        # After first vmap: (M: (ntimes,), e: scalar) ->
-        # (sinE: (ntimes,), cosE: (ntimes,))
-        trig_solver_times = vmap(trig_solver, in_axes=(0, None))
-        # After second vmap: (M: (norb, ntimes), e: (norb,)) ->
-        # (sinE: (norb, ntimes), cosE: (norb, ntimes))
-        trig_solver_orbits = vmap(trig_solver_times, in_axes=(0, 0))
-        sinE, cosE = trig_solver_orbits(M, self.e)
-        r = vmap(single_r, (1, 1, 0, 0, 0))(A, B, self.e, sinE, cosE)
-        return r, sinE, cosE
-
-    def _prop_v(self, trig_solver, t, A, B):
-        """Propagate the orbits to times t returning positions and velocities in AU.
-
-        Args:
-            trig_solver:
-                Scalar function to solve Kepler's equation (M, e) -> (sinE, cosE).
-            t: Times to propagate the planet to. Shape (ntimes,)
-            A: A matrix
-            B: B matrix
-
-        Returns:
-            r: jnp.ndarray shape (norb, 3, ntimes)
-            v: jnp.ndarray shape (norb, 3, ntimes)
-        """
-        M = vmap(oe.mean_anomaly_tp, (None, 0, 0))(t, self.n, self.tp)
-        # Vectorize trig_solver: first over times, then over orbits
-        trig_solver_times = vmap(trig_solver, in_axes=(0, None))
-        trig_solver_orbits = vmap(trig_solver_times, in_axes=(0, 0))
-        sinE, cosE = trig_solver_orbits(M, self.e)
-        r, v = vmap(single_r_v, (1, 1, 0, 0, 0, 0))(A, B, self.e, sinE, cosE, self.n)
-        return r, v
+    # --- Propagation (delegates to self.orbit) ---
 
     def prop_AU(self, trig_solver, t):
-        """Public jitted wrapper around _prop that returns positions in AU.
-
-        Args:
-            trig_solver:
-                Scalar function to solve Kepler's equation (M, e) -> (sinE, cosE).
-            t: Times to propagate the planet to. Shape (ntimes,)
-
-        Returns:
-            r: jnp.ndarray shape (norb, 3, ntimes)
-        """
-        return self._prop(trig_solver, t, self.A_AU, self.B_AU)[0]
+        """Position vectors in AU, shape ``(K, 3, T)``."""
+        r_AU, _, _ = self.orbit.propagate(trig_solver, t, Ms_kg=self.Ms_kg)
+        return r_AU
 
     def prop_as(self, trig_solver, t):
-        """Propagate the orbits to times t returning positions in arcsec.
-
-        Args:
-            trig_solver:
-                Scalar function to solve Kepler's equation (M, e) -> (sinE, cosE).
-            t: Times to propagate the planet to. Shape (ntimes,)
-
-        Returns:
-            r: jnp.ndarray shape (norb, 3, ntimes)
-        """
-        return self._prop(trig_solver, t, self.A_as, self.B_as)[0]
+        """Position vectors in arcsec, shape ``(K, 3, T)``."""
+        r_AU = self.prop_AU(trig_solver, t)
+        return r_AU * self._rad2arcsec_dist[:, None, None]
 
     def prop_ra_dec(self, trig_solver, t):
-        """Propagate the orbits to times t returning positions in RA and DEC.
-
-        Args:
-            trig_solver:
-                Scalar function to solve Kepler's equation (M, e) -> (sinE, cosE).
-            t: Times to propagate the planet to. Shape (ntimes,)
-
-        Returns:
-            ra: jnp.ndarray shape (norb, ntimes) in arcsec
-            dec: jnp.ndarray shape (norb, ntimes) in arcsec
-        """
-        r = self.prop_as(trig_solver, t)
-        return r[:, 0], r[:, 1]
+        """(RA_arcsec, Dec_arcsec) each ``(K, T)``."""
+        r_as = self.prop_as(trig_solver, t)
+        return r_as[:, 0], r_as[:, 1]
 
     def s_dMag(self, trig_solver, t):
-        """Propagate to times t and return the apparent separation and dMag.
+        """Return (projected separation AU, dMag) each ``(K, T)``."""
+        r_AU, phase_angle_rad, dist_AU = self.orbit.propagate(
+            trig_solver,
+            t,
+            Ms_kg=self.Ms_kg,
+        )
+        s = jnp.sqrt(r_AU[:, 0] ** 2 + r_AU[:, 1] ** 2)
 
-        Args:
-            trig_solver:
-                Scalar function to solve Kepler's equation (M, e) -> (sinE, cosE).
-            t: Times to propagate the planet to. Shape (ntimes,)
-
-        Returns:
-            s: jnp.ndarray shape (norb, ntimes) in AU
-            dMag: jnp.ndarray shape (norb, ntimes)
-        """
-        r_AU, _, cosE = self._prop(trig_solver, t, self.A_AU, self.B_AU)
-
-        # Get planet's radial distance in AU (d = a * (1 - e*cosE))
-        d_AU = self.a[:, None] * (1 - self.e[:, None] * cosE)
-
-        # Get cos(beta) using the z-component (line-of-sight) from AU position
-        # Use r_AU[:, 2] / d_AU convention consistent with EXOSIMS
-        cosbeta = r_AU[:, 2] / d_AU
-
-        # Clip cosbeta to handle floating point issue near +/- 1
-        # that can cause sqrt(1 - cosbeta**2) to be nan
-        cosbeta = jnp.clip(cosbeta, -1.0, 1.0)
-        sinbeta = jnp.sqrt(1 - cosbeta**2)
-        # Calculate the apparent separation alpha in AU
-        s = d_AU * sinbeta
-
-        # Calculate Lambert phase function using cosbeta and sinbeta
+        cosbeta = jnp.cos(phase_angle_rad)
+        sinbeta = jnp.sin(phase_angle_rad)
         phase = lambert_phase_exact(cosbeta, sinbeta)
 
-        # Calculate dMag using AU units
-        # dMag = -2.5 * log10( p * (Rp_AU / d_AU)**2 * Phi )
-        # This should be non-negative. Add epsilon for log10 stability.
-        log_arg = self.p[:, None] * (self.Rp[:, None] / d_AU) ** 2 * phase
-        epsilon = jnp.finfo(log_arg.dtype).tiny
-        dMag = -2.5 * jnp.log10(log_arg + epsilon)
+        log_arg = self.Ag[:, None] * (self.Rp_AU[:, None] / dist_AU) ** 2 * phase
+        eps = jnp.finfo(log_arg.dtype).tiny
+        dMag = -2.5 * jnp.log10(log_arg + eps)
         return s, dMag
 
     def alpha_dMag(self, trig_solver, t):
-        """Propagate to times t and return the apparent angular separation and dMag.
-
-        Args:
-            trig_solver:
-                Scalar function to solve Kepler's equation (M, e) -> (sinE, cosE).
-            t: Times to propagate the planet to. Shape (ntimes,)
-
-        Returns:
-            alpha: jnp.ndarray shape (norb, ntimes) in arcsec
-            dMag: jnp.ndarray shape (norb, ntimes)
-        """
+        """Return (projected separation arcsec, dMag) each ``(K, T)``."""
         s, dMag = self.s_dMag(trig_solver, t)
-
-        # Convert the apparent separation s to arcsec
         alpha = s * self._rad2arcsec_dist[:, None]
-
         return alpha, dMag
 
-    def prop_vAU(self, trig_solver, t):
-        """Public wrapper around _prop_v that returns positions and velocities in AU.
-
-        Args:
-            trig_solver:
-                Scalar function to solve Kepler's equation (M, e) -> (sinE, cosE).
-            t: Times to propagate the planet to. Shape (ntimes,)
-
-        Returns:
-            r: jnp.ndarray shape (norb, 3, ntimes)
-            v: jnp.ndarray shape (norb, 3, ntimes)
-        """
-        return self._prop_v(trig_solver, t, self.A_AU, self.B_AU)
+    # --- jitted variants (retained API) ---
 
     @partial(jit, static_argnums=(1,))
     def j_prop_AU(self, trig_solver, t):
-        """Jit wrapped version of prop_AU."""
+        """JITted ``prop_AU``."""
         return self.prop_AU(trig_solver, t)
 
     @partial(jit, static_argnums=(1,))
     def j_prop_as(self, trig_solver, t):
-        """Jit wrapped version of prop_as."""
+        """JITted ``prop_as``."""
         return self.prop_as(trig_solver, t)
 
     @partial(jit, static_argnums=(1,))
     def j_prop_ra_dec(self, trig_solver, t):
-        """Jit wrapped version of prop_ra_dec."""
+        """JITted ``prop_ra_dec``."""
         return self.prop_ra_dec(trig_solver, t)
 
     @partial(jit, static_argnums=(1,))
     def j_s_dMag(self, trig_solver, t):
-        """Jit wrapped version of s_dMag."""
+        """JITted ``s_dMag``."""
         return self.s_dMag(trig_solver, t)
 
     @partial(jit, static_argnums=(1,))
     def j_alpha_dMag(self, trig_solver, t):
-        """Jit wrapped version of alpha_dMag."""
+        """JITted ``alpha_dMag``."""
         return self.alpha_dMag(trig_solver, t)
-
-    @partial(jit, static_argnums=(1,))
-    def j_prop_vAU(self, trig_solver, t):
-        """Jit wrapped version of prop_vAU."""
-        return self.prop_vAU(trig_solver, t)

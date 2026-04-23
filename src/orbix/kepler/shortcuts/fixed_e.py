@@ -16,8 +16,8 @@ function by closure.
 
 import jax
 import jax.numpy as jnp
+from hwoutils.constants import two_pi
 
-from orbix.constants import two_pi
 from orbix.kepler.core import E_solve
 
 

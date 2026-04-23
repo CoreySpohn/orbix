@@ -17,7 +17,8 @@ def img_pdet_lin(trig_solver, times, planet, dim_dMag_vals, dim_dMag_seps):
         trig_solver: function to solve Kepler's equation (M, e) -> (sinE, cosE)
         times: time to predict the detection at (mjd)
         planet: Planet object
-        dim_dMag_vals: jnp.ndarray of dimmest detectable dMag values between the IWA and OWA
+        dim_dMag_vals: jnp.ndarray of dimmest detectable dMag values between the
+            IWA and OWA
         dim_dMag_seps: jnp.ndarray of separations between the IWA and OWA
     """
     # Calculate the alpha, dMag values which have shape (norb, ntimes)
@@ -128,10 +129,12 @@ def _prep_zodi_indices(fZ_vals, grid):
 
 
 def _interp_dMag_gather(grid, a_ind, a0, fZ0):
-    """grid.grid shape:  (N_fZ, N_nEZ, N_alpha, N_time)  ← original layout
-    a_ind, a0 shape: (norb, nt)
-    fZ0: (nt,) integer zodi index per epoch
-    Returns: (norb, nt, N_time)
+    """Gather and linearly interpolate dMag along the alpha axis.
+
+    grid.grid shape: (N_fZ, N_nEZ, N_alpha, N_time) -- original layout.
+    a_ind, a0 shape: (norb, nt).
+    fZ0: (nt,) integer zodi index per epoch.
+    Returns: (norb, nt, N_time).
     """
     n_tint = grid.grid.shape[-1]
 
@@ -165,7 +168,8 @@ def _interp_dMag_gather(grid, a_ind, a0, fZ0):
 
 def _interp_dMag_gather_stub(grid, a_ind, a0, fZ0):
     """Fast stub that returns same-shaped output with minimal computation.
-    Returns an array of shape (norb, ntimes, n_tint)
+
+    Returns an array of shape (norb, ntimes, n_tint).
     """
     n_tint = grid.grid.shape[-1]
     n_orb, n_times = a_ind.shape
@@ -178,7 +182,8 @@ def _interp_dMag_gather_stub(grid, a_ind, a0, fZ0):
     # Use simple broadcasting instead of complex indexing/slicing
     result = jnp.ones((n_orb, n_times, n_tint)) * base_val
 
-    # Add some variation based on orbit and time indices to keep compiler from optimizing away
+    # Add variation based on orbit and time indices so the compiler does not
+    # optimize the stub away.
     orbit_idx = jnp.arange(n_orb)[:, None, None]
     time_idx = jnp.arange(n_times)[None, :, None]
     result = result + orbit_idx * 0.01 + time_idx * 0.001
@@ -198,9 +203,10 @@ def img_pdet_grid(
     fZ_vals,  # (nt,)
     nEZ_vals,  # unused for now (nEZ=0)
 ):
-    """Returns:
-    -------
-    pdet : (ntimes, n_tint)
+    """Compute detection probability on the dMag0 grid.
+
+    Returns:
+        pdet: Array of shape (ntimes, n_tint).
     """
     # ---- orbital geometry --------------------------------------------------
     alpha, dMag = planet.alpha_dMag(trig_solver, times)
@@ -238,7 +244,7 @@ def img_pdet_grid_final(
     fZ_vals,  # (nt,)
     nEZ_vals,  # unused for now (nEZ=0)
 ):
-    """Optimized implementation preserving dimension order"""
+    """Optimized implementation preserving dimension order."""
     # Calculate orbital geometry
     alpha, dMag = planet.alpha_dMag(trig_solver, times)
 
@@ -254,15 +260,7 @@ def img_pdet_grid_final(
     a_ind = (alpha - grid.alpha0) * grid.inv_dalpha
     a0 = jnp.clip(a_ind.astype(jnp.int32), 0, grid.n_alpha - 1)
 
-    # Instead of using a full gather function, directly compute dims
-    # This avoids dimension transposing and reduces memory operations
-    n_tint = grid.grid.shape[-1]
-    n_orb, n_times = alpha.shape
-
-    # Create a custom gather operation using direct vectorization
-    dalpha = (a_ind - a0).astype(grid.grid.dtype)
-
-    # Use the original _interp_dMag_gather function which is already working
+    # Use the existing _interp_dMag_gather helper.
     dim = _interp_dMag_gather(grid, a_ind, a0, fZ0)
 
     # Apply detection condition and compute mean - combine into one operation

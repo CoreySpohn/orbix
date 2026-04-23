@@ -58,11 +58,11 @@ class ObservatoryL2Halo(eqx.Module):
     _interp_x: interpax.Interpolator1D
     _interp_y: interpax.Interpolator1D
     _interp_z: interpax.Interpolator1D
-    _period_yr: float          # halo period in years
-    _L2_dist_AU: float         # L2 distance from Sun in AU
-    _mu: float                 # mass ratio
-    _equinox_mjd: float        # reference equinox (MJD)
-    _halo_start_yr: float      # offset into halo at mission start (years)
+    _period_yr: float  # halo period in years
+    _L2_dist_AU: float  # L2 distance from Sun in AU
+    _mu: float  # mass ratio
+    _equinox_mjd: float  # reference equinox (MJD)
+    _halo_start_yr: float  # offset into halo at mission start (years)
     _d2yr: float = 1.0 / 365.25  # days to years conversion
 
     @classmethod
@@ -196,9 +196,7 @@ class ObservatoryL2Halo(eqx.Module):
         lam, beta = radec_to_ecliptic(ra_rad, dec_rad, mjd)
         return solar_elongation_ecliptic(obs_pos, lam, beta)
 
-    def solar_longitude(
-        self, mjd: float, ra_rad: float, dec_rad: float
-    ) -> float:
+    def solar_longitude(self, mjd: float, ra_rad: float, dec_rad: float) -> float:
         """Solar longitude at target position (degrees).
 
         This is the angle between the anti-solar direction and the target,
