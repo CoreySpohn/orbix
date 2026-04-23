@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.5.0](https://github.com/CoreySpohn/orbix/compare/v0.4.0...v0.5.0) (2026-04-23)
+
+
+### Features
+
+* **equations:** port state_vector_to_keplerian from orbit-fitting ([13ddcdc](https://github.com/CoreySpohn/orbix/commit/13ddcdc3018bfa6354b8590af61639a70e2c0831))
+* **observatory:** add Observatory composition wrapper ([4f9c72a](https://github.com/CoreySpohn/orbix/commit/4f9c72a37b8d60f3d79f8ad6274a9fac3242152f))
+* **orbit:** KeplerianOrbit with cached AB matrices ([0ab29e0](https://github.com/CoreySpohn/orbix/commit/0ab29e0f99d527067d5b72066c6eee01b9d07d36))
+* **orbit:** KeplerianOrbit.propagate returns (r_AU, phase_angle_rad, dist_AU) ([c72986b](https://github.com/CoreySpohn/orbix/commit/c72986bbba712404b2262c46b9fe53f7eb8030c4))
+* **orbit:** position_arcsec and separation_arcsec fast paths ([69d27a4](https://github.com/CoreySpohn/orbix/commit/69d27a49e4e63a020962e7846d78b5b3b93b3c09))
+* **orbit:** scaffold AbstractOrbit module ([28bb767](https://github.com/CoreySpohn/orbix/commit/28bb767591dfd4ecb71d6b536b0bbf396ef4824f))
+
+
+### Bug Fixes
+
+* **orbit:** import constants from hwoutils per migration plan ([d53582c](https://github.com/CoreySpohn/orbix/commit/d53582cbe5aeb3e4346f0c5efb620947c9d6e4c5))
+* **planets:** convert K_mps from AU/d to m/s ([6ef2bd0](https://github.com/CoreySpohn/orbix/commit/6ef2bd0417a8696b39ba4584393758faed065368))
+* **planets:** import constants from hwoutils per migration plan ([86e8660](https://github.com/CoreySpohn/orbix/commit/86e8660c723cc3022da1ff21cf82d9129bfe74b7))
+
 ## [0.4.0](https://github.com/CoreySpohn/orbix/compare/v0.3.0...v0.4.0) (2026-02-09)
 
 
