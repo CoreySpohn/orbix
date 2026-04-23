@@ -11,7 +11,6 @@ import jax.numpy as jnp
 
 from orbix.system.solar_system import (
     earth_position_ecliptic,
-    planet_position_ecliptic,
     radec_to_ecliptic,
 )
 
@@ -32,11 +31,13 @@ def _angular_sep(v1: jnp.ndarray, v2: jnp.ndarray) -> float:
 def _target_ecliptic_dir(ra_rad: float, dec_rad: float, mjd: float) -> jnp.ndarray:
     """Unit vector toward a target in heliocentric ecliptic frame."""
     lam, beta = radec_to_ecliptic(ra_rad, dec_rad, mjd)
-    return jnp.array([
-        jnp.cos(beta) * jnp.cos(lam),
-        jnp.cos(beta) * jnp.sin(lam),
-        jnp.sin(beta),
-    ])
+    return jnp.array(
+        [
+            jnp.cos(beta) * jnp.cos(lam),
+            jnp.cos(beta) * jnp.sin(lam),
+            jnp.sin(beta),
+        ]
+    )
 
 
 def body_angle(
@@ -104,7 +105,9 @@ def is_observable(
     earth_pos = earth_position_ecliptic(mjd)
     earth_angle_rad = body_angle(obs_pos_eclip, earth_pos, ra_rad, dec_rad, mjd)
     earth_angle_deg = jnp.degrees(earth_angle_rad)
-    earth_ok = (earth_angle_deg >= ko_earth_min_deg) & (earth_angle_deg <= ko_earth_max_deg)
+    earth_ok = (earth_angle_deg >= ko_earth_min_deg) & (
+        earth_angle_deg <= ko_earth_max_deg
+    )
 
     # Moon (approximate: Earth position + offset)
     # For now, use Earth position as a proxy for the Moon since the Moon

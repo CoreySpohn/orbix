@@ -205,10 +205,16 @@ def _pack_planet(raw: dict) -> jnp.ndarray:
 
     Row order: a, e, I, O, w, lM.
     """
-    return jnp.array([
-        _pad(raw["a"]), _pad(raw["e"]), _pad(raw["I"]),
-        _pad(raw["O"]), _pad(raw["w"]), _pad(raw["lM"]),
-    ])
+    return jnp.array(
+        [
+            _pad(raw["a"]),
+            _pad(raw["e"]),
+            _pad(raw["I"]),
+            _pad(raw["O"]),
+            _pad(raw["w"]),
+            _pad(raw["lM"]),
+        ]
+    )
 
 
 # Pre-pack all planets into JAX arrays at module load time.
@@ -260,8 +266,8 @@ def planet_position_ecliptic(body: str, mjd: float) -> jnp.ndarray:
     e = elems[1]
     I = jnp.radians(elems[2])
     O = jnp.radians(elems[3])
-    w_tilde = jnp.radians(elems[4])   # longitude of perihelion
-    lM = jnp.radians(elems[5])        # mean longitude
+    w_tilde = jnp.radians(elems[4])  # longitude of perihelion
+    lM = jnp.radians(elems[5])  # mean longitude
 
     # Argument of perihelion and mean anomaly
     w = w_tilde - O
@@ -379,11 +385,13 @@ def sun_target_angle(
     # Target direction (at infinity, so just the unit vector in ecliptic frame)
     # Convert RA/Dec to ecliptic Cartesian
     lam, beta = radec_to_ecliptic(ra_rad, dec_rad, mjd)
-    target_dir = jnp.array([
-        jnp.cos(beta) * jnp.cos(lam),
-        jnp.cos(beta) * jnp.sin(lam),
-        jnp.sin(beta),
-    ])
+    target_dir = jnp.array(
+        [
+            jnp.cos(beta) * jnp.cos(lam),
+            jnp.cos(beta) * jnp.sin(lam),
+            jnp.sin(beta),
+        ]
+    )
 
     # Angular separation
     cos_angle = jnp.dot(sun_dir, target_dir)
@@ -409,11 +417,13 @@ def solar_elongation_ecliptic(
     sun_dir = -obs_position_eclip
     sun_dir = sun_dir / jnp.linalg.norm(sun_dir)
 
-    target_dir = jnp.array([
-        jnp.cos(ecliptic_lat_rad) * jnp.cos(ecliptic_lon_rad),
-        jnp.cos(ecliptic_lat_rad) * jnp.sin(ecliptic_lon_rad),
-        jnp.sin(ecliptic_lat_rad),
-    ])
+    target_dir = jnp.array(
+        [
+            jnp.cos(ecliptic_lat_rad) * jnp.cos(ecliptic_lon_rad),
+            jnp.cos(ecliptic_lat_rad) * jnp.sin(ecliptic_lon_rad),
+            jnp.sin(ecliptic_lat_rad),
+        ]
+    )
 
     cos_angle = jnp.dot(sun_dir, target_dir)
     cos_angle = jnp.clip(cos_angle, -1.0, 1.0)

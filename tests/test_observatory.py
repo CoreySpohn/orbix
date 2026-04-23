@@ -1,34 +1,33 @@
 """Tests for orbix.observatory module."""
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
-import equinox as eqx
 import pytest
 
 from orbix.observatory import (
     ObservatoryL2Halo,
     ayo_default_zodi_mag,
+    flux_to_mag_jy,
+    is_observable,
     leinert_zodi_factor,
     leinert_zodi_mag,
-    leinert_zodi_spectral_radiance,
     mag_to_flux_jy,
-    flux_to_mag_jy,
     zodi_color_correction,
-    is_observable,
 )
 from orbix.system.solar_system import (
     earth_position_ecliptic,
-    planet_position_ecliptic,
-    obliquity_deg,
-    equat2eclip,
     eclip2equat,
+    equat2eclip,
+    obliquity_deg,
+    planet_position_ecliptic,
     radec_to_ecliptic,
 )
-
 
 # ============================================================================
 # Solar system ephemerides
 # ============================================================================
+
 
 class TestSolarSystemEphemerides:
     """Test Vallado ephemerides against expected values."""
@@ -89,6 +88,7 @@ class TestSolarSystemEphemerides:
 # Zodiacal light
 # ============================================================================
 
+
 class TestZodiacalLight:
     """Test zodiacal light functions."""
 
@@ -115,7 +115,7 @@ class TestZodiacalLight:
         assert float(mag_low) < float(mag_high)
 
     def test_mag_flux_roundtrip(self):
-        """mag → flux → mag should roundtrip."""
+        """Mag → flux → mag should roundtrip."""
         mag = 22.0
         flux = mag_to_flux_jy(mag)
         mag_back = flux_to_mag_jy(flux)
@@ -142,6 +142,7 @@ class TestZodiacalLight:
 # ============================================================================
 # Observatory L2 halo orbit
 # ============================================================================
+
 
 class TestObservatoryL2Halo:
     """Test L2 halo orbit module."""
@@ -177,14 +178,14 @@ class TestObservatoryL2Halo:
         assert jnp.isfinite(pos).all()
 
     def test_vmap_over_time(self, obs):
-        """vmap over multiple times should work."""
+        """Vmap over multiple times should work."""
         mjds = jnp.linspace(51544.5, 51544.5 + 365, 20)
         positions = jax.vmap(obs.position_ecliptic)(mjds)
         assert positions.shape == (20, 3)
         assert jnp.isfinite(positions).all()
 
     def test_vmap_over_targets(self, obs):
-        """vmap over multiple targets for sun angle."""
+        """Vmap over multiple targets for sun angle."""
         ras = jnp.linspace(0, 2 * jnp.pi, 10)
         decs = jnp.ones(10) * 0.5
 
@@ -215,6 +216,7 @@ class TestObservatoryL2Halo:
 # ============================================================================
 # Keepout
 # ============================================================================
+
 
 class TestKeepout:
     """Test keepout zone checks."""

@@ -19,8 +19,6 @@ Two approaches are provided:
 
 from __future__ import annotations
 
-import jax.numpy as jnp
-
 from orbix.observatory.zodiacal import (
     ayo_default_zodi_mag,
     leinert_zodi_mag,
