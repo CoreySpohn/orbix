@@ -1,13 +1,8 @@
 """Handles the availability check for the optional EXOSIMS dependency."""
 
-_EXOSIMS_AVAILABLE = False
+from importlib.util import find_spec
 
-try:
-    import EXOSIMS
-
-    _EXOSIMS_AVAILABLE = True
-except ImportError:
-    pass
+_EXOSIMS_AVAILABLE = find_spec("EXOSIMS") is not None
 
 
 def is_available() -> bool:

@@ -149,6 +149,7 @@ class TestObservatoryL2Halo:
 
     @pytest.fixture
     def obs(self):
+        """Default L2 halo observatory fixture."""
         return ObservatoryL2Halo.from_default()
 
     def test_position_distance(self, obs):
