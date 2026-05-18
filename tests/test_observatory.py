@@ -220,6 +220,159 @@ class TestObservatoryL2Halo:
 
 
 # ============================================================================
+# Year-long Sun-target geometry invariants
+# ============================================================================
+
+
+class TestObservatoryGeometryInvariants:
+    """Invariants of the L2-halo + RA/Dec geometry over a full year.
+
+    These tests guard against argument-order regressions (a stale bug
+    that previously caused ``ecliptic_latitude(...)`` to receive ``mjd``
+    where it expected ``ra_rad``, and silently returned chaotic
+    latitudes) and against confusing the 3D solar elongation with
+    Leinert's helio-ecliptic longitude ``Delta_lambda_sun``.
+    """
+
+    @pytest.fixture
+    def obs(self):
+        """Default L2 halo observatory at the bundled equinox."""
+        return ObservatoryL2Halo.from_default()
+
+    @pytest.fixture
+    def mjds(self):
+        """Year-long MJD sweep starting at the bundled equinox."""
+        return 60575.25 + jnp.linspace(0.0, 365.25, 73)
+
+    def test_ecliptic_latitude_constant_for_fixed_target(self, obs, mjds):
+        """For a sky-fixed target, ecl_lat must barely change over a year.
+
+        Obliquity drift is ~0.5 arcsec/yr -- a fraction of a milli-degree.
+        Any larger variation means the function is sampling something it
+        shouldn't (e.g. mjd accidentally consumed as ra_rad).
+        """
+        # Mid-latitude target: ecl_lat ~ +53 deg.
+        ra_rad = jnp.deg2rad(0.0)
+        dec_rad = jnp.deg2rad(60.0)
+        lats = jax.vmap(lambda m: obs.ecliptic_latitude_deg(m, ra_rad, dec_rad))(mjds)
+        spread = float(lats.max() - lats.min())
+        assert spread < 0.01, (
+            "ecl_lat for a fixed RA/Dec target moved {:.3f} deg over a "
+            "year; should be effectively constant.".format(spread)
+        )
+
+    def test_ecliptic_plane_target_sweeps_full_longitude(self, obs, mjds):
+        """Ecliptic-plane target visits both anti-Sun and conjunction.
+
+        Helio-ecliptic longitude difference should reach near 180 deg
+        (anti-Sun) and near 0 deg (conjunction) within one year. Tolerate
+        a few degrees of sampling slack.
+        """
+        ra_rad = jnp.deg2rad(0.0)
+        dec_rad = jnp.deg2rad(0.0)  # vernal equinox direction -> ecl_lat ~ 0
+        dlams = jax.vmap(
+            lambda m: obs.helio_ecliptic_longitude_deg(m, ra_rad, dec_rad)
+        )(mjds)
+        assert float(dlams.max()) > 175.0, "Did not reach anti-Sun within the year."
+        assert float(dlams.min()) < 5.0, "Did not reach conjunction within the year."
+
+    def test_high_latitude_target_never_at_conjunction(self, obs, mjds):
+        """Ecliptic-pole-ish target stays bounded away from the Sun.
+
+        A target at |ecl_lat| > 60 deg cannot have ``Delta_lambda_sun``
+        bring the look vector to the Sun -- the minimum 3D elongation is
+        bounded below by ``|ecl_lat|``.
+        """
+        # (RA=0, Dec=+80) -> ecl_lat ~ +65 deg, well off the ecliptic.
+        ra_rad = jnp.deg2rad(0.0)
+        dec_rad = jnp.deg2rad(80.0)
+        elongs = jax.vmap(lambda m: obs.solar_elongation_deg(m, ra_rad, dec_rad))(mjds)
+        assert float(elongs.min()) > 50.0, (
+            "High-latitude target should never come closer than its "
+            "ecliptic latitude to the Sun."
+        )
+
+    def test_solar_elongation_vs_helio_longitude_match_on_ecliptic(self, obs):
+        """On the ecliptic plane the two angles must coincide.
+
+        For ``ecl_lat = 0`` the great-circle Sun-target angle and the
+        helio-ecliptic longitude difference are mathematically identical.
+        """
+        # Vernal equinox direction is ecl_lat=0.
+        ra_rad = jnp.deg2rad(0.0)
+        dec_rad = jnp.deg2rad(0.0)
+        mjd = 60575.25 + 91.0  # part-way through the year
+        elong = float(obs.solar_elongation_deg(mjd, ra_rad, dec_rad))
+        dlam = float(obs.helio_ecliptic_longitude_deg(mjd, ra_rad, dec_rad))
+        assert abs(elong - dlam) < 0.5
+
+    def test_solar_elongation_diverges_from_helio_longitude_off_ecliptic(self, obs):
+        """High-latitude targets show the bug we are guarding against.
+
+        For a target at large |ecl_lat|, feeding ``solar_elongation_deg``
+        into a Leinert lookup (instead of ``helio_ecliptic_longitude_deg``)
+        gives a *different* answer. This test pins that difference so a
+        future refactor that unifies them gets flagged.
+        """
+        # (RA=0, Dec=+60) -> ecl_lat ~ +53 deg.
+        ra_rad = jnp.deg2rad(0.0)
+        dec_rad = jnp.deg2rad(60.0)
+        mjd = 60575.25
+        elong = float(obs.solar_elongation_deg(mjd, ra_rad, dec_rad))
+        dlam = float(obs.helio_ecliptic_longitude_deg(mjd, ra_rad, dec_rad))
+        assert abs(elong - dlam) > 10.0
+
+    def test_conjunction_aligns_with_sun_apparent_longitude(self, obs, mjds):
+        """Helio-longitude minimum lines up with heliocentric ecliptic longitude.
+
+        Conjunction (``Delta_lambda_sun -> 0``) happens when the Sun's
+        apparent ecliptic longitude equals the target's. We can compute
+        Sun's apparent longitude from Earth's heliocentric position and
+        verify the argmin of the helio-ecliptic-longitude curve matches.
+        """
+        # Ecliptic-plane target at ecl_lon = 90 deg (RA=90, Dec=+23.44).
+        ra_rad = jnp.deg2rad(90.0)
+        dec_rad = jnp.deg2rad(23.44)
+        dlams = jax.vmap(
+            lambda m: obs.helio_ecliptic_longitude_deg(m, ra_rad, dec_rad)
+        )(mjds)
+        i_min = int(jnp.argmin(dlams))
+        # At the conjunction epoch, Earth's heliocentric longitude must
+        # be ~target_ecl_lon + 180 (Sun apparent = -Earth_helio).
+        r_earth = earth_position_ecliptic(float(mjds[i_min]))
+        earth_lon_deg = float(jnp.degrees(jnp.arctan2(r_earth[1], r_earth[0])))
+        target_lon_deg = 90.0
+        # Sun apparent longitude from observer = earth_helio_lon + 180.
+        sun_apparent_lon_deg = (earth_lon_deg + 180.0) % 360.0
+        # Difference should be small (within sampling cadence: ~5 deg).
+        diff = abs(((sun_apparent_lon_deg - target_lon_deg + 180.0) % 360.0) - 180.0)
+        assert diff < 8.0, (
+            f"At argmin(Delta_lambda_sun) the Sun's apparent longitude "
+            f"({sun_apparent_lon_deg:.2f}) should match the target's "
+            f"ecliptic longitude ({target_lon_deg:.2f}); got off by "
+            f"{diff:.2f} deg."
+        )
+
+    def test_geometry_methods_share_argument_order(self, obs):
+        """All four geometry methods take ``(mjd, ra_rad, dec_rad)``.
+
+        Regression: the historical inconsistency
+        ``ecliptic_latitude(ra, dec, mjd=...)`` vs
+        ``solar_longitude(mjd, ra, dec)`` caused real bugs. This test
+        documents the invariant so it cannot drift again silently.
+        """
+        mjd = 60575.25
+        ra = jnp.deg2rad(45.0)
+        dec = jnp.deg2rad(30.0)
+        # All four methods must accept (mjd, ra, dec) positionally
+        # without raising.
+        obs.sun_angle(mjd, ra, dec)
+        obs.solar_elongation_deg(mjd, ra, dec)
+        obs.helio_ecliptic_longitude_deg(mjd, ra, dec)
+        obs.ecliptic_latitude_deg(mjd, ra, dec)
+
+
+# ============================================================================
 # Keepout
 # ============================================================================
 
