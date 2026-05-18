@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/CoreySpohn/orbix/compare/v0.5.0...v0.5.1) (2026-05-18)
+
+
+### Bug Fixes
+
+* Renaming and updating docstrings to be less confusing on angle conventions ([231de10](https://github.com/CoreySpohn/orbix/commit/231de10e8fbc30700183c95412cc727721228bbc))
+
 ## [0.5.0](https://github.com/CoreySpohn/orbix/compare/v0.4.0...v0.5.0) (2026-04-23)
 
 
