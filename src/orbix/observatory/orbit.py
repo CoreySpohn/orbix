@@ -196,11 +196,14 @@ class ObservatoryL2Halo(eqx.Module):
         lam, beta = radec_to_ecliptic(ra_rad, dec_rad, mjd)
         return solar_elongation_ecliptic(obs_pos, lam, beta)
 
-    def solar_longitude(self, mjd: float, ra_rad: float, dec_rad: float) -> float:
-        """Solar longitude at target position (degrees).
+    def solar_elongation_deg(self, mjd: float, ra_rad: float, dec_rad: float) -> float:
+        """3D solar elongation in degrees.
 
-        This is the angle between the anti-solar direction and the target,
-        projected onto the ecliptic plane. Used for Leinert table lookup.
+        Identical to :meth:`sun_angle` converted to degrees. This is the
+        angular distance between the Sun and target as seen from the
+        observer, NOT the Leinert helio-ecliptic longitude difference
+        ``Delta_lambda_sun``. For the latter use
+        :meth:`helio_ecliptic_longitude_deg`.
 
         Args:
             mjd: Modified Julian Date.
@@ -208,23 +211,59 @@ class ObservatoryL2Halo(eqx.Module):
             dec_rad: Target declination in radians.
 
         Returns:
-            Solar longitude in degrees [0, 180].
+            Solar elongation in degrees, [0, 180].
         """
-        angle_rad = self.sun_angle(mjd, ra_rad, dec_rad)
-        return jnp.degrees(angle_rad)
+        return jnp.degrees(self.sun_angle(mjd, ra_rad, dec_rad))
 
-    def ecliptic_latitude(
-        self, ra_rad: float, dec_rad: float, mjd: float = 51544.5
+    def helio_ecliptic_longitude_deg(
+        self, mjd: float, ra_rad: float, dec_rad: float
     ) -> float:
-        """Ecliptic latitude of target in degrees.
+        """Helio-ecliptic longitude difference ``|lambda_target - lambda_sun|``.
+
+        This is the Leinert+1998 ``Delta_lambda_sun`` coordinate used to
+        index Table 17 (together with ecliptic latitude). It is the
+        absolute difference between the target's ecliptic longitude and
+        the Sun's apparent ecliptic longitude (as seen from the observer,
+        which is parallax-negligible for distant targets), wrapped onto
+        [0, 180] deg.
+
+        For ecliptic-plane targets this equals the 3D solar elongation;
+        for high-latitude targets the two diverge -- only this quantity
+        is correct as the Leinert table lookup.
 
         Args:
+            mjd: Modified Julian Date.
             ra_rad: Target right ascension in radians.
             dec_rad: Target declination in radians.
-            mjd: MJD for obliquity (default J2000).
 
         Returns:
-            Ecliptic latitude in degrees.
+            ``|lambda_target - lambda_sun|`` in degrees, [0, 180].
+        """
+        obs_pos = self.position_ecliptic(mjd)
+        # Sun's apparent ecliptic longitude from the observer: direction
+        # to Sun is -obs_pos, projected onto the ecliptic XY plane.
+        sun_lon_rad = jnp.arctan2(-obs_pos[1], -obs_pos[0])
+        target_lon_rad, _ = radec_to_ecliptic(ra_rad, dec_rad, mjd)
+        delta = target_lon_rad - sun_lon_rad
+        # Wrap to [-pi, pi] via atan2(sin, cos), then take |.| to fold
+        # onto the [0, 180] half-range used by the Leinert tables.
+        delta = jnp.arctan2(jnp.sin(delta), jnp.cos(delta))
+        return jnp.abs(jnp.degrees(delta))
+
+    def ecliptic_latitude_deg(self, mjd: float, ra_rad: float, dec_rad: float) -> float:
+        """Target ecliptic latitude in degrees.
+
+        Argument order matches :meth:`sun_angle`, :meth:`solar_elongation_deg`,
+        and :meth:`helio_ecliptic_longitude_deg` so the four geometry
+        helpers are interchangeable at call sites.
+
+        Args:
+            mjd: Modified Julian Date (used for obliquity at this epoch).
+            ra_rad: Target right ascension in radians.
+            dec_rad: Target declination in radians.
+
+        Returns:
+            Ecliptic latitude in degrees, [-90, 90].
         """
         _, beta = radec_to_ecliptic(ra_rad, dec_rad, mjd)
         return jnp.degrees(beta)

@@ -203,14 +203,19 @@ class TestObservatoryL2Halo:
         g = grad_fn(51544.5)
         assert jnp.isfinite(g)
 
-    def test_solar_longitude_range(self, obs):
-        """Solar longitude should be in [0, 180]."""
-        sol_lon = obs.solar_longitude(51544.5, 1.0, 0.5)
-        assert 0.0 <= float(sol_lon) <= 180.0
+    def test_solar_elongation_deg_range(self, obs):
+        """Solar elongation should be in [0, 180]."""
+        sol_elong = obs.solar_elongation_deg(51544.5, 1.0, 0.5)
+        assert 0.0 <= float(sol_elong) <= 180.0
 
-    def test_ecliptic_latitude_range(self, obs):
+    def test_helio_ecliptic_longitude_deg_range(self, obs):
+        """|lambda_target - lambda_sun| should be in [0, 180]."""
+        dlam = obs.helio_ecliptic_longitude_deg(51544.5, 1.0, 0.5)
+        assert 0.0 <= float(dlam) <= 180.0
+
+    def test_ecliptic_latitude_deg_range(self, obs):
         """Ecliptic latitude should be in [-90, 90]."""
-        ecl_lat = obs.ecliptic_latitude(1.0, 0.5)
+        ecl_lat = obs.ecliptic_latitude_deg(51544.5, 1.0, 0.5)
         assert -90.0 <= float(ecl_lat) <= 90.0
 
 
