@@ -200,3 +200,34 @@ class KeplerianOrbit(AbstractOrbit):
             dist_pc=dist_pc,
         )
         return jnp.sqrt(ra**2 + dec**2)
+
+    def __repr__(self) -> str:
+        """Compact summary of the seven Keplerian elements.
+
+        Angles are converted from radians to degrees for readability.
+        Arrays are summarized inline; if the leading axis K > 3, only
+        the first few entries are shown.
+        """
+        K = int(self.a_AU.shape[0]) if self.a_AU.ndim else 1
+        a = _fmt(self.a_AU)
+        e = _fmt(self.e)
+        i_deg = _fmt(jnp.rad2deg(self.i_rad))
+        w_deg = _fmt(jnp.rad2deg(self.w_rad))
+        W_deg = _fmt(jnp.rad2deg(self.W_rad))
+        M0_deg = _fmt(jnp.rad2deg(self.M0_rad))
+        t0 = _fmt(self.t0_d)
+        return (
+            f"KeplerianOrbit(K={K}, a={a} AU, e={e}, i={i_deg} deg, "
+            f"w={w_deg} deg, W={W_deg} deg, M0={M0_deg} deg, t0={t0} JD)"
+        )
+
+
+def _fmt(x: Array, fmt: str = ".3g", max_items: int = 3) -> str:
+    """Format a scalar/array compactly for KeplerianOrbit's repr."""
+    a = jnp.asarray(x)
+    if a.shape == () or a.shape == (1,):
+        return f"{float(a.reshape(-1)[0]):{fmt}}"
+    if a.size <= max_items:
+        return "[" + ", ".join(f"{float(v):{fmt}}" for v in a) + "]"
+    head = ", ".join(f"{float(v):{fmt}}" for v in a[:max_items])
+    return f"[{head}, ...]"
