@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/CoreySpohn/orbix/compare/v0.5.1...v0.6.0) (2026-05-22)
+
+
+### Features
+
+* Adding repr ([606c147](https://github.com/CoreySpohn/orbix/commit/606c147a20db836b00c39d057a4b3e1e9c6817be))
+
 ## [0.5.1](https://github.com/CoreySpohn/orbix/compare/v0.5.0...v0.5.1) (2026-05-18)
 
 
