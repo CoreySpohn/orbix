@@ -1,5 +1,6 @@
 """Tests for orbix grid-search utilities."""
 
+import jax
 import jax.numpy as jnp
 
 from orbix.fitting.grid_search import ParamBounds
@@ -58,3 +59,13 @@ def test_eccvector_shape_maps_to_physical():
     u2 = jnp.array([[0.5, 1.0, 1.0, 0.5, 0.5, 0.5]])
     e2 = float(shape.to_physical(u2, bounds, Ms=MSUN)["e"][0])
     assert 0.0 <= e2 < 1.0
+
+
+def test_ais_stage1_fills_unit_cube():
+    """AdaptiveImportanceSampler.stage1 produces valid unit-cube points."""
+    from orbix.fitting.grid_search import AdaptiveImportanceSampler
+
+    s = AdaptiveImportanceSampler()
+    u = s.stage1(jax.random.PRNGKey(0), ndim=6, n=4096)
+    assert u.shape == (4096, 6)
+    assert jnp.all((u >= 0.0) & (u < 1.0))

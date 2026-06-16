@@ -10,6 +10,7 @@ import equinox as eqx
 import jax.numpy as jnp
 
 from orbix.fitting.priors import period_to_sma
+from orbix.utils.quasi_random import roberts_sequence
 
 
 class ParamBounds(eqx.Module):
@@ -97,3 +98,55 @@ class EccVectorShape(AbstractShapeParam):
             "sin_w": sin_w,
             "tp": tp_frac * T,
         }
+
+
+class AbstractGridStrategy(eqx.Module):
+    """Produces Stage-1 global samples and a Stage-2 refined proposal."""
+
+    @abstractmethod
+    def stage1(self, key, ndim, n):
+        """Return ``(n, ndim)`` unit-cube samples for the global exploration stage."""
+
+    @abstractmethod
+    def stage2(self, key, survivors, n):
+        """Return ``(samples, log_q)`` from a refined proposal around survivors."""
+
+
+class AdaptiveImportanceSampler(AbstractGridStrategy):
+    """Roberts global fill, Gaussian-mixture refinement around survivors.
+
+    Attributes:
+        n_modes: Number of Gaussian mixture components in Stage 2.
+        jitter: Diagonal regularization added to the empirical covariance.
+    """
+
+    n_modes: int = eqx.field(static=True, default=5)
+    jitter: float = eqx.field(static=True, default=1e-6)
+
+    def stage1(self, key, ndim, n):
+        """Return ``(n, ndim)`` Roberts quasi-random points in the unit cube.
+
+        Args:
+            key: JAX PRNG key for a Cranley-Patterson rotation.
+            ndim: Dimension of the parameter space.
+            n: Number of points.
+
+        Returns:
+            Array of shape ``(n, ndim)`` with values in ``[0, 1)``.
+        """
+        return roberts_sequence(n, ndim, key=key)
+
+    def stage2(self, key, survivors, n):
+        """Gaussian-mixture proposal around the survivor set.
+
+        Args:
+            key: JAX PRNG key.
+            survivors: Best unit-cube points from Stage 1, shape ``(m, d)``.
+            n: Number of new samples to draw.
+
+        Returns:
+            Tuple ``(z, log_q)`` where ``z`` has shape ``(n, d)`` and
+            ``log_q`` has shape ``(n,)``.
+        """
+        # implemented in Task 6
+        raise NotImplementedError
