@@ -2,6 +2,7 @@
 
 import jax.numpy as jnp
 
+from orbix.fitting.grid_search import ParamBounds
 from orbix.utils.quasi_random import roberts_sequence
 
 
@@ -18,3 +19,18 @@ def test_roberts_low_discrepancy_1d_margin():
     xs = jnp.sort(pts[:, 0])
     gaps = jnp.diff(xs)
     assert float(jnp.max(gaps)) < 10.0 * float(jnp.mean(gaps))
+
+
+def test_parambounds_scale_unit_cube():
+    """ParamBounds.scale maps unit-cube corners and midpoint correctly."""
+    b = ParamBounds(
+        names=("logT", "cos_i"),
+        low=jnp.array([0.0, -1.0]),
+        high=jnp.array([4.0, 1.0]),
+    )
+    u = jnp.array([[0.0, 0.0], [1.0, 1.0], [0.5, 0.5]])
+    phys = b.scale(u)
+    assert phys.shape == (3, 2)
+    assert jnp.allclose(phys[0], jnp.array([0.0, -1.0]))
+    assert jnp.allclose(phys[1], jnp.array([4.0, 1.0]))
+    assert jnp.allclose(phys[2], jnp.array([2.0, 0.0]))
