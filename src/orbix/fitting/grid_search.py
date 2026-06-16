@@ -9,6 +9,9 @@ from abc import abstractmethod
 import equinox as eqx
 import jax.numpy as jnp
 
+from orbix.fitting.data import AstromData
+from orbix.fitting.forward import predict_astrometry
+from orbix.fitting.likelihoods import loglike_astrom
 from orbix.fitting.priors import period_to_sma
 from orbix.utils.quasi_random import roberts_sequence
 
@@ -150,3 +153,44 @@ class AdaptiveImportanceSampler(AbstractGridStrategy):
         """
         # implemented in Task 6
         raise NotImplementedError
+
+
+def build_evaluator(data, Ms, dist_pc, shape):
+    """Return ``single_eval(phys) -> scalar log-likelihood`` over present data.
+
+    ``data`` is a tuple of present data containers. v1 handles AstromData;
+    absent observables contribute nothing. The ``if astrom is not None`` check
+    runs at build time (static), not under JAX trace, so it is JAX-safe.
+
+    Args:
+        data: Tuple of data containers (e.g. AstromData).
+        Ms: Stellar mass (kg).
+        dist_pc: Distance to system (parsec).
+        shape: An AbstractShapeParam instance (unused here, reserved for Plan 2).
+
+    Returns:
+        A pure function ``single_eval(phys) -> scalar`` where ``phys`` is a
+        dict of scalar orbit parameters (as returned by ``to_physical`` for
+        a single particle).
+    """
+    astrom = next((d for d in data if isinstance(d, AstromData)), None)
+
+    def single_eval(phys):
+        ll = 0.0
+        if astrom is not None:
+            ra, dec = predict_astrometry(
+                astrom.times,
+                phys["a"],
+                phys["e"],
+                phys["cos_i"],
+                phys["W"],
+                phys["cos_w"],
+                phys["sin_w"],
+                phys["tp"],
+                Ms,
+                dist_pc,
+            )
+            ll = ll + loglike_astrom(ra, dec, astrom)
+        return ll
+
+    return single_eval

@@ -3,7 +3,10 @@
 import jax
 import jax.numpy as jnp
 
+from orbix.fitting.data import AstromData
+from orbix.fitting.forward import predict_astrometry
 from orbix.fitting.grid_search import ParamBounds
+from orbix.fitting.likelihoods import loglike_astrom
 from orbix.utils.quasi_random import roberts_sequence
 
 TWO_PI = 2.0 * jnp.pi
@@ -69,3 +72,53 @@ def test_ais_stage1_fills_unit_cube():
     u = s.stage1(jax.random.PRNGKey(0), ndim=6, n=4096)
     assert u.shape == (4096, 6)
     assert jnp.all((u >= 0.0) & (u < 1.0))
+
+
+def _toy_astrom():
+    """Build a small AstromData fixture from a known orbit."""
+    t = jnp.array([0.0, 120.0, 240.0])
+    a, e, cos_i, W = 1.0, 0.1, 0.7, 0.5
+    cos_w, sin_w, tp = 1.0, 0.0, 30.0
+    ra, dec = predict_astrometry(t, a, e, cos_i, W, cos_w, sin_w, tp, MSUN, 10.0)
+    err = jnp.full(3, 1e-3)
+    return AstromData(
+        times=t,
+        ra=ra,
+        dec=dec,
+        ra_err=err,
+        dec_err=err,
+        corr=jnp.zeros(3),
+        planet_id=jnp.zeros(3, int),
+        is_valid=jnp.ones(3, bool),
+    )
+
+
+def test_evaluator_matches_direct_loglike():
+    """build_evaluator returns a function that matches loglike_astrom directly."""
+    from orbix.fitting.grid_search import EccVectorShape, build_evaluator
+
+    data = _toy_astrom()
+    shape = EccVectorShape()
+    ev = build_evaluator((data,), Ms=MSUN, dist_pc=10.0, shape=shape)
+    phys = {
+        "a": jnp.array(1.0),
+        "e": jnp.array(0.1),
+        "cos_i": jnp.array(0.7),
+        "W": jnp.array(0.5),
+        "cos_w": jnp.array(1.0),
+        "sin_w": jnp.array(0.0),
+        "tp": jnp.array(30.0),
+    }
+    ra, dec = predict_astrometry(
+        data.times,
+        phys["a"],
+        phys["e"],
+        phys["cos_i"],
+        phys["W"],
+        phys["cos_w"],
+        phys["sin_w"],
+        phys["tp"],
+        MSUN,
+        10.0,
+    )
+    assert jnp.allclose(ev(phys), loglike_astrom(ra, dec, data))
