@@ -238,7 +238,12 @@ class ParticlePosterior(eqx.Module):
     param_names: tuple = eqx.field(static=True)
 
     def sample(self, key, n=2000):
-        """Sampling-importance-resampling: draw ``n`` particles by weight.
+        """Inverse-CDF sampling-importance-resampling: draw ``n`` particles by weight.
+
+        Uses a cumulative-weight inverse-CDF lookup, which costs
+        ``O(n_particles + n)`` memory. (A ``jax.random.categorical`` draw would
+        materialize an ``(n, n_particles)`` array and blow up for large particle
+        counts.)
 
         Args:
             key: JAX PRNG key.
@@ -247,7 +252,11 @@ class ParticlePosterior(eqx.Module):
         Returns:
             Dict mapping each name in ``param_names`` to a ``(n,)`` array.
         """
-        idx = jax.random.categorical(key, self.log_weights, shape=(n,))
+        cdf = jnp.cumsum(jax.nn.softmax(self.log_weights))
+        u = jax.random.uniform(key, (n,))
+        idx = jnp.clip(
+            jnp.searchsorted(cdf, u, side="right"), 0, self.particles.shape[0] - 1
+        )
         drawn = self.particles[idx]
         return {name: drawn[:, i] for i, name in enumerate(self.param_names)}
 

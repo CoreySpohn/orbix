@@ -10,6 +10,7 @@ from orbix.fitting.grid_search import (
     AdaptiveImportanceSampler,
     EccVectorShape,
     ParamBounds,
+    ParticlePosterior,
     batched_loglike,
     build_evaluator,
 )
@@ -264,3 +265,23 @@ def test_stage2_rejects_too_few_survivors():
     survivors = jax.random.uniform(jax.random.PRNGKey(0), (3, 6))
     with pytest.raises(ValueError):
         s.stage2(jax.random.PRNGKey(1), survivors, n=10)
+
+
+def test_sample_respects_weights():
+    """Inverse-CDF SIR draws particles in proportion to their weights."""
+    logw = jnp.log(jnp.array([0.1, 0.3, 0.6]))
+    parts = jnp.array([[0.0], [1.0], [2.0]])
+    pp = ParticlePosterior(particles=parts, log_weights=logw, param_names=("x",))
+    x = pp.sample(jax.random.PRNGKey(0), n=40000)["x"]
+    freq = jnp.array([jnp.mean(x == v) for v in (0.0, 1.0, 2.0)])
+    assert jnp.allclose(freq, jnp.array([0.1, 0.3, 0.6]), atol=0.02)
+
+
+def test_sample_scales_to_large_particle_count():
+    """sample() stays O(n_particles + n): a categorical draw here would be ~4 GB."""
+    n_particles = 200000
+    parts = jnp.arange(n_particles, dtype=float)[:, None]
+    logw = jnp.zeros(n_particles)
+    pp = ParticlePosterior(particles=parts, log_weights=logw, param_names=("x",))
+    draws = pp.sample(jax.random.PRNGKey(0), n=5000)
+    assert draws["x"].shape == (5000,)
