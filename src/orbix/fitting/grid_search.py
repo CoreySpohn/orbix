@@ -30,6 +30,8 @@ class ParamBounds(eqx.Module):
             raise ValueError("low and high must share a shape")
         if self.low.shape[-1] != len(self.names):
             raise ValueError("bounds width must match number of names")
+        if not bool(jnp.all(self.low <= self.high)):
+            raise ValueError("each low bound must be <= its high bound")
 
     def scale(self, u):
         """Map unit-cube points ``(n, d)`` to physical box values ``(n, d)``."""
@@ -156,6 +158,11 @@ class AdaptiveImportanceSampler(AbstractGridStrategy):
             Tuple ``(z, log_q)`` where ``z`` has shape ``(n, d)`` clipped to
             ``[0, 1)`` and ``log_q`` has shape ``(n,)`` (mixture log-density).
         """
+        if survivors.shape[0] < self.n_modes:
+            raise ValueError(
+                f"need at least n_modes ({self.n_modes}) survivors, "
+                f"got {survivors.shape[0]}"
+            )
         k_draw, k_pick = jax.random.split(key)
         m = self.n_modes
         d = survivors.shape[1]
@@ -260,6 +267,11 @@ def batched_loglike(single_eval, phys, n_particles, chunk_size):
     Returns:
         Array of shape ``(n_particles,)`` containing log-likelihood values.
     """
+    if n_particles % chunk_size != 0:
+        raise ValueError(
+            f"n_particles ({n_particles}) must be divisible by "
+            f"chunk_size ({chunk_size})"
+        )
     n_chunks = n_particles // chunk_size
     eval_chunk = jax.vmap(single_eval)
 

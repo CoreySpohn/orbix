@@ -2,10 +2,17 @@
 
 import jax
 import jax.numpy as jnp
+import pytest
 
 from orbix.fitting.data import AstromData
 from orbix.fitting.forward import predict_astrometry
-from orbix.fitting.grid_search import ParamBounds
+from orbix.fitting.grid_search import (
+    AdaptiveImportanceSampler,
+    EccVectorShape,
+    ParamBounds,
+    batched_loglike,
+    build_evaluator,
+)
 from orbix.fitting.likelihoods import loglike_astrom
 from orbix.utils.quasi_random import roberts_sequence
 
@@ -237,3 +244,23 @@ def test_public_api_exports():
         "ParamBounds",
     ):
         assert name in f.__all__ and hasattr(f, name)
+
+
+def test_batched_loglike_rejects_indivisible_chunk():
+    """batched_loglike raises ValueError when n_particles is not divisible by chunk_size."""  # noqa: E501
+    data = _toy_astrom()
+    shape = EccVectorShape()
+    ev = build_evaluator((data,), Ms=MSUN, dist_pc=10.0, shape=shape)
+    bounds = shape.default_bounds(log_T_range=(2.0, 3.0), e_max=0.5)
+    u = AdaptiveImportanceSampler().stage1(jax.random.PRNGKey(0), 6, 100)
+    phys = shape.to_physical(u, bounds, Ms=MSUN)
+    with pytest.raises(ValueError):
+        batched_loglike(ev, phys, n_particles=100, chunk_size=30)
+
+
+def test_stage2_rejects_too_few_survivors():
+    """stage2 raises ValueError when survivors count is less than n_modes."""
+    s = AdaptiveImportanceSampler(n_modes=5)
+    survivors = jax.random.uniform(jax.random.PRNGKey(0), (3, 6))
+    with pytest.raises(ValueError):
+        s.stage2(jax.random.PRNGKey(1), survivors, n=10)

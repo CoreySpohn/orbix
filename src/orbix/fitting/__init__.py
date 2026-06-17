@@ -1,4 +1,4 @@
-"""Orbit fitting module — pure JAX likelihoods and forward models.
+"""Orbit fitting module -- pure JAX likelihoods and forward models.
 
 This module provides differentiable forward models, data containers, and
 likelihood functions for joint RV + astrometry + imaging orbit fitting.
