@@ -272,3 +272,65 @@ def batched_loglike(single_eval, phys, n_particles, chunk_size):
     }
     _, ll = jax.lax.scan(scan_body, None, reshaped)
     return ll.reshape(-1)
+
+
+def grid_search(
+    data,
+    *,
+    Ms,
+    dist_pc,
+    shape,
+    sampler,
+    log_T_range,
+    e_max,
+    n_particles=10**6,
+    chunk_size=10**5,
+    n_survivors=5000,
+    key,
+):
+    """Two-stage adaptive-importance-sampling orbit grid-search.
+
+    Stage 1 fills the unit cube with quasi-random samples, evaluates the
+    log-likelihood for each, and selects the top survivors. Stage 2 draws
+    a refined Gaussian-mixture proposal around those survivors, reweights by
+    ``ll - log_q``, and returns a normalized ParticlePosterior.
+
+    Args:
+        data: Tuple of data containers (e.g. AstromData).
+        Ms: Stellar mass (kg).
+        dist_pc: Distance to system (parsec).
+        shape: An AbstractShapeParam instance.
+        sampler: An AbstractGridStrategy instance.
+        log_T_range: ``(log10_T_min, log10_T_max)`` in days.
+        e_max: Maximum eccentricity vector component magnitude.
+        n_particles: Total particles per stage. Must be divisible by chunk_size.
+        chunk_size: Scan chunk size for memory control.
+        n_survivors: Number of Stage-1 top particles passed to Stage 2.
+        key: JAX PRNG key.
+
+    Returns:
+        ParticlePosterior with physical shape-parameter rows and normalized
+        log-importance weights.
+    """
+    k1, k2 = jax.random.split(key)
+    bounds = shape.default_bounds(log_T_range=log_T_range, e_max=e_max)
+    ndim = len(bounds.names)
+    ev = build_evaluator(data, Ms=Ms, dist_pc=dist_pc, shape=shape)
+    phys_names = ("a", "e", "cos_i", "W", "cos_w", "sin_w", "tp")
+
+    def physical_rows(u):
+        phys = shape.to_physical(u, bounds, Ms=Ms)
+        return phys, jnp.stack([phys[n] for n in phys_names], axis=1)
+
+    u1 = sampler.stage1(k1, ndim, n_particles)
+    phys1, _ = physical_rows(u1)
+    ll1 = batched_loglike(ev, phys1, n_particles, chunk_size)
+
+    order = jnp.argsort(ll1)[::-1][:n_survivors]
+    u2, log_q = sampler.stage2(k2, u1[order], n_particles)
+    phys2, rows2 = physical_rows(u2)
+    ll2 = batched_loglike(ev, phys2, n_particles, chunk_size)
+    log_w = ll2 - log_q
+    log_w = log_w - jax.scipy.special.logsumexp(log_w)
+
+    return ParticlePosterior(particles=rows2, log_weights=log_w, param_names=phys_names)

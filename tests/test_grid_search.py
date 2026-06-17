@@ -168,3 +168,30 @@ def test_particleposterior_sir_sampling():
     assert set(out) == {"x", "y"}
     assert out["x"].shape == (64,)
     assert jnp.allclose(out["x"], 1.0)
+
+
+def test_grid_search_recovers_period():
+    """grid_search weighted posterior median of 'a' brackets truth (a=1.0 AU)."""
+    from orbix.fitting.grid_search import (
+        AdaptiveImportanceSampler,
+        EccVectorShape,
+        grid_search,
+    )
+
+    data = _toy_astrom()
+    pp = grid_search(
+        (data,),
+        Ms=MSUN,
+        dist_pc=10.0,
+        shape=EccVectorShape(),
+        sampler=AdaptiveImportanceSampler(n_modes=5),
+        log_T_range=(2.0, 3.0),
+        e_max=0.5,
+        n_particles=20000,
+        chunk_size=5000,
+        n_survivors=500,
+        key=jax.random.PRNGKey(0),
+    )
+    draws = pp.sample(jax.random.PRNGKey(1), n=2000)
+    med_a = float(jnp.median(draws["a"]))
+    assert 0.7 < med_a < 1.4
