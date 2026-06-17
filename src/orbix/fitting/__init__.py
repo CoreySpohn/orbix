@@ -14,6 +14,15 @@ from orbix.fitting.eig import (
     geometric_eig,
 )
 from orbix.fitting.forward import predict_astrometry, predict_photometry, predict_rv
+from orbix.fitting.grid_search import (
+    AbstractGridStrategy,
+    AbstractShapeParam,
+    AdaptiveImportanceSampler,
+    EccVectorShape,
+    ParamBounds,
+    ParticlePosterior,
+    grid_search,
+)
 from orbix.fitting.init import (
     find_init,
     find_init_top_k,
@@ -83,4 +92,12 @@ __all__ = [
     "geometric_eig",
     "alias_breaking_eig",
     "evaluate_candidates",
+    # Grid-search (adaptive importance sampling)
+    "AbstractGridStrategy",
+    "AbstractShapeParam",
+    "AdaptiveImportanceSampler",
+    "EccVectorShape",
+    "ParamBounds",
+    "ParticlePosterior",
+    "grid_search",
 ]

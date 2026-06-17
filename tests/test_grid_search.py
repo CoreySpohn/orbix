@@ -221,3 +221,19 @@ def test_chunking_is_shape_stable():
     a = grid_search((data,), chunk_size=2000, **common).log_weights
     b = grid_search((data,), chunk_size=4000, **common).log_weights
     assert jnp.allclose(a, b, atol=1e-5)
+
+
+def test_public_api_exports():
+    """All seven grid-search names are in orbix.fitting.__all__ and accessible."""
+    import orbix.fitting as f
+
+    for name in (
+        "grid_search",
+        "ParticlePosterior",
+        "EccVectorShape",
+        "AdaptiveImportanceSampler",
+        "AbstractGridStrategy",
+        "AbstractShapeParam",
+        "ParamBounds",
+    ):
+        assert name in f.__all__ and hasattr(f, name)
