@@ -7,6 +7,7 @@ and return weighted particles. See the design spec for the configurable seams.
 from abc import abstractmethod
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 
 from orbix.fitting.data import AstromData
@@ -142,17 +143,37 @@ class AdaptiveImportanceSampler(AbstractGridStrategy):
     def stage2(self, key, survivors, n):
         """Gaussian-mixture proposal around the survivor set.
 
+        Picks ``n_modes`` survivor centers (first rows, assumed sorted best-first),
+        fits an isotropic-plus-empirical covariance to the full survivor set, then
+        draws a balanced mixture. Samples are clipped to the unit cube.
+
         Args:
             key: JAX PRNG key.
             survivors: Best unit-cube points from Stage 1, shape ``(m, d)``.
             n: Number of new samples to draw.
 
         Returns:
-            Tuple ``(z, log_q)`` where ``z`` has shape ``(n, d)`` and
-            ``log_q`` has shape ``(n,)``.
+            Tuple ``(z, log_q)`` where ``z`` has shape ``(n, d)`` clipped to
+            ``[0, 1)`` and ``log_q`` has shape ``(n,)`` (mixture log-density).
         """
-        # implemented in Task 6
-        raise NotImplementedError
+        k_draw, k_pick = jax.random.split(key)
+        m = self.n_modes
+        d = survivors.shape[1]
+        centers = survivors[:m]
+        cov = jnp.cov(survivors, rowvar=False) + self.jitter * jnp.eye(d)
+        chol = jnp.linalg.cholesky(cov)
+        comp = jax.random.randint(k_pick, (n,), 0, m)
+        eps = jax.random.normal(k_draw, (n, d))
+        z = centers[comp] + eps @ chol.T
+        z = jnp.clip(z, 0.0, 1.0 - 1e-7)
+        diff = z[:, None, :] - centers[None, :, :]
+        diff_flat = diff.reshape(n * m, d)
+        sol_flat = jax.scipy.linalg.solve_triangular(chol, diff_flat.T, lower=True)
+        maha = jnp.sum(sol_flat**2, axis=0).reshape(n, m)
+        logdet = 2.0 * jnp.sum(jnp.log(jnp.diag(chol)))
+        log_comp = -0.5 * (maha + logdet + d * jnp.log(2.0 * jnp.pi))
+        log_q = jax.scipy.special.logsumexp(log_comp, axis=1) - jnp.log(m)
+        return z, log_q
 
 
 def build_evaluator(data, Ms, dist_pc, shape):
@@ -194,3 +215,32 @@ def build_evaluator(data, Ms, dist_pc, shape):
         return ll
 
     return single_eval
+
+
+def batched_loglike(single_eval, phys, n_particles, chunk_size):
+    """Evaluate ``single_eval`` over ``n_particles`` via vmap inside lax.scan.
+
+    ``phys`` is a dict of ``(n_particles,)`` arrays. Chunking keeps peak memory
+    at ``O(chunk_size)`` per step; the per-particle time series stay in registers.
+
+    Args:
+        single_eval: Callable ``phys_scalar -> scalar`` as from ``build_evaluator``.
+        phys: Dict of arrays, each of shape ``(n_particles,)``.
+        n_particles: Total number of particles. Must be divisible by ``chunk_size``.
+        chunk_size: Number of particles evaluated per scan step.
+
+    Returns:
+        Array of shape ``(n_particles,)`` containing log-likelihood values.
+    """
+    n_chunks = n_particles // chunk_size
+    eval_chunk = jax.vmap(single_eval)
+
+    def scan_body(carry, chunk):
+        return carry, eval_chunk(chunk)
+
+    reshaped = {
+        k: v[: n_chunks * chunk_size].reshape((n_chunks, chunk_size))
+        for k, v in phys.items()
+    }
+    _, ll = jax.lax.scan(scan_body, None, reshaped)
+    return ll.reshape(-1)
