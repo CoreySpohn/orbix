@@ -195,3 +195,29 @@ def test_grid_search_recovers_period():
     draws = pp.sample(jax.random.PRNGKey(1), n=2000)
     med_a = float(jnp.median(draws["a"]))
     assert 0.7 < med_a < 1.4
+
+
+def test_chunking_is_shape_stable():
+    """grid_search log_weights are identical regardless of chunk_size."""
+    from orbix.fitting.grid_search import (
+        AdaptiveImportanceSampler,
+        EccVectorShape,
+        grid_search,
+    )
+
+    data = _toy_astrom()
+    shape = EccVectorShape()
+    common = dict(
+        Ms=MSUN,
+        dist_pc=10.0,
+        shape=shape,
+        sampler=AdaptiveImportanceSampler(n_modes=5),
+        log_T_range=(2.0, 3.0),
+        e_max=0.5,
+        n_particles=12000,
+        n_survivors=400,
+        key=jax.random.PRNGKey(7),
+    )
+    a = grid_search((data,), chunk_size=2000, **common).log_weights
+    b = grid_search((data,), chunk_size=4000, **common).log_weights
+    assert jnp.allclose(a, b, atol=1e-5)
