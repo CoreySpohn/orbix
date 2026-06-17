@@ -155,3 +155,16 @@ def test_stage2_returns_samples_and_logq():
     assert z.shape == (100, 6)
     assert log_q.shape == (100,)
     assert jnp.all(jnp.isfinite(log_q))
+
+
+def test_particleposterior_sir_sampling():
+    """ParticlePosterior.sample draws by weight; near-zero weight never drawn."""
+    from orbix.fitting.grid_search import ParticlePosterior
+
+    parts = jnp.array([[0.0, 0.0], [1.0, 1.0]])
+    logw = jnp.array([-1e9, 0.0])
+    pp = ParticlePosterior(particles=parts, log_weights=logw, param_names=("x", "y"))
+    out = pp.sample(jax.random.PRNGKey(0), n=64)
+    assert set(out) == {"x", "y"}
+    assert out["x"].shape == (64,)
+    assert jnp.allclose(out["x"], 1.0)

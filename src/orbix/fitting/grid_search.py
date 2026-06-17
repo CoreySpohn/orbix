@@ -217,6 +217,34 @@ def build_evaluator(data, Ms, dist_pc, shape):
     return single_eval
 
 
+class ParticlePosterior(eqx.Module):
+    """Weighted particle approximation to the orbit posterior.
+
+    Attributes:
+        particles: Physical-parameter rows, shape ``(n, d)``.
+        log_weights: Normalized log-importance weights, shape ``(n,)``.
+        param_names: Ordered parameter names corresponding to ``particles`` columns.
+    """
+
+    particles: jnp.ndarray
+    log_weights: jnp.ndarray
+    param_names: tuple = eqx.field(static=True)
+
+    def sample(self, key, n=2000):
+        """Sampling-importance-resampling: draw ``n`` particles by weight.
+
+        Args:
+            key: JAX PRNG key.
+            n: Number of posterior draws to return.
+
+        Returns:
+            Dict mapping each name in ``param_names`` to a ``(n,)`` array.
+        """
+        idx = jax.random.categorical(key, self.log_weights, shape=(n,))
+        drawn = self.particles[idx]
+        return {name: drawn[:, i] for i, name in enumerate(self.param_names)}
+
+
 def batched_loglike(single_eval, phys, n_particles, chunk_size):
     """Evaluate ``single_eval`` over ``n_particles`` via vmap inside lax.scan.
 
