@@ -50,6 +50,20 @@ def mean_motion(a, mu):
     return jnp.sqrt(mu / a**3)
 
 
+def period_to_sma(T, Ms):
+    """Semi-major axis from orbital period via Kepler's third law.
+
+    Args:
+        T: Orbital period (days). Scalar or array.
+        Ms: Stellar mass (kg). Scalar or array.
+
+    Returns:
+        a: Semi-major axis (AU). Scalar or array.
+    """
+    mu = G * Ms  # AU^3 / day^2
+    return (mu * (T / two_pi) ** 2) ** (1.0 / 3.0)
+
+
 def semi_amplitude(T, Ms, Mp, e, i):
     """Semi-amplitude of the radial velocity curve from base quantities.
 

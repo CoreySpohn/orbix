@@ -48,7 +48,6 @@ docs = [
   "matplotlib",
 ]
 exosims = ["EXOSIMS>=3.4.1"]
-fitting = ["numpyro>=0.15.0"]
 
 [tool.ruff.lint]
 select = ["D", "E", "F", "I"]

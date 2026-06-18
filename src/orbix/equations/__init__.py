@@ -4,6 +4,7 @@ __all__ = [
     # Orbit functions
     "period_a",
     "period_n",
+    "period_to_sma",
     "mean_motion",
     "semi_amplitude",
     "semi_amplitude_reduced",
@@ -28,6 +29,7 @@ from .orbit import (
     mean_motion,
     period_a,
     period_n,
+    period_to_sma,
     semi_amplitude,
     semi_amplitude_reduced,
     state_vector_to_keplerian,

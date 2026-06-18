@@ -133,6 +133,50 @@ solve_trig_vec = jax.jit(
 )
 
 
+@jax.custom_vjp
+def diff_solve_trig(M, e):
+    """Solve Kepler's equation, returning (sinE, cosE) with exact gradients.
+
+    Drop-in replacement for :func:`solve_trig` that supports reverse-mode
+    autodiff (``jax.grad``, ``jax.vjp``). Gradients come from the Implicit
+    Function Theorem on ``M = E - e*sin(E)``, computed from ``(sinE, cosE, e)``
+    alone (no extra trig calls, no iterative re-solves).
+
+    Args:
+        M (jnp.ndarray): Mean anomaly. Shape: (n,).
+        e (float): Eccentricity.
+
+    Returns:
+        sinE (jnp.ndarray): Sine of the eccentric anomaly. Shape: (n,).
+        cosE (jnp.ndarray): Cosine of the eccentric anomaly. Shape: (n,).
+    """
+    return solve_trig(M, e)
+
+
+def _diff_solve_trig_fwd(M, e):
+    """Forward pass: solve and save residuals for the backward pass."""
+    sinE, cosE = solve_trig(M, e)
+    return (sinE, cosE), (sinE, cosE, e)
+
+
+def _diff_solve_trig_bwd(res, g):
+    """Backward pass: exact gradients via the Implicit Function Theorem.
+
+    From ``M = E - e*sinE``: ``dE/dM = 1/(1 - e*cosE)`` and
+    ``dE/de = sinE/(1 - e*cosE)``; chained through ``(sinE, cosE)``.
+    """
+    sinE, cosE, e = res
+    g_sinE, g_cosE = g
+    inv_denom = 1.0 / (1.0 - e * cosE)
+    dL_dE = g_sinE * cosE - g_cosE * sinE
+    dL_dM = dL_dE * inv_denom
+    dL_de = jnp.sum(dL_dE * sinE * inv_denom)
+    return dL_dM, dL_de
+
+
+diff_solve_trig.defvjp(_diff_solve_trig_fwd, _diff_solve_trig_bwd)
+
+
 def shortsin(x):
     """Approximates the sine function using a short polynomial.
 
