@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.7.0](https://github.com/CoreySpohn/orbix/compare/v0.6.0...v0.7.0) (2026-06-18)
+
+
+### Features
+
+* **fitting:** add Bayesian orbit-fitting module and numpyro extra ([09ea14e](https://github.com/CoreySpohn/orbix/commit/09ea14e0bea089be4e9200e3b42034480f123da4))
+* **fitting:** add chunked fused batch eval and mixture proposal ([593c372](https://github.com/CoreySpohn/orbix/commit/593c372c30ea374c9e0ec1a3fc836e3561141c1e))
+* **fitting:** add grid_search driver (two-stage AIS) ([5f1a930](https://github.com/CoreySpohn/orbix/commit/5f1a930c0175c9e3df6c58574c6c6fdb1fb28ce5))
+* **fitting:** add grid-laydown seam with Roberts stage-1 fill ([585f312](https://github.com/CoreySpohn/orbix/commit/585f312169a582651ed333718feea5e26398200a))
+* **fitting:** add masked observable evaluator (astrometry) ([4adf051](https://github.com/CoreySpohn/orbix/commit/4adf051013b3471630c9e81c9d615066d62721c8))
+* **fitting:** add ParamBounds for grid-search ([45b628d](https://github.com/CoreySpohn/orbix/commit/45b628dca5b96da44a098e90c0499fa0030a3f1f))
+* **fitting:** add ParticlePosterior with SIR sampling ([9e76a0b](https://github.com/CoreySpohn/orbix/commit/9e76a0b23f191317756c39a9c449cc7a9bdbf02c))
+* **fitting:** add shape-parameterization seam with EccVectorShape ([2dde43a](https://github.com/CoreySpohn/orbix/commit/2dde43a7682be6477535483283394d06a1296279))
+* **fitting:** export grid-search public API ([fa25941](https://github.com/CoreySpohn/orbix/commit/fa2594117f1147f02fa3728cc5ef6a6c75b370f4))
+* **fitting:** vendor pure-JAX Roberts quasi-random sequence ([27a0cf8](https://github.com/CoreySpohn/orbix/commit/27a0cf8a276d31f9fd732d57991c0c55dfacf7da))
+
+
+### Bug Fixes
+
+* **fitting:** guard grid-search chunk/survivor inputs and bounds ordering ([27ebd97](https://github.com/CoreySpohn/orbix/commit/27ebd978f0d26cf365af33c9a37f5397a6c26c09))
+* **fitting:** inverse-CDF resampling in ParticlePosterior.sample (avoid O(n*samples) memory) ([0871c04](https://github.com/CoreySpohn/orbix/commit/0871c046bd35fdd44f62cca001cfb9451e1fb3e3))
+* **fitting:** make find_init Kepler-consistent (rank by period_to_sma-constrained residual) ([b15640d](https://github.com/CoreySpohn/orbix/commit/b15640dda046174797be2412ba77a35c8b0324b6))
+
 ## [0.6.0](https://github.com/CoreySpohn/orbix/compare/v0.5.1...v0.6.0) (2026-05-22)
 
 
