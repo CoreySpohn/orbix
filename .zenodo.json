@@ -1,0 +1,27 @@
+{
+  "upload_type": "software",
+  "creators": [
+    {
+      "orcid": "0000-0002-3138-0240",
+      "affiliation": "NASA Goddard Space Flight Center, Greenbelt, MD",
+      "name": "Spohn, Corey"
+    }
+  ],
+  "license": "MIT",
+  "title": "orbix",
+  "description": "orbix is an open-source JAX library of functions for exoplanet simulations, providing differentiable Keplerian orbit propagation and on-sky projection utilities.",
+  "keywords": [
+    "exoplanets",
+    "orbital mechanics",
+    "Habitable Worlds Observatory",
+    "direct imaging",
+    "JAX"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/CoreySpohn/orbix",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    }
+  ]
+}
