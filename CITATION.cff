@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: orbix
+abstract: "orbix is an open-source JAX library of functions for exoplanet simulations, providing differentiable Keplerian orbit propagation and on-sky projection utilities for the Habitable Worlds Observatory direct imaging simulation suite."
+authors:
+  - family-names: Spohn
+    given-names: Corey
+    orcid: "https://orcid.org/0000-0002-3138-0240"
+    affiliation: "NASA Goddard Space Flight Center"
+repository-code: "https://github.com/CoreySpohn/orbix"
+license: MIT
+# doi: add the Zenodo concept ("all versions") DOI here after the first archived release
