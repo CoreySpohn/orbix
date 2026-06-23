@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/CoreySpohn/orbix/compare/v0.7.0...v0.8.0) (2026-06-23)
+
+
+### Features
+
+* Add Zenodo info ([b191fb7](https://github.com/CoreySpohn/orbix/commit/b191fb775f468c9c47eeb2a0794d7ce472fb4c2c))
+
 ## [0.7.0](https://github.com/CoreySpohn/orbix/compare/v0.6.0...v0.7.0) (2026-06-18)
 
 
