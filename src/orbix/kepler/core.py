@@ -364,7 +364,12 @@ def init_E_poly(M, e):
 def init_E_coeffs(M: jnp.ndarray, bounds: jnp.ndarray, coeffs: jnp.ndarray):
     """Create the initial guess for the eccentric anomaly using the polynomials."""
     # j_inds = jnp.searchsorted(bounds, M, side="right") - 1
-    j_inds = jnp.digitize(M, bounds) - 1
+    # Clamp to the valid coefficient rows [0, n_bins - 1]. At bit-exact
+    # M = pi (== bounds[-1]) jnp.digitize returns len(bounds), which would
+    # otherwise gather the (clamped) last row with dx measured from the wrong
+    # bound, collapsing the guess to 11*pi/12 (orbix-kepler-mpi-defect).
+    n_bins = coeffs.shape[0]
+    j_inds = jnp.clip(jnp.digitize(M, bounds) - 1, 0, n_bins - 1)
     dx = M - bounds[j_inds]
     return coeffs[j_inds, 0] + dx * (
         coeffs[j_inds, 1]
@@ -473,8 +478,10 @@ def le_E_trig(M: jnp.ndarray, e: float):
     sinE, cosE = fast_sinE_cosE(init_E)
     dE = dE_2nd(_M, init_E, 1.0 / e, sinE, cosE)
     E = jnp.fmod(Esigns * (init_E + dE) + two_pi, two_pi)
-    sinE = Esigns * (sinE * (1.0 - 0.5 * dE * dE) + dE * cosE)
-    cosE = cosE * (1.0 - 0.5 * dE * dE) - dE * sinE
+    # Rotate (sinE, cosE) by dE; both updates use the pre-update sinE.
+    sinE_pre = sinE
+    sinE = Esigns * (sinE_pre * (1.0 - 0.5 * dE * dE) + dE * cosE)
+    cosE = cosE * (1.0 - 0.5 * dE * dE) - dE * sinE_pre
     return E, sinE, cosE
 
 
@@ -531,8 +538,10 @@ def he_E_trig(M: jnp.ndarray, e: float):
     dE = compute_dE_vectorized(_M, init_E, e_inv, sinE, cosE)
     dEsq_d6 = dE**2 * if3
     E = jnp.fmod(Esigns * (init_E + dE) + two_pi, two_pi)
-    sinE = Esigns * (sinE * (1 - 3 * dEsq_d6) + dE * (1 - dEsq_d6) * cosE)
-    cosE = cosE * (1 - 3 * dEsq_d6) - dE * (1 - dEsq_d6) * sinE
+    # Rotate (sinE, cosE) by dE; both updates use the pre-update sinE.
+    sinE_pre = sinE
+    sinE = Esigns * (sinE_pre * (1 - 3 * dEsq_d6) + dE * (1 - dEsq_d6) * cosE)
+    cosE = cosE * (1 - 3 * dEsq_d6) - dE * (1 - dEsq_d6) * sinE_pre
     return E, sinE, cosE
 
 
