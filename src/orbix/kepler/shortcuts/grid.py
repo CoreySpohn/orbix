@@ -9,8 +9,11 @@ This scalar function is then jit-compiled and vectorized over time and planets.
 Generally these are 3-5x faster than a vectorized/compiled form of `E_solve`
 when computing thousands of epochs but the difference is less pronounced at the
 few per-epoch level. The bilinear interpolation is ~1.5x slower than the linear
-interpolation, but is accurate to 32 bit precision, whereas the linear
-interpolation has errors around 1e-4.
+interpolation, but is accurate to 32 bit precision.
+
+The "linear" kind interpolates in M only; eccentricity snaps to the
+nearest grid row, so its error grows like (0.5/n_e) * dE/de and is
+worst near e = 1. Use "bilinear" when e accuracy matters.
 """
 
 import sys
@@ -134,11 +137,11 @@ def _lin(tab, dtab, e_ind, M_ind, dM):
     return tab[e_ind, M_ind] + dtab[e_ind, M_ind] * dM
 
 
-def _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, dM_int):
+def _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, dM_int, n_e):
     """Linear lookup for a single (M, e) pair."""
     M0, dM = _ind(M_scalar, inv_dM)
     M0 = M0 % dM_int
-    e0 = (e_scalar * inv_de).astype(jnp.int32)
+    e0 = jnp.clip((e_scalar * inv_de + 0.5).astype(jnp.int32), 0, n_e - 1)
     return e0, M0, dM
 
 
@@ -173,7 +176,7 @@ def E_trig_lin(n_e=1024, n_M=4096):
 
     def _lookup_scalar(M_scalar, e_scalar):
         """Performs lookup and interpolation for a single M and e."""
-        p = _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, dM_int)
+        p = _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, dM_int, n_e)
         return (
             _lin(E_grid, dE_dind_grid, *p),
             _lin(sinE_grid, dsinE_dind, *p),
@@ -192,7 +195,7 @@ def E_lin(n_e=1024, n_M=4096):
 
     def _lookup_scalar(M_scalar, e_scalar):
         """Performs lookup and interpolation for a single M and e."""
-        p = _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, dM_int)
+        p = _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, dM_int, n_e)
         return _lin(E_grid, dE_dind_grid, *p)
 
     return _lookup_scalar
@@ -207,7 +210,7 @@ def trig_lin(n_e=1024, n_M=4096):
 
     def _lookup_scalar(M_scalar, e_scalar):
         """Performs lookup and interpolation for a single M and e."""
-        p = _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, dM_int)
+        p = _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, dM_int, n_e)
         return _lin(sinE_grid, dsinE_dind, *p), _lin(cosE_grid, dcosE_dind, *p)
 
     return _lookup_scalar

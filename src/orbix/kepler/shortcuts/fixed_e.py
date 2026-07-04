@@ -40,7 +40,8 @@ def E_lookup(e, n=2048):
 
     @jax.jit
     def lookup(M):
-        return E_vals[(M * inv_dM).astype(jnp.int32) % n_int]
+        inds = ((M * inv_dM) + 0.5).astype(jnp.int32) % n_int
+        return E_vals[inds]
 
     return lookup
 
@@ -134,7 +135,11 @@ def E_hermite_interp(e, n=2048):
 
         # Retrieve function values and derivatives at the surrounding indices
         E_i = E_vals[final_inds]
-        E_ip1 = E_vals[final_inds_next]
+        # Unwrap across the 2pi seam: the "next" node of the last cell is
+        # node 0, whose E is ~0 -- add 2pi so the blend stays monotonic.
+        E_ip1 = E_vals[final_inds_next] + jnp.where(
+            final_inds_next < final_inds, two_pi, 0.0
+        )
         dE_i = dE_dind[final_inds]
         dE_ip1 = dE_dind[final_inds_next]
 
