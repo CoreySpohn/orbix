@@ -212,69 +212,6 @@ def trig_lin(n_e=1024, n_M=4096):
 
 
 ################################################################################
-# Bilinear interpolation functions
-################################################################################
-
-
-def _ind_bilin(scalar, inv_d, n):
-    """Returns the indices and fractional difference for bilinear interpolation."""
-    i0, di = _ind(scalar, inv_d)
-    i0 = i0 % n
-    i1 = (i0 + 1) % n
-    return i0, i1, di
-
-
-def _grid_bilin_params(M_scalar, e_scalar, inv_dM, inv_de, dM_int):
-    """Bilinear lookup for a single (M, e) pair."""
-    M0, M1, dM = _ind_bilin(M_scalar, inv_dM, dM_int)
-    e0, de = _ind(e_scalar, inv_de)
-    e1 = e0 + 1
-    return e0, e1, M0, M1, de, dM
-
-
-# Extra functions for periodic interpolation on E
-def _align_phase(base, arr):
-    """Shift each value in `arr` by ±2π s.t. it lies within π of `base`."""
-    return jnp.where(
-        arr - base > jnp.pi,
-        arr - two_pi,
-        jnp.where(base - arr > jnp.pi, arr + two_pi, arr),
-    )
-
-
-def _bilin(table, e0, e1, M0, M1, de, dM):
-    """Bilinear interpolation for a single (M, e) pair."""
-    f00 = table[e0, M0]
-    f10 = table[e1, M0]
-    f01 = table[e0, M1]
-    f11 = table[e1, M1]
-    return (
-        f00 * (1 - de) * (1 - dM)
-        + f10 * de * (1 - dM)
-        + f01 * (1 - de) * dM
-        + f11 * de * dM
-    )
-
-
-# Bilinear interpolation for periodic tables
-def _bilin_per(table, e0, e1, M0, M1, de, dM):
-    f00 = table[e0, M0]
-    # align all neighbours with f00
-    f10, f01, f11 = _align_phase(
-        f00, jnp.stack([table[e1, M0], table[e0, M1], table[e1, M1]])
-    )
-
-    val = (
-        f00 * (1 - de) * (1 - dM)
-        + f10 * de * (1 - dM)
-        + f01 * (1 - de) * dM
-        + f11 * de * dM
-    )
-    # wrap result back to [0, 2π)
-    return jnp.mod(val, two_pi)
-
-
-################################################################################
 # Bilinear interpolation with stacked grids
 ################################################################################
 
