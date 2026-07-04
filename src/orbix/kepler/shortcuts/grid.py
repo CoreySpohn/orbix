@@ -53,6 +53,8 @@ def get_grid_solver(
         n_M:
             The number of mean anomaly steps in the grid.
     """
+    if not E and not trig:
+        raise ValueError("get_grid_solver: at least one of E or trig must be True")
     if E and trig:
         name = "E_trig"
     elif E:
@@ -235,9 +237,14 @@ def _E_grid_base(n_e: int, n_M: int, *, dtype=jnp.float32):
     e_grid = jnp.linspace(0.0, 1.0, n_e, dtype=dtype, endpoint=False)
     M_grid = jnp.linspace(0.0, two_pi, n_M, dtype=dtype, endpoint=False)
     E_grid = jax.vmap(lambda e: E_solve_jit(M_grid, e))(e_grid)
+    # Append one more e row, solved just below e=1, so the 2x2 dynamic_slice
+    # patch is valid in the top e cell (e in [1 - 1/n_e, 1)). Without it the
+    # slice start row silently clamps and the weights use the wrong cell.
+    _last_E_row = E_solve_jit(M_grid, jnp.asarray(1.0 - 1e-6, dtype=dtype))
+    E_grid = jnp.concatenate([E_grid, _last_E_row[jnp.newaxis, :]], axis=0)
     # Append last column of 2pi-eps to make the grid complete with one more
     # column because we always pull in a square patch of 2x2
-    _last_E_col = jnp.repeat(two_pi - jnp.finfo(dtype).eps, n_e, axis=0)
+    _last_E_col = jnp.repeat(two_pi - jnp.finfo(dtype).eps, n_e + 1, axis=0)
     E_grid = jnp.concatenate([E_grid, _last_E_col[:, jnp.newaxis]], axis=1)
     inv_dM = 1.0 / (M_grid[1] - M_grid[0])
     inv_de = 1.0 / (e_grid[1] - e_grid[0])
