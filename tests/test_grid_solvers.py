@@ -1,13 +1,10 @@
 """Accuracy and contract tests for the grid shortcut solvers."""
 
-import jax
 import jax.numpy as jnp
 import pytest
 
 from orbix.kepler.core import E_solve
 from orbix.kepler.shortcuts.grid import get_grid_solver
-
-jax.config.update("jax_enable_x64", True)
 
 
 def test_bilinear_high_e_no_accuracy_cliff():

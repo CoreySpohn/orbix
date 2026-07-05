@@ -380,19 +380,22 @@ class TestObservatoryGeometryInvariants:
 class TestKeepout:
     """Test keepout zone checks."""
 
-    def test_sun_keepout_blocks_anti_solar(self):
-        """Target near the Sun should be blocked."""
-        # Observatory at ~(1, 0, 0) AU, Sun at origin
+    def test_sun_keepout_blocks_sunward_pointing(self):
+        """A target lying along the Sun direction from the observatory is blocked."""
+        # Observatory at ~(1.01, 0, 0) AU, Sun at origin.
         obs_pos = jnp.array([1.01, 0.0, 0.0])
-        # Target near RA=180°, Dec=0° (anti-Sun direction from Earth perspective)
-        # Sun is in direction RA≈0° from observatory
-        # Target at RA=0° should be near Sun
-        ra = jnp.radians(0.0)
-        dec = jnp.radians(0.0)
-        result = is_observable(obs_pos, ra, dec, 51544.5, ko_sun_min_deg=45.0)
-        # This should probably be blocked since target is near the Sun direction
-        # (obs is at +x, sun is at origin, target at RA=0 points toward +x)
-        assert isinstance(result, jax.Array)
+        mjd = 60000.0
+        # Target at RA=180 deg, Dec=0: looking back toward the Sun.
+        blocked = is_observable(obs_pos, jnp.pi, 0.0, mjd)
+        assert not bool(blocked)
+
+    def test_anti_solar_pointing_is_observable(self):
+        """A target opposite the Sun direction from the observatory is observable."""
+        obs_pos = jnp.array([1.01, 0.0, 0.0])
+        mjd = 60000.0
+        # Target at RA=0, Dec=0: anti-solar direction.
+        ok = is_observable(obs_pos, 0.0, 0.0, mjd)
+        assert bool(ok)
 
     def test_keepout_jit(self):
         """Keepout should be JIT-compilable."""

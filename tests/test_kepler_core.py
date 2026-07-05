@@ -5,14 +5,11 @@ badly wrong (sinE, cosE) pair at bit-exact M = pi while being machine-accurate
 one ulp to either side. These tests pin that corner.
 """
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
-jax.config.update("jax_enable_x64", True)
-
-from orbix.kepler.core import E_solve, diff_solve_trig, solve_trig  # noqa: E402
+from orbix.kepler.core import E_solve, diff_solve_trig, solve_trig
 
 
 def _newton_E(M, e, iters=80):

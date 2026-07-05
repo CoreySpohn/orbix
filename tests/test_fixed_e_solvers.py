@@ -1,12 +1,9 @@
 """Accuracy tests for the fixed-eccentricity shortcut solvers."""
 
-import jax
 import jax.numpy as jnp
 
 from orbix.kepler.core import E_solve
 from orbix.kepler.shortcuts.fixed_e import E_hermite_interp, E_lookup
-
-jax.config.update("jax_enable_x64", True)
 
 
 def test_hermite_no_wrap_blend_in_last_cell():

@@ -8,6 +8,7 @@ from bright solar system bodies.  Port of the keepout logic from
 from __future__ import annotations
 
 import jax.numpy as jnp
+from jaxtyping import Array
 
 from orbix.system.solar_system import (
     earth_position_ecliptic,
@@ -75,9 +76,7 @@ def is_observable(
     ko_sun_max_deg: float = 180.0,
     ko_earth_min_deg: float = 0.0,
     ko_earth_max_deg: float = 180.0,
-    ko_moon_min_deg: float = 0.0,
-    ko_moon_max_deg: float = 180.0,
-) -> bool:
+) -> Array:
     """Check if a target is observable (outside all keepout zones).
 
     Args:
@@ -89,8 +88,6 @@ def is_observable(
         ko_sun_max_deg: Maximum Sun keepout angle (degrees).
         ko_earth_min_deg: Minimum Earth keepout angle (degrees).
         ko_earth_max_deg: Maximum Earth keepout angle (degrees).
-        ko_moon_min_deg: Minimum Moon keepout angle (degrees).
-        ko_moon_max_deg: Maximum Moon keepout angle (degrees).
 
     Returns:
         True if the target is observable, False if it falls in a keepout zone.
@@ -109,10 +106,7 @@ def is_observable(
         earth_angle_deg <= ko_earth_max_deg
     )
 
-    # Moon (approximate: Earth position + offset)
-    # For now, use Earth position as a proxy for the Moon since the Moon
-    # is only ~0.0026 AU from Earth, which is small compared to L2 distance.
-    # A more accurate model would use a lunar ephemeris.
-    moon_ok = earth_ok  # Simplified — refine later with lunar ephemeris
-
-    return sun_ok & earth_ok & moon_ok
+    # The Moon is ~0.0026 AU from Earth -- negligible against the L2
+    # geometry, so the Earth check stands in for it. Add explicit lunar
+    # keepout only with a lunar ephemeris and its own angle limits.
+    return sun_ok & earth_ok
