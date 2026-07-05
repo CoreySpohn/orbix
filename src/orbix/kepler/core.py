@@ -69,6 +69,9 @@ def E_solve(M, e):
 
     Returns:
         E (jnp.ndarray): Eccentric anomaly. Shape: (n,).
+
+    The solver contract is 0 <= e < 1; e >= 1 or e < 0 silently produces
+    NaN or garbage (unchecked to keep the hot path branch-free).
     """
     # Select the appropriate solver based on eccentricity
     e_ind = jnp.select([e == 0, e < 0.78], [0, 1], default=2)
@@ -121,6 +124,9 @@ def solve_trig(M, e):
     Returns:
         sinE (jnp.ndarray): Sine of the eccentric anomaly. Shape: (n,).
         cosE (jnp.ndarray): Cosine of the eccentric anomaly. Shape: (n,).
+
+    The solver contract is 0 <= e < 1; e >= 1 or e < 0 silently produces
+    NaN or garbage (unchecked to keep the hot path branch-free).
     """
     _, sinE, cosE = E_solve_trig(M, e)
     return sinE, cosE
@@ -149,6 +155,9 @@ def diff_solve_trig(M, e):
     Returns:
         sinE (jnp.ndarray): Sine of the eccentric anomaly. Shape: (n,).
         cosE (jnp.ndarray): Cosine of the eccentric anomaly. Shape: (n,).
+
+    The solver contract is 0 <= e < 1; e >= 1 or e < 0 silently produces
+    NaN or garbage (unchecked to keep the hot path branch-free).
     """
     return solve_trig(M, e)
 

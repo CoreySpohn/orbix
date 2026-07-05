@@ -139,6 +139,7 @@ def _lin(tab, dtab, e_ind, M_ind, dM):
 
 def _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, dM_int, n_e):
     """Linear lookup for a single (M, e) pair."""
+    M_scalar = jnp.mod(M_scalar, two_pi)
     M0, dM = _ind(M_scalar, inv_dM)
     M0 = M0 % dM_int
     e0 = jnp.clip((e_scalar * inv_de + 0.5).astype(jnp.int32), 0, n_e - 1)
@@ -222,6 +223,7 @@ def trig_lin(n_e=1024, n_M=4096):
 
 
 def _indices_frac(M, e, inv_dM, inv_de, n_M, n_e):
+    M = jnp.mod(M, two_pi)
     # Convert to index space
     M_ind = M * inv_dM
     e_ind = e * inv_de

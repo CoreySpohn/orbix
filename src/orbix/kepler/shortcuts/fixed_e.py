@@ -40,6 +40,7 @@ def E_lookup(e, n=2048):
 
     @jax.jit
     def lookup(M):
+        M = jnp.mod(M, two_pi)
         inds = ((M * inv_dM) + 0.5).astype(jnp.int32) % n_int
         return E_vals[inds]
 
@@ -77,6 +78,7 @@ def E_linear_interp(e, n=2048):
 
     @jax.jit
     def linear_interp(M):
+        M = jnp.mod(M, two_pi)
         # Scale M to index space
         ind_M = M * inv_dM
         # Get integer part of the index
@@ -123,6 +125,7 @@ def E_hermite_interp(e, n=2048):
 
     @jax.jit
     def hermite_interp(M):
+        M = jnp.mod(M, two_pi)
         # Scale M to index space
         ind_M = M * inv_dM
         # Get integer part of the index
