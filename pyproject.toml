@@ -11,7 +11,7 @@ dependencies = [
     "numpy>=2.1.2",
     "equinox>=0.12.1",
     "interpax>=0.3.3",
-    "hwoutils",
+    "hwoutils>=1.8",
     "jaxtyping>=0.3.3",
 ]
 license = { file = "LICENSE" }
@@ -37,6 +37,9 @@ content-type = "text/markdown"
 
 [[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
 path = "README.md"
+
+[dependency-groups]
+test = ["pytest>=8"]
 
 [project.optional-dependencies]
 docs = [
