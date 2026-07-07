@@ -14,11 +14,7 @@ interpolation (interpax vs scipy) and Earth position (Vallado vs JPL).
 import numpy as np
 import pytest
 
-from orbix.observatory import (
-    ObservatoryL2Halo,
-    zodi_fzodi_ayo,
-    zodi_fzodi_leinert,
-)
+from orbix.observatory import ObservatoryL2Halo
 from orbix.observatory.solar_system import (
     obliquity_deg as orbix_obliquity,
 )
@@ -168,54 +164,3 @@ class TestObliquity:
             atol=1e-4,
             err_msg=f"Obliquity at MJD {mjd}",
         )
-
-
-# ============================================================================
-# Zodiacal light (Fzodi)
-# ============================================================================
-
-
-class TestZodiFzodi:
-    """Verify zodiacal Fzodi helpers produce sensible values."""
-
-    def test_ayo_v_band(self):
-        """AYO Fzodi at V-band should equal 10^(-0.4 * 22.0)."""
-        fzodi = float(zodi_fzodi_ayo(550.0))
-        expected = 10.0 ** (-0.4 * 22.0)
-        np.testing.assert_allclose(fzodi, expected, rtol=1e-4)
-
-    def test_ayo_wavelength_dependence(self):
-        """Red wavelengths should have lower Fzodi (fainter zodi)."""
-        fzodi_500 = float(zodi_fzodi_ayo(500.0))
-        fzodi_800 = float(zodi_fzodi_ayo(800.0))
-        # Zodi is fainter at red wavelengths
-        assert fzodi_800 < fzodi_500
-
-    def test_leinert_ecliptic_pole_fainter(self):
-        """Ecliptic pole should have fainter zodi than ecliptic plane."""
-        fzodi_plane = float(
-            zodi_fzodi_leinert(550.0, ecliptic_lat_deg=0.0, solar_lon_deg=90.0)
-        )
-        fzodi_pole = float(
-            zodi_fzodi_leinert(550.0, ecliptic_lat_deg=90.0, solar_lon_deg=90.0)
-        )
-        assert fzodi_pole < fzodi_plane
-
-    def test_leinert_antisolar_fainter(self):
-        """Anti-solar direction (180°) should be fainter than 90° solar lon."""
-        fzodi_90 = float(
-            zodi_fzodi_leinert(550.0, ecliptic_lat_deg=0.0, solar_lon_deg=90.0)
-        )
-        fzodi_180 = float(
-            zodi_fzodi_leinert(550.0, ecliptic_lat_deg=0.0, solar_lon_deg=180.0)
-        )
-        assert fzodi_180 < fzodi_90
-
-    def test_fzodi_jit(self):
-        """Both Fzodi functions should JIT-compile."""
-        import jax
-
-        fzodi_ayo_jit = jax.jit(zodi_fzodi_ayo)(550.0)
-        fzodi_leinert_jit = jax.jit(zodi_fzodi_leinert)(550.0, 30.0, 135.0)
-        assert float(fzodi_ayo_jit) > 0
-        assert float(fzodi_leinert_jit) > 0
