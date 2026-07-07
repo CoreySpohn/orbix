@@ -94,12 +94,12 @@ def _setup(n_e: int = 1000, n_M: int = 3600):
 
     dM = M_grid[1] - M_grid[0]
     inv_dM = 1.0 / dM
-    dM_int = jnp.int32(n_M)
+    n_M_int = jnp.int32(n_M)
 
     de = e_grid[1] - e_grid[0]
     inv_de = 1.0 / de
 
-    return e_grid, M_grid, dM, inv_dM, dM_int, de, inv_de
+    return e_grid, M_grid, dM, inv_dM, n_M_int, de, inv_de
 
 
 def _E_grids(e_grid, M_grid):
@@ -137,39 +137,37 @@ def _lin(tab, dtab, e_ind, M_ind, dM):
     return tab[e_ind, M_ind] + dtab[e_ind, M_ind] * dM
 
 
-def _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, dM_int, n_e):
+def _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, n_M_int, n_e):
     """Linear lookup for a single (M, e) pair."""
     M_scalar = jnp.mod(M_scalar, two_pi)
     M0, dM = _ind(M_scalar, inv_dM)
-    M0 = M0 % dM_int
+    M0 = M0 % n_M_int
     e0 = jnp.clip((e_scalar * inv_de + 0.5).astype(jnp.int32), 0, n_e - 1)
     return e0, M0, dM
 
 
 def E_trig_lin(n_e=1024, n_M=4096):
-    """Creates vectorized JIT func for E, sinE, cosE via linear interp 2D grid.
+    """Creates a scalar lookup closure for E, sinE, cosE via linear interp 2D grid.
 
-    This function precomputes the same E, sin(E), cos(E) grids and their derivatives.
-    The returned function is designed to efficiently handle arrays of inputs
-    using `jax.vmap`. It accepts an array of mean anomalies `M_vals` (shape
-    (num_planets, num_times)) and an array of eccentricities `e_array` (shape
-    (num_planets,)) and returns arrays for E, sin(E), and cos(E), each with
-    shape (num_planets, num_times). This is highly efficient for processing
-    multiple orbits or time series simultaneously.
+    This function precomputes the E, sin(E), cos(E) grids and their derivatives
+    and closes over them. The returned function is a plain (un-jitted) scalar
+    closure, `_lookup_scalar(M_scalar, e_scalar) -> (E, sinE, cosE)`; it is not
+    vectorized or JIT-compiled itself. Callers wrap it with `jax.vmap`/`jax.jit`
+    as needed (see `get_grid_solver`, which does exactly this).
 
     Args:
         n_e:
-            Number of eccentricity steps in the grid (0 <= e < 1). Default is 500.
+            Number of eccentricity steps in the grid (0 <= e < 1). Default is 1024.
         n_M:
-            Number of mean anomaly steps in the grid (0 <= M < 2pi). Default is 3600.
+            Number of mean anomaly steps in the grid (0 <= M < 2pi). Default is 4096.
 
     Returns:
-        A JIT-compiled, vectorized function `vectorized_lookup(M_vals, e_array)`
-        that takes array inputs and returns a tuple `(E_array, sinE_array, cosE_array)`
-        containing arrays of interpolated eccentric anomalies and their sines/cosines.
+        A scalar closure `_lookup_scalar(M_scalar, e_scalar)` that returns a
+        tuple `(E, sinE, cosE)` of interpolated eccentric anomaly and its sine
+        and cosine for a single (M, e) pair.
     """
     # Setup
-    e_grid, M_grid, dM, inv_dM, dM_int, de, inv_de = _setup(n_e, n_M)
+    e_grid, M_grid, dM, inv_dM, n_M_int, de, inv_de = _setup(n_e, n_M)
     E_grid, sinE_grid, cosE_grid = _E_grids(e_grid, M_grid)
     dE_dind_grid, dsinE_dind, dcosE_dind = _d_dind_grids(
         e_grid, E_grid, sinE_grid, cosE_grid, dM
@@ -177,7 +175,7 @@ def E_trig_lin(n_e=1024, n_M=4096):
 
     def _lookup_scalar(M_scalar, e_scalar):
         """Performs lookup and interpolation for a single M and e."""
-        p = _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, dM_int, n_e)
+        p = _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, n_M_int, n_e)
         return (
             _lin(E_grid, dE_dind_grid, *p),
             _lin(sinE_grid, dsinE_dind, *p),
@@ -190,13 +188,13 @@ def E_trig_lin(n_e=1024, n_M=4096):
 def E_lin(n_e=1024, n_M=4096):
     """Creates vectorized JIT func for E via linear interp 2D grid."""
     # Setup
-    e_grid, M_grid, dM, inv_dM, dM_int, de, inv_de = _setup(n_e, n_M)
+    e_grid, M_grid, dM, inv_dM, n_M_int, de, inv_de = _setup(n_e, n_M)
     E_grid, sinE_grid, cosE_grid = _E_grids(e_grid, M_grid)
     dE_dind_grid, *_ = _d_dind_grids(e_grid, E_grid, sinE_grid, cosE_grid, dM)
 
     def _lookup_scalar(M_scalar, e_scalar):
         """Performs lookup and interpolation for a single M and e."""
-        p = _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, dM_int, n_e)
+        p = _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, n_M_int, n_e)
         return _lin(E_grid, dE_dind_grid, *p)
 
     return _lookup_scalar
@@ -205,13 +203,13 @@ def E_lin(n_e=1024, n_M=4096):
 def trig_lin(n_e=1024, n_M=4096):
     """Creates vectorized JIT func for sinE, cosE via linear interp 2D grid."""
     # Setup
-    e_grid, M_grid, dM, inv_dM, dM_int, de, inv_de = _setup(n_e, n_M)
+    e_grid, M_grid, dM, inv_dM, n_M_int, de, inv_de = _setup(n_e, n_M)
     E_grid, sinE_grid, cosE_grid = _E_grids(e_grid, M_grid)
     _, dsinE_dind, dcosE_dind = _d_dind_grids(e_grid, E_grid, sinE_grid, cosE_grid, dM)
 
     def _lookup_scalar(M_scalar, e_scalar):
         """Performs lookup and interpolation for a single M and e."""
-        p = _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, dM_int, n_e)
+        p = _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, n_M_int, n_e)
         return _lin(sinE_grid, dsinE_dind, *p), _lin(cosE_grid, dcosE_dind, *p)
 
     return _lookup_scalar

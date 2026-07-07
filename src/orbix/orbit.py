@@ -2,9 +2,9 @@
 
 The orbit owns orbital-element parameters only. Stellar context
 (``Ms_kg``, ``dist_pc``) is passed keyword-only into ``propagate``
-and the fast-path helpers. This keeps the orbit self-describing,
-avoids duplicating stellar state, and leaves ``Star`` as the single
-source of truth for that context.
+and the fast-path helpers. This keeps the orbit self-describing and
+avoids duplicating stellar state; callers supply the stellar context
+per call.
 """
 
 from __future__ import annotations
@@ -218,6 +218,8 @@ class KeplerianOrbit(AbstractOrbit):
 def _fmt(x: Array, fmt: str = ".3g", max_items: int = 3) -> str:
     """Format a scalar/array compactly for KeplerianOrbit's repr."""
     a = jnp.asarray(x)
+    if isinstance(a, jax.core.Tracer):
+        return "<traced>"
     if a.shape == () or a.shape == (1,):
         return f"{float(a.reshape(-1)[0]):{fmt}}"
     if a.size <= max_items:

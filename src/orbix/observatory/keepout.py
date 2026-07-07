@@ -1,8 +1,9 @@
-"""Sun/Earth/Moon keepout zone checks.
+"""Sun/Earth keepout zone checks.
 
 Determines whether a target star is observable based on angular separation
 from bright solar system bodies.  Port of the keepout logic from
-``EXOSIMS.Prototypes.Observatory.keepout``, simplified to Sun + Earth + Moon.
+``EXOSIMS.Prototypes.Observatory.keepout``, simplified to Sun + Earth (the
+Moon is dropped as negligible against the L2 geometry; see ``is_observable``).
 """
 
 from __future__ import annotations

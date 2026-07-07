@@ -10,7 +10,7 @@ L2 halo orbit: both use the same 6-month halo data; differences arise from
 interpolation (interpax vs scipy) and Earth position (Vallado vs JPL).
 """
 
-# ── orbix imports ──
+# -- orbix imports --
 import numpy as np
 import pytest
 
@@ -22,7 +22,7 @@ from orbix.observatory.solar_system import (
     planet_position_ecliptic as orbix_planet,
 )
 
-# ── EXOSIMS imports (guarded) ──
+# -- EXOSIMS imports (guarded) --
 try:
     import EXOSIMS
 

@@ -84,7 +84,7 @@ def E_solve(M, e):
 E_solve_jit = jax.jit(E_solve)
 
 # Vectorized version of E_solve
-E_solve_vec = jax.jit(jax.vmap(lambda M_row, e: E_solve(M_row, e), in_axes=(0, 0)))
+E_solve_vec = jax.jit(jax.vmap(E_solve, in_axes=(0, 0)))
 
 
 def E_solve_trig(M, e):
@@ -109,9 +109,7 @@ def E_solve_trig(M, e):
 
 E_solve_trig_jit = jax.jit(E_solve_trig)
 
-E_solve_trig_vec = jax.jit(
-    jax.vmap(lambda M_row, e: E_solve_trig(M_row, e), in_axes=(0, 0))
-)
+E_solve_trig_vec = jax.jit(jax.vmap(E_solve_trig, in_axes=(0, 0)))
 
 
 def solve_trig(M, e):
@@ -134,9 +132,7 @@ def solve_trig(M, e):
 
 solve_trig_jit = jax.jit(solve_trig)
 
-solve_trig_vec = jax.jit(
-    jax.vmap(lambda M_row, e: solve_trig(M_row, e), in_axes=(0, 0))
-)
+solve_trig_vec = jax.jit(jax.vmap(solve_trig, in_axes=(0, 0)))
 
 
 @jax.custom_vjp
@@ -189,7 +185,7 @@ diff_solve_trig.defvjp(_diff_solve_trig_fwd, _diff_solve_trig_bwd)
 def shortsin(x):
     """Approximates the sine function using a short polynomial.
 
-    This is only valid between [0, π].
+    This is only valid between [0, pi].
     """
     x2 = x * x
     return x * (
@@ -349,7 +345,6 @@ def init_E_poly(M, e):
     sqrt_ome = lax.sqrt(ome)
     chi = M / (sqrt_ome * ome)
     Lam = lax.sqrt(8.0 + 9.0 * chi**2)
-    # S = lax.cbrt(Lam + 3.0 * chi)
     S = (Lam + 3.0 * chi) ** (1.0 / 3.0)
     S_squared = S * S
     sigma = 6.0 * chi / (2.0 + S_squared + 4.0 / S_squared)
@@ -372,11 +367,11 @@ def init_E_poly(M, e):
 
 def init_E_coeffs(M: jnp.ndarray, bounds: jnp.ndarray, coeffs: jnp.ndarray):
     """Create the initial guess for the eccentric anomaly using the polynomials."""
-    # j_inds = jnp.searchsorted(bounds, M, side="right") - 1
     # Clamp to the valid coefficient rows [0, n_bins - 1]. At bit-exact
     # M = pi (== bounds[-1]) jnp.digitize returns len(bounds), which would
     # otherwise gather the (clamped) last row with dx measured from the wrong
-    # bound, collapsing the guess to 11*pi/12 (orbix-kepler-mpi-defect).
+    # bound, collapsing the guess to 11*pi/12 (found 2026-07; covered by the
+    # M = pi cases in tests/test_kepler_core.py).
     n_bins = coeffs.shape[0]
     j_inds = jnp.clip(jnp.digitize(M, bounds) - 1, 0, n_bins - 1)
     dx = M - bounds[j_inds]
@@ -385,7 +380,7 @@ def init_E_coeffs(M: jnp.ndarray, bounds: jnp.ndarray, coeffs: jnp.ndarray):
         + dx
         * (
             coeffs[j_inds, 2]
-            + +dx
+            + dx
             * (coeffs[j_inds, 3] + dx * (coeffs[j_inds, 4] + dx * coeffs[j_inds, 5]))
         )
     )
@@ -600,5 +595,4 @@ def identity_solver_trig(M, e):
     sinM, cosM = fast_sinE_cosE(_M)
     # Adjust sign of sine based on original quadrant and return
     sinM = Esigns * sinM
-    cosM = cosM
     return M, sinM, cosM

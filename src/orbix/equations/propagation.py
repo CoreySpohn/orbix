@@ -99,17 +99,17 @@ def system_r(A_mat_b, B_mat_b, e_vec_b, sinE_mat, cosE_mat):
 
 
 def single_r(A, B, e, sinE, cosE):
-    """Calculate position vector for a single planet at a single time.
+    """Calculate position vectors for a single planet over ntimes times.
 
     Args:
-        A (jax.Array): A matrix (3)
-        B (jax.Array): B matrix (3)
-        e (float): eccentricity ()
-        sinE (float): sine of the eccentric anomaly (ntimes)
-        cosE (float): cosine of the eccentric anomaly (ntimes)
+        A (jax.Array): A matrix. Shape (3,).
+        B (jax.Array): B matrix. Shape (3,).
+        e (float): eccentricity (scalar).
+        sinE (jax.Array): sine of the eccentric anomaly. Shape (ntimes,).
+        cosE (jax.Array): cosine of the eccentric anomaly. Shape (ntimes,).
 
     Returns:
-        r (jax.Array): position vector (3, 1)
+        r (jax.Array): position vectors. Shape (3, ntimes).
     """
     # Need to broadcast A, B to (3, 1) and sin/cos to (1, ntimes)
     return A[:, None] * (cosE[None, :] - e) + B[:, None] * sinE[None, :]

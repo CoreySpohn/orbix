@@ -19,6 +19,10 @@ __all__ = [
     "system_r_v",
     "system_r",
     "single_r",
+    "single_r_v",
+    # Phase functions
+    "lambert_phase_exact",
+    "lambert_phase_poly",
 ]
 
 from .orbit import (
@@ -36,4 +40,5 @@ from .orbit import (
     thiele_innes_constants,
     thiele_innes_constants_reduced,
 )
-from .propagation import single_r, system_r, system_r_v
+from .phase import lambert_phase_exact, lambert_phase_poly
+from .propagation import single_r, single_r_v, system_r, system_r_v

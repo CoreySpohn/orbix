@@ -27,7 +27,7 @@ class TestSolarSystemEphemerides:
     """Test Vallado ephemerides against expected values."""
 
     def test_obliquity_j2000(self):
-        """Obliquity at J2000 should be ~23.439°."""
+        """Obliquity at J2000 should be ~23.439 deg."""
         obl = obliquity_deg(51544.5)
         assert jnp.isclose(obl, 23.439279, atol=1e-4)
 
@@ -55,7 +55,7 @@ class TestSolarSystemEphemerides:
         assert 4.9 < float(dist) < 5.5
 
     def test_equat_eclip_roundtrip(self):
-        """Equatorial ↔ ecliptic conversion should roundtrip."""
+        """Equatorial <-> ecliptic conversion should roundtrip."""
         r_orig = jnp.array([1.0, 0.5, 0.3])
         mjd = 51544.5
         r_eclip = equat2eclip(r_orig, mjd)
@@ -80,8 +80,8 @@ class TestSolarSystemEphemerides:
             planet_position_ecliptic("Earth", jnp.array([51544.5, 51545.5]))
 
     def test_radec_to_ecliptic(self):
-        """RA/Dec → ecliptic at ecliptic pole: lat should be ~90°."""
-        # North ecliptic pole in J2000 equatorial: RA=270°, Dec=66.56°
+        """RA/Dec -> ecliptic at ecliptic pole: lat should be ~90 deg."""
+        # North ecliptic pole in J2000 equatorial: RA=270deg, Dec=66.56deg
         ra = jnp.radians(270.0)
         dec = jnp.radians(66.56)
         _, beta = radec_to_ecliptic(ra, dec, 51544.5)
@@ -117,7 +117,7 @@ class TestObservatoryL2Halo:
         assert 0.4 < obs.period_yr < 0.6
 
     def test_sun_angle_range(self, obs):
-        """Sun angle should be in [0, π]."""
+        """Sun angle should be in [0, pi]."""
         angle = obs.sun_angle(51544.5, 0.0, 0.5)
         assert 0.0 <= float(angle) <= jnp.pi
 

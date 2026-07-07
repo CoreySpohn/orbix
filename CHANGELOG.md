@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased -- descope
+
+### Removed / moved (not a release-please entry; folded into the next release notes)
+
+* Orbit fitting (the `fitting` module and its `numpyro` extra) moved to photomancy.
+* `Planets`/`System`/`Star` and the EXOSIMS integration moved to exosims-plugins.
+* Zodiacal photometry moved to skyscapes.
+* `quasi_random` (the vendored Roberts quasi-random sequence) moved to photomancy.
+* The broken predict/pdet functions and the `discrete_e` factory were removed
+  (they did not work correctly and had no working callers).
+
 ## [0.9.0](https://github.com/CoreySpohn/orbix/compare/v0.8.0...v0.9.0) (2026-06-23)
 
 

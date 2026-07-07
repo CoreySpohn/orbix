@@ -7,7 +7,7 @@ This module is a pure-JAX port of the ``keplerplanet`` method in
 
 Reference:
     Vallado, D. A. (2013). Fundamentals of Astrodynamics and Applications.
-    Appendix D.4 — Planetary ephemerides.
+    Appendix D.4 -- Planetary ephemerides.
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ def _rot3(theta: float) -> jnp.ndarray:
 
 
 def equat2eclip(r_equat: jnp.ndarray, mjd: float) -> jnp.ndarray:
-    """Rotate heliocentric equatorial → ecliptic.
+    """Rotate heliocentric equatorial -> ecliptic.
 
     Args:
         r_equat: Position vector(s) in equatorial frame, shape ``(3,)`` or ``(n, 3)``.
@@ -93,7 +93,7 @@ def equat2eclip(r_equat: jnp.ndarray, mjd: float) -> jnp.ndarray:
 
 
 def eclip2equat(r_eclip: jnp.ndarray, mjd: float) -> jnp.ndarray:
-    """Rotate heliocentric ecliptic → equatorial.
+    """Rotate heliocentric ecliptic -> equatorial.
 
     Args:
         r_eclip: Position vector(s) in ecliptic frame, shape ``(3,)`` or ``(n, 3)``.
@@ -228,14 +228,14 @@ def _eval_elements(coeffs: jnp.ndarray, TDB: float) -> jnp.ndarray:
     """Evaluate all 6 orbital element polynomials at once.
 
     Args:
-        coeffs: Shape ``(6, NCOEFF)`` — rows are [a, e, I, O, w, lM].
+        coeffs: Shape ``(6, NCOEFF)`` -- rows are [a, e, I, O, w, lM].
         TDB: Julian centuries since J2000.
 
     Returns:
-        Shape ``(6,)`` — [a, e, I_deg, O_deg, w_deg, lM_deg].
+        Shape ``(6,)`` -- [a, e, I_deg, O_deg, w_deg, lM_deg].
     """
     TDB_powers = jnp.array([1.0, TDB, TDB**2, TDB**3])
-    return coeffs @ TDB_powers  # (6, 4) @ (4,) → (6,)
+    return coeffs @ TDB_powers  # (6, 4) @ (4,) -> (6,)
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +246,7 @@ def _eval_elements(coeffs: jnp.ndarray, TDB: float) -> jnp.ndarray:
 def planet_position_ecliptic(body: str, mjd: float) -> jnp.ndarray:
     """Heliocentric ecliptic position of a solar system body.
 
-    Uses Vallado (2013) Algorithms 2 and 10 — Keplerian elements propagated
+    Uses Vallado (2013) Algorithms 2 and 10 -- Keplerian elements propagated
     with polynomial time corrections.  All 6 orbital elements are evaluated
     in a single vectorized ``matmul``.
 

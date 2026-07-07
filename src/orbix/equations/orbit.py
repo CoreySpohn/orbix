@@ -198,8 +198,6 @@ def AB_matrices_reduced(a, sqrt_one_minus_e2, sini, cosi, sinW, cosW, sinw, cosw
         cosW: Cosine of the longitude of the ascending node
         sinw: Sine of the argument of periapsis
         cosw: Cosine of the argument of periapsis
-        sinwcosi: Sine of the argument of periapsis times cosine of the inclination
-        coswcosi: Cosine of the argument of periapsis times cosine of the inclination
     Returns:
         A: jnp.ndarray
             A matrix
@@ -300,15 +298,22 @@ def state_vector_to_keplerian(r, v, mu):
     Robust implementation handling edge cases (circular, equatorial,
     and non-bound orbits) using ``jnp.where`` for JIT compatibility.
 
+    Unit-agnostic: ``r``, ``v``, and ``mu`` must be expressed in one
+    consistent unit system (e.g. meters / m/s / m^3 s^-2, or the AU / day
+    units used elsewhere in this library); the function does not enforce
+    or convert any particular convention, and ``a`` is returned in the
+    same length unit as ``r``.
+
     Args:
-        r: Stellar-centric position vector ``(3,)`` in meters.
-        v: Stellar-centric velocity vector ``(3,)`` in m/s.
-        mu: Gravitational parameter ``G * M_total`` in m^3/s^2.
+        r: Stellar-centric position vector ``(3,)``.
+        v: Stellar-centric velocity vector ``(3,)``.
+        mu: Gravitational parameter ``G * M_total``.
 
     Returns:
-        tuple: ``(a, e, i, W, w, M)`` — semi-major axis [m],
-            eccentricity, inclination [rad], longitude of ascending
-            node [rad], argument of periapsis [rad], mean anomaly [rad].
+        tuple: ``(a, e, i, W, w, M)`` -- semi-major axis (same length
+            unit as ``r``), eccentricity, inclination [rad], longitude of
+            ascending node [rad], argument of periapsis [rad], mean
+            anomaly [rad].
     """
     r_mag = jnp.linalg.norm(r)
     v_mag = jnp.linalg.norm(v)
