@@ -275,6 +275,25 @@ def thiele_innes_constants_reduced(sinW, cosW, sinw, cosw, sinwcosi, coswcosi):
     return A, B, F, G
 
 
+_TOL_E = 1e-9
+_TOL_N = 1e-9
+_ARC_EPS = 1e-7
+
+
+def _safe_norm(x):
+    """Vector norm with a finite (zero) gradient at ``x == 0``.
+
+    ``jnp.linalg.norm`` has a NaN gradient at exactly the zero vector
+    (``x / norm(x)`` is ``0 / 0`` there). This computes the same value
+    but evaluates the norm on a nonzero stand-in whenever ``x`` is zero,
+    so the local derivative is finite; the ``jnp.where`` then zeroes the
+    corresponding cotangent, giving a well-defined (zero) gradient.
+    """
+    is_zero = jnp.all(x == 0.0)
+    x_safe = jnp.where(is_zero, jnp.ones_like(x), x)
+    return jnp.where(is_zero, 0.0, jnp.linalg.norm(x_safe))
+
+
 def state_vector_to_keplerian(r, v, mu):
     """Convert state vectors (r, v) to Keplerian elements using JAX.
 
@@ -295,32 +314,47 @@ def state_vector_to_keplerian(r, v, mu):
     v_mag = jnp.linalg.norm(v)
 
     h = jnp.cross(r, v)
-    h_mag = jnp.linalg.norm(h)
+    h_mag = _safe_norm(h)
+    h_mag_safe = jnp.where(h_mag > _TOL_N, h_mag, 1.0)
 
-    i = jnp.arccos(jnp.clip(h[2] / h_mag, -1.0, 1.0))
+    i = jnp.arccos(jnp.clip(h[2] / h_mag_safe, -1.0 + _ARC_EPS, 1.0 - _ARC_EPS))
 
     k = jnp.array([0.0, 0.0, 1.0])
     n = jnp.cross(k, h)
-    n_mag = jnp.linalg.norm(n)
+    n_mag = _safe_norm(n)
 
     e_vec = (1 / mu) * ((v_mag**2 - mu / r_mag) * r - jnp.dot(r, v) * v)
-    e = jnp.linalg.norm(e_vec)
+    e = _safe_norm(e_vec)
 
     E_energy = 0.5 * v_mag**2 - mu / r_mag
-    a = jnp.where(jnp.abs(E_energy) > 1e-10, -mu / (2 * E_energy), jnp.inf)
+    E_energy_safe = jnp.where(jnp.abs(E_energy) > 1e-10, E_energy, 1.0)
+    a = jnp.where(jnp.abs(E_energy) > 1e-10, -mu / (2 * E_energy_safe), jnp.inf)
 
-    TOL_E = 1e-9
-    TOL_I = 1e-9
+    TOL_E = _TOL_E
+    TOL_I = _TOL_N
     is_circular = e < TOL_E
     is_inclined = n_mag > TOL_I
 
-    W = jnp.where(is_inclined, jnp.arctan2(n[1], n[0]), 0.0)
+    n0_safe = jnp.where(is_inclined, n[0], 1.0)
+    n1_safe = jnp.where(is_inclined, n[1], 0.0)
+    W = jnp.where(is_inclined, jnp.arctan2(n1_safe, n0_safe), 0.0)
 
-    cos_w = jnp.dot(n, e_vec) / (n_mag * e)
-    w_inclined = jnp.arccos(jnp.clip(cos_w, -1.0, 1.0))
+    e_safe = jnp.where(e > _TOL_E, e, 1.0)
+    n_mag_safe = jnp.where(n_mag > _TOL_N, n_mag, 1.0)
+
+    cos_w = jnp.where(
+        is_circular | ~is_inclined,
+        0.0,
+        jnp.dot(n, e_vec) / (n_mag_safe * e_safe),
+    )
+    w_inclined = jnp.arccos(jnp.clip(cos_w, -1.0 + _ARC_EPS, 1.0 - _ARC_EPS))
     w_inclined = jnp.where(e_vec[2] < 0, 2 * jnp.pi - w_inclined, w_inclined)
 
-    w_equatorial = jnp.arctan2(e_vec[1], e_vec[0])
+    e_xy_mag = jnp.sqrt(e_vec[0] ** 2 + e_vec[1] ** 2)
+    is_e_xy_safe = e_xy_mag > _TOL_E
+    ex_safe = jnp.where(is_e_xy_safe, e_vec[0], 1.0)
+    ey_safe = jnp.where(is_e_xy_safe, e_vec[1], 0.0)
+    w_equatorial = jnp.arctan2(ey_safe, ex_safe)
     w_equatorial = w_equatorial * jnp.sign(h[2])
 
     w = jnp.where(
@@ -329,19 +363,31 @@ def state_vector_to_keplerian(r, v, mu):
         jnp.where(is_inclined, w_inclined, w_equatorial),
     )
 
-    cos_nu = jnp.dot(e_vec, r) / (e * r_mag)
-    nu_elliptical = jnp.arccos(jnp.clip(cos_nu, -1.0, 1.0))
+    cos_nu = jnp.where(
+        is_circular,
+        0.0,
+        jnp.dot(e_vec, r) / (e_safe * r_mag),
+    )
+    nu_elliptical = jnp.arccos(jnp.clip(cos_nu, -1.0 + _ARC_EPS, 1.0 - _ARC_EPS))
     nu_elliptical = jnp.where(
         jnp.dot(r, v) < 0,
         2 * jnp.pi - nu_elliptical,
         nu_elliptical,
     )
 
-    cos_u = jnp.dot(n, r) / (n_mag * r_mag)
-    u_inclined = jnp.arccos(jnp.clip(cos_u, -1.0, 1.0))
+    cos_u = jnp.where(
+        ~is_inclined,
+        0.0,
+        jnp.dot(n, r) / (n_mag_safe * r_mag),
+    )
+    u_inclined = jnp.arccos(jnp.clip(cos_u, -1.0 + _ARC_EPS, 1.0 - _ARC_EPS))
     u_inclined = jnp.where(r[2] < 0, 2 * jnp.pi - u_inclined, u_inclined)
 
-    nu_equatorial = jnp.arctan2(r[1], r[0])
+    r_xy_mag = jnp.sqrt(r[0] ** 2 + r[1] ** 2)
+    is_r_xy_safe = r_xy_mag > _TOL_N
+    rx_safe = jnp.where(is_r_xy_safe, r[0], 1.0)
+    ry_safe = jnp.where(is_r_xy_safe, r[1], 0.0)
+    nu_equatorial = jnp.arctan2(ry_safe, rx_safe)
     nu_equatorial = nu_equatorial * jnp.sign(h[2])
 
     nu = jnp.where(
