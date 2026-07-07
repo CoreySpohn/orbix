@@ -15,7 +15,7 @@ from orbix.observatory import (
     mag_to_flux_jy,
     zodi_color_correction,
 )
-from orbix.system.solar_system import (
+from orbix.observatory.solar_system import (
     earth_position_ecliptic,
     eclip2equat,
     equat2eclip,
@@ -74,6 +74,16 @@ class TestSolarSystemEphemerides:
         r = f(51544.5)
         assert r.shape == (3,)
         assert jnp.isfinite(r).all()
+
+    def test_planet_position_ecliptic_scalar_mjd_ok(self):
+        """Scalar mjd should work as before."""
+        r = planet_position_ecliptic("Earth", 51544.5)
+        assert r.shape == (3,)
+
+    def test_planet_position_ecliptic_array_mjd_raises(self):
+        """Array mjd should raise instead of silently returning wrong results."""
+        with pytest.raises(ValueError):
+            planet_position_ecliptic("Earth", jnp.array([51544.5, 51545.5]))
 
     def test_radec_to_ecliptic(self):
         """RA/Dec → ecliptic at ecliptic pole: lat should be ~90°."""

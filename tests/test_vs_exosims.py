@@ -19,10 +19,10 @@ from orbix.observatory import (
     zodi_fzodi_ayo,
     zodi_fzodi_leinert,
 )
-from orbix.system.solar_system import (
+from orbix.observatory.solar_system import (
     obliquity_deg as orbix_obliquity,
 )
-from orbix.system.solar_system import (
+from orbix.observatory.solar_system import (
     planet_position_ecliptic as orbix_planet,
 )
 

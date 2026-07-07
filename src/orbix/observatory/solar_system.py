@@ -257,6 +257,12 @@ def planet_position_ecliptic(body: str, mjd: float) -> jnp.ndarray:
     Returns:
         Position vector in heliocentric ecliptic frame (AU), shape ``(3,)``.
     """
+    mjd = jnp.asarray(mjd)
+    if mjd.ndim != 0:
+        raise ValueError(
+            "planet_position_ecliptic takes a scalar mjd; vmap over times instead"
+        )
+
     coeffs = _EPHEM[body]  # (6, 4) JAX array
     TDB = _mjd_to_julian_centuries(mjd)
 

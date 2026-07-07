@@ -1,6 +1,6 @@
 """Base planet model.
 
-Composes :class:`orbix.system.orbit.KeplerianOrbit` for geometric
+Composes :class:`orbix.orbit.KeplerianOrbit` for geometric
 propagation; RV-specific derived quantities (semi-amplitude, minimum
 mass, ``secosw`` / ``sesinw``) live on ``Planets`` for the orbit-only
 fitting pipeline.
@@ -27,8 +27,7 @@ from jaxtyping import Array
 
 import orbix.equations.orbit as oe
 from orbix.equations.phase import lambert_phase_exact
-
-from .orbit import AbstractOrbit, KeplerianOrbit
+from orbix.orbit import AbstractOrbit, KeplerianOrbit
 
 
 @jit

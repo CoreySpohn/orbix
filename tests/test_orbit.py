@@ -1,4 +1,4 @@
-"""Tests for orbix.system.orbit (AbstractOrbit, KeplerianOrbit)."""
+"""Tests for orbix.orbit (AbstractOrbit, KeplerianOrbit)."""
 
 import jax
 import jax.numpy as jnp
@@ -8,7 +8,7 @@ import pytest
 
 def test_abstract_orbit_cannot_instantiate():
     """AbstractOrbit is abstract and must not be directly instantiable."""
-    from orbix.system.orbit import AbstractOrbit
+    from orbix.orbit import AbstractOrbit
 
     with pytest.raises(TypeError):
         AbstractOrbit()
@@ -32,7 +32,7 @@ def _earthlike_orbit_params():
 
 def test_keplerian_orbit_construction():
     """KeplerianOrbit stores orbital elements as unit-suffixed arrays."""
-    from orbix.system.orbit import KeplerianOrbit
+    from orbix.orbit import KeplerianOrbit
 
     params = _earthlike_orbit_params()
     orbit = KeplerianOrbit(**params)
@@ -48,7 +48,7 @@ def test_keplerian_orbit_construction():
 
 def test_keplerian_orbit_AB_computes_matrices():
     """KeplerianOrbit._AB() computes A_AU, B_AU (shape (3, K)) on demand."""
-    from orbix.system.orbit import KeplerianOrbit
+    from orbix.orbit import KeplerianOrbit
 
     orbit = KeplerianOrbit(**_earthlike_orbit_params())
     A_AU, B_AU = orbit._AB()
@@ -61,7 +61,7 @@ def test_keplerian_orbit_AB_computes_matrices():
 def test_keplerian_orbit_AB_matches_equations_helper():
     """AB matrices match the AB_matrices_reduced helper byte-for-byte."""
     from orbix.equations.orbit import AB_matrices_reduced
-    from orbix.system.orbit import KeplerianOrbit
+    from orbix.orbit import KeplerianOrbit
 
     params = _earthlike_orbit_params()
     orbit = KeplerianOrbit(**params)
@@ -95,7 +95,7 @@ def test_propagate_returns_three_arrays_with_expected_shapes():
     Verifies the documented (K, 3, T) / (K, T) / (K, T) shape contract.
     """
     from orbix.kepler.shortcuts.grid import get_grid_solver
-    from orbix.system.orbit import KeplerianOrbit
+    from orbix.orbit import KeplerianOrbit
 
     orbit = KeplerianOrbit(**_earthlike_orbit_params())
     trig_solver = get_grid_solver(level="scalar", E=False, trig=True, jit=True)
@@ -116,7 +116,7 @@ def test_propagate_returns_three_arrays_with_expected_shapes():
 def test_propagate_distance_matches_kepler_formula():
     """dist_AU at true anomaly 0 (periapsis) is a*(1-e)."""
     from orbix.kepler.shortcuts.grid import get_grid_solver
-    from orbix.system.orbit import KeplerianOrbit
+    from orbix.orbit import KeplerianOrbit
 
     params = _earthlike_orbit_params()
     orbit = KeplerianOrbit(**params)
@@ -136,7 +136,7 @@ def test_propagate_distance_matches_kepler_formula():
 def test_propagate_raises_without_Ms_kg_keyword():
     """Ms_kg is keyword-only; positional pass must fail."""
     from orbix.kepler.shortcuts.grid import get_grid_solver
-    from orbix.system.orbit import KeplerianOrbit
+    from orbix.orbit import KeplerianOrbit
 
     orbit = KeplerianOrbit(**_earthlike_orbit_params())
     trig_solver = get_grid_solver(level="scalar", E=False, trig=True, jit=True)
@@ -152,7 +152,7 @@ def test_keplerian_orbit_parity_with_planets_internal_prop():
     Shared physics, different API.
     """
     from orbix.kepler.shortcuts.grid import get_grid_solver
-    from orbix.system.orbit import KeplerianOrbit
+    from orbix.orbit import KeplerianOrbit
     from orbix.system.planets import Planets
 
     params = _earthlike_orbit_params()
@@ -190,7 +190,7 @@ def test_keplerian_orbit_parity_with_planets_internal_prop():
 
 def test_planets_exposes_orbit_field():
     """After refactor, Planets holds an AbstractOrbit."""
-    from orbix.system.orbit import AbstractOrbit, KeplerianOrbit
+    from orbix.orbit import AbstractOrbit, KeplerianOrbit
     from orbix.system.planets import Planets
 
     params = _earthlike_orbit_params()
@@ -216,7 +216,7 @@ def test_planets_exposes_orbit_field():
 def test_planets_propagation_matches_standalone_orbit():
     """Planets.prop_AU agrees with standalone KeplerianOrbit.propagate."""
     from orbix.kepler.shortcuts.grid import get_grid_solver
-    from orbix.system.orbit import KeplerianOrbit
+    from orbix.orbit import KeplerianOrbit
     from orbix.system.planets import Planets
 
     params = _earthlike_orbit_params()
@@ -250,7 +250,7 @@ def test_planets_propagation_matches_standalone_orbit():
 def test_position_arcsec_shape_and_units():
     """position_arcsec returns (RA_arcsec, Dec_arcsec) each (K, T)."""
     from orbix.kepler.shortcuts.grid import get_grid_solver
-    from orbix.system.orbit import KeplerianOrbit
+    from orbix.orbit import KeplerianOrbit
 
     orbit = KeplerianOrbit(**_earthlike_orbit_params())
     trig_solver = get_grid_solver(level="scalar", E=False, trig=True, jit=True)
@@ -274,7 +274,7 @@ def test_tree_at_e_update_recomputes_AB():
     import equinox as eqx
 
     from orbix.kepler.shortcuts.grid import get_grid_solver
-    from orbix.system.orbit import KeplerianOrbit
+    from orbix.orbit import KeplerianOrbit
 
     solver = get_grid_solver(level="scalar", E=False, trig=True, jit=True)
     others = dict(
@@ -318,7 +318,7 @@ def _scalar_diff_solve_trig(M, e):
 
 def test_grad_wrt_eccentricity_is_finite_and_nonzero():
     """Gradient of separation w.r.t. eccentricity is finite and nonzero."""
-    from orbix.system.orbit import KeplerianOrbit
+    from orbix.orbit import KeplerianOrbit
 
     def sep(e_val):
         orbit = KeplerianOrbit(
@@ -341,7 +341,7 @@ def test_grad_wrt_eccentricity_is_finite_and_nonzero():
 
 def test_phase_angle_grad_finite_at_conjunction():
     """Phase-angle gradient w.r.t. inclination is finite at conjunction."""
-    from orbix.system.orbit import KeplerianOrbit
+    from orbix.orbit import KeplerianOrbit
 
     def phase_sum(i_val):
         orbit = KeplerianOrbit(
@@ -364,7 +364,7 @@ def test_phase_angle_grad_finite_at_conjunction():
 
 def test_mismatched_leading_axes_raise_at_construction():
     """Mismatched leading-axis shapes raise ValueError at construction."""
-    from orbix.system.orbit import KeplerianOrbit
+    from orbix.orbit import KeplerianOrbit
 
     with pytest.raises(ValueError):
         KeplerianOrbit(
@@ -381,7 +381,7 @@ def test_mismatched_leading_axes_raise_at_construction():
 def test_separation_arcsec_matches_projected_distance():
     """separation_arcsec == sqrt(RA^2 + Dec^2) from position_arcsec."""
     from orbix.kepler.shortcuts.grid import get_grid_solver
-    from orbix.system.orbit import KeplerianOrbit
+    from orbix.orbit import KeplerianOrbit
 
     orbit = KeplerianOrbit(**_earthlike_orbit_params())
     trig_solver = get_grid_solver(level="scalar", E=False, trig=True, jit=True)

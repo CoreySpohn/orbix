@@ -10,7 +10,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 from jaxtyping import Array
 
-from orbix.system.solar_system import (
+from orbix.observatory.solar_system import (
     earth_position_ecliptic,
     radec_to_ecliptic,
 )
