@@ -60,59 +60,48 @@ class AbstractOrbit(eqx.Module):
 class KeplerianOrbit(AbstractOrbit):
     """Seven-element Keplerian orbit.
 
-    Owns the orbital elements (``a_AU``, ``e``, ``W_rad``,
-    ``i_rad``, ``w_rad``, ``M0_rad``, ``t0_d``) and caches the
-    AB propagation matrices. Stellar context (``Ms_kg``) is
-    passed keyword-only into ``propagate``.
-
-    All parameter arrays share a leading axis ``(K,)`` -- ``K=1``
-    for simulation, ``K=N`` for a posterior cloud of N orbits.
+    Owns the orbital elements only; everything derived (AB matrices,
+    mean motion, period) is recomputed per call so that ``eqx.tree_at``
+    updates and gradients through any element are always consistent.
+    All parameter arrays share a leading axis ``(K,)``.
     """
 
-    a_AU: Array
-    e: Array
-    W_rad: Array
-    i_rad: Array
-    w_rad: Array
-    M0_rad: Array
-    t0_d: Array
+    a_AU: Array = eqx.field(converter=jnp.atleast_1d)
+    e: Array = eqx.field(converter=jnp.atleast_1d)
+    W_rad: Array = eqx.field(converter=jnp.atleast_1d)
+    i_rad: Array = eqx.field(converter=jnp.atleast_1d)
+    w_rad: Array = eqx.field(converter=jnp.atleast_1d)
+    M0_rad: Array = eqx.field(converter=jnp.atleast_1d)
+    t0_d: Array = eqx.field(converter=jnp.atleast_1d)
 
-    # Cached shape-only derived state
-    A_AU: Array
-    B_AU: Array
+    def __check_init__(self):
+        """Validate that all seven elements share one leading (K,) shape."""
+        shapes = {
+            self.a_AU.shape,
+            self.e.shape,
+            self.W_rad.shape,
+            self.i_rad.shape,
+            self.w_rad.shape,
+            self.M0_rad.shape,
+            self.t0_d.shape,
+        }
+        if len(shapes) != 1:
+            raise ValueError(
+                f"KeplerianOrbit elements must share one (K,) shape, got {shapes}"
+            )
 
-    def __init__(
-        self,
-        a_AU: Array,
-        e: Array,
-        W_rad: Array,
-        i_rad: Array,
-        w_rad: Array,
-        M0_rad: Array,
-        t0_d: Array,
-    ):
-        """Store orbital elements and cache the AB propagation matrices."""
-        self.a_AU = a_AU
-        self.e = e
-        self.W_rad = W_rad
-        self.i_rad = i_rad
-        self.w_rad = w_rad
-        self.M0_rad = M0_rad
-        self.t0_d = t0_d
-
-        sqrt_1me2 = jnp.sqrt(1 - e**2)
-        sini, cosi = jnp.sin(i_rad), jnp.cos(i_rad)
-        sinW, cosW = jnp.sin(W_rad), jnp.cos(W_rad)
-        sinw, cosw = jnp.sin(w_rad), jnp.cos(w_rad)
-        self.A_AU, self.B_AU = AB_matrices_reduced(
-            a_AU,
+    def _AB(self) -> tuple[Array, Array]:
+        """Compute the AB propagation matrices from the current elements."""
+        sqrt_1me2 = jnp.sqrt(1 - self.e**2)
+        return AB_matrices_reduced(
+            self.a_AU,
             sqrt_1me2,
-            sini,
-            cosi,
-            sinW,
-            cosW,
-            sinw,
-            cosw,
+            jnp.sin(self.i_rad),
+            jnp.cos(self.i_rad),
+            jnp.sin(self.W_rad),
+            jnp.cos(self.W_rad),
+            jnp.sin(self.w_rad),
+            jnp.cos(self.w_rad),
         )
 
     def propagate(
@@ -126,10 +115,13 @@ class KeplerianOrbit(AbstractOrbit):
 
         Returns:
             r_AU: (K, 3, T) position vectors.
-            phase_angle_rad: (K, T) phase angle beta = arccos(r_z / |r|).
+            phase_angle_rad: (K, T) phase angle beta = arctan2(rho, r_z),
+                rho = sqrt(r_x**2 + r_y**2); gradient-safe at conjunction.
             dist_AU: (K, T) star-planet distance.
         """
         t_jd = jnp.atleast_1d(t_jd)
+
+        A_AU, B_AU = self._AB()
 
         # Derived quantities that depend on stellar context
         mu = G * Ms_kg
@@ -147,8 +139,8 @@ class KeplerianOrbit(AbstractOrbit):
 
         # Position shape (K, 3, T)
         r_AU = jax.vmap(single_r, (1, 1, 0, 0, 0))(
-            self.A_AU,
-            self.B_AU,
+            A_AU,
+            B_AU,
             self.e,
             sinE,
             cosE,
@@ -158,9 +150,10 @@ class KeplerianOrbit(AbstractOrbit):
         # d = a * (1 - e * cosE)
         dist_AU = self.a_AU[:, None] * (1.0 - self.e[:, None] * cosE)
 
-        # Phase angle: cos(beta) = r_z / d, clipped for fp safety.
-        cosbeta = jnp.clip(r_AU[:, 2] / dist_AU, -1.0, 1.0)
-        phase_angle_rad = jnp.arccos(cosbeta)
+        # Phase angle beta = angle from the +z (observer) axis.
+        # arctan2 avoids the arccos(clip(...)) NaN-gradient at conjunction.
+        rho = jnp.sqrt(r_AU[:, 0] ** 2 + r_AU[:, 1] ** 2)
+        phase_angle_rad = jnp.arctan2(rho, r_AU[:, 2])
 
         return r_AU, phase_angle_rad, dist_AU
 

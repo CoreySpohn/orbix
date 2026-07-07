@@ -1,5 +1,6 @@
 """Tests for orbix.system.orbit (AbstractOrbit, KeplerianOrbit)."""
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -45,13 +46,16 @@ def test_keplerian_orbit_construction():
     np.testing.assert_allclose(orbit.t0_d, params["t0_d"])
 
 
-def test_keplerian_orbit_caches_AB_matrices():
-    """KeplerianOrbit computes and caches A_AU, B_AU (shape (3, K))."""
+def test_keplerian_orbit_AB_computes_matrices():
+    """KeplerianOrbit._AB() computes A_AU, B_AU (shape (3, K)) on demand."""
     from orbix.system.orbit import KeplerianOrbit
 
     orbit = KeplerianOrbit(**_earthlike_orbit_params())
-    assert orbit.A_AU.shape == (3, 1)
-    assert orbit.B_AU.shape == (3, 1)
+    A_AU, B_AU = orbit._AB()
+    assert A_AU.shape == (3, 1)
+    assert B_AU.shape == (3, 1)
+    assert not hasattr(orbit, "A_AU")
+    assert not hasattr(orbit, "B_AU")
 
 
 def test_keplerian_orbit_AB_matches_equations_helper():
@@ -80,8 +84,9 @@ def test_keplerian_orbit_AB_matches_equations_helper():
         cosw,
     )
 
-    np.testing.assert_allclose(orbit.A_AU, A_expected)
-    np.testing.assert_allclose(orbit.B_AU, B_expected)
+    A_AU, B_AU = orbit._AB()
+    np.testing.assert_allclose(A_AU, A_expected)
+    np.testing.assert_allclose(B_AU, B_expected)
 
 
 def test_propagate_returns_three_arrays_with_expected_shapes():
@@ -262,6 +267,115 @@ def test_position_arcsec_shape_and_units():
     )
     assert ra.shape == (1, 5)
     assert dec.shape == (1, 5)
+
+
+def test_tree_at_e_update_recomputes_AB():
+    """eqx.tree_at on ``e`` recomputes AB from current elements, not a stale cache."""
+    import equinox as eqx
+
+    from orbix.kepler.shortcuts.grid import get_grid_solver
+    from orbix.system.orbit import KeplerianOrbit
+
+    solver = get_grid_solver(level="scalar", E=False, trig=True, jit=True)
+    others = dict(
+        a_AU=jnp.array([1.0]),
+        W_rad=jnp.array([0.3]),
+        i_rad=jnp.array([0.5]),
+        w_rad=jnp.array([0.7]),
+        M0_rad=jnp.array([0.2]),
+        t0_d=jnp.array([0.0]),
+    )
+    orbit = KeplerianOrbit(e=jnp.array([0.1]), **others)
+    bumped = eqx.tree_at(lambda o: o.e, orbit, jnp.array([0.4]))
+    fresh = KeplerianOrbit(e=jnp.array([0.4]), **others)
+
+    # B scales with sqrt(1 - e**2); a stale cache would keep the e=0.1 B matrix.
+    A_bump, B_bump = bumped._AB()
+    A_fresh, B_fresh = fresh._AB()
+    _, B_old = orbit._AB()
+    assert jnp.allclose(A_bump, A_fresh) and jnp.allclose(B_bump, B_fresh)
+    assert not jnp.allclose(B_bump, B_old)
+
+    # End-to-end propagation must match a freshly built orbit exactly.
+    t = jnp.array([100.0])
+    Ms = jnp.array([2.0e30])
+    r_bump, _, _ = bumped.propagate(solver, t, Ms_kg=Ms)
+    r_fresh, _, _ = fresh.propagate(solver, t, Ms_kg=Ms)
+    assert jnp.allclose(r_bump, r_fresh)
+
+
+def _scalar_diff_solve_trig(M, e):
+    """Adapt array-shaped ``diff_solve_trig`` to the scalar-solver contract.
+
+    Round-trips through ``jnp.atleast_1d``; a test-only shim, not a
+    KeplerianOrbit change.
+    """
+    from orbix.kepler.core import diff_solve_trig
+
+    sinE, cosE = diff_solve_trig(jnp.atleast_1d(M), e)
+    return sinE[0], cosE[0]
+
+
+def test_grad_wrt_eccentricity_is_finite_and_nonzero():
+    """Gradient of separation w.r.t. eccentricity is finite and nonzero."""
+    from orbix.system.orbit import KeplerianOrbit
+
+    def sep(e_val):
+        orbit = KeplerianOrbit(
+            a_AU=jnp.array([1.0]),
+            e=jnp.array([e_val]),
+            W_rad=jnp.array([0.3]),
+            i_rad=jnp.array([0.5]),
+            w_rad=jnp.array([0.7]),
+            M0_rad=jnp.array([0.2]),
+            t0_d=jnp.array([0.0]),
+        )
+        r, _, _ = orbit.propagate(
+            _scalar_diff_solve_trig, jnp.array([100.0]), Ms_kg=jnp.array([2.0e30])
+        )
+        return jnp.sum(r**2)
+
+    g = jax.grad(sep)(0.1)
+    assert jnp.isfinite(g) and g != 0.0
+
+
+def test_phase_angle_grad_finite_at_conjunction():
+    """Phase-angle gradient w.r.t. inclination is finite at conjunction."""
+    from orbix.system.orbit import KeplerianOrbit
+
+    def phase_sum(i_val):
+        orbit = KeplerianOrbit(
+            a_AU=jnp.array([1.0]),
+            e=jnp.array([0.0]),
+            W_rad=jnp.array([0.0]),
+            i_rad=jnp.array([i_val]),
+            w_rad=jnp.array([0.0]),
+            M0_rad=jnp.array([0.0]),
+            t0_d=jnp.array([0.0]),
+        )
+        _, beta, _ = orbit.propagate(
+            _scalar_diff_solve_trig, jnp.array([0.0]), Ms_kg=jnp.array([2.0e30])
+        )
+        return jnp.sum(beta)
+
+    g = jax.grad(phase_sum)(jnp.pi / 2)  # edge-on at conjunction: cosbeta = +-1
+    assert jnp.isfinite(g)
+
+
+def test_mismatched_leading_axes_raise_at_construction():
+    """Mismatched leading-axis shapes raise ValueError at construction."""
+    from orbix.system.orbit import KeplerianOrbit
+
+    with pytest.raises(ValueError):
+        KeplerianOrbit(
+            a_AU=jnp.ones(2),
+            e=jnp.ones(3) * 0.1,
+            W_rad=jnp.zeros(2),
+            i_rad=jnp.zeros(2),
+            w_rad=jnp.zeros(2),
+            M0_rad=jnp.zeros(2),
+            t0_d=jnp.zeros(2),
+        )
 
 
 def test_separation_arcsec_matches_projected_distance():
