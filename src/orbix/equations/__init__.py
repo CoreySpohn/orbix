@@ -15,6 +15,9 @@ __all__ = [
     "thiele_innes_constants",
     "thiele_innes_constants_reduced",
     "state_vector_to_keplerian",
+    # Lambert boundary-value problem
+    "lambert_solve",
+    "lambert_tof_min",
     # Propagation functions
     "system_r_v",
     "system_r",
@@ -25,6 +28,7 @@ __all__ = [
     "lambert_phase_poly",
 ]
 
+from .lambert import lambert_solve, lambert_tof_min
 from .orbit import (
     AB_matrices,
     AB_matrices_reduced,
