@@ -11,6 +11,43 @@
 * The broken predict/pdet functions and the `discrete_e` factory were removed
   (they did not work correctly and had no working callers).
 
+## [1.0.0](https://github.com/CoreySpohn/orbix/compare/v0.9.0...v1.0.0) (2026-07-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* drop utils (quasi_random -> photomancy)
+* **observatory:** drop zodiacal photometry; geometry only (zodi -> skyscapes)
+* remove system (Planets/Star/System) and exosims integration; owners: exosims-plugins, skyscapes
+* promote orbit to orbix.orbit, solar_system to observatory; top-level exports
+* **orbit:** recompute AB per call, arctan2 phase angle, shape-validated elements
+* remove broken predict.pdet, discrete_e factory, dead bilinear path
+
+### Features
+
+* **equations:** elliptic multi-rev Lambert boundary-value solver ([24dfe46](https://github.com/CoreySpohn/orbix/commit/24dfe462df629e8bdde768a07fdc8539ef98e4fc))
+
+
+### Bug Fixes
+
+* **ci:** fix python floor mismatch with hwoutils and drop stale test job ([a181ade](https://github.com/CoreySpohn/orbix/commit/a181ade36e5036dab34858cc83f9cf5e913944bd))
+* **ci:** modernize test workflow and fix python floor mismatch with hwoutils ([4186f0c](https://github.com/CoreySpohn/orbix/commit/4186f0c8e20a52225716db9e97fac5fd4398770c))
+* **equations:** NaN-safe gradients in state_vector_to_keplerian at circular/equatorial ([32161b6](https://github.com/CoreySpohn/orbix/commit/32161b60ec878fbded18a1b4ce160987559417a3))
+* **kepler:** append top e row to bilinear grids; ValueError on E=trig=False ([0126374](https://github.com/CoreySpohn/orbix/commit/012637406a1057c187e010a5546d0fa7cf6aefbc))
+* **kepler:** correct cosE reconstruction at bit-exact M=pi ([92d3395](https://github.com/CoreySpohn/orbix/commit/92d33952dee081f5174d467d6f2a62b9147cb530))
+* **kepler:** hermite 2pi seam unwrap, nearest-node lookups, honest linear-grid docs ([b7d6f21](https://github.com/CoreySpohn/orbix/commit/b7d6f21f55e723739b8f6ade03c14d40a4f478e5))
+* **kepler:** wrap M mod 2pi in all shortcut solvers; document e domain ([0b2ede2](https://github.com/CoreySpohn/orbix/commit/0b2ede2acbdc506d53af3a24a43ec9222b4ab200))
+* **orbit:** recompute AB per call, arctan2 phase angle, shape-validated elements ([c2a268f](https://github.com/CoreySpohn/orbix/commit/c2a268fb7ed7e1bfbbaf8f6218b5a63d5439814a))
+
+
+### Code Refactoring
+
+* drop utils (quasi_random -&gt; photomancy) ([86bd9e2](https://github.com/CoreySpohn/orbix/commit/86bd9e2228128ea8817bf7f9dff057a71473b9f8))
+* **observatory:** drop zodiacal photometry; geometry only (zodi -&gt; skyscapes) ([3aa845d](https://github.com/CoreySpohn/orbix/commit/3aa845da230c1a8a44d27e56d2aae40a719e8f56))
+* promote orbit to orbix.orbit, solar_system to observatory; top-level exports ([74f1c0c](https://github.com/CoreySpohn/orbix/commit/74f1c0cdee4357154dcf83205b14b57118b6a6d4))
+* remove broken predict.pdet, discrete_e factory, dead bilinear path ([3a9ac12](https://github.com/CoreySpohn/orbix/commit/3a9ac1243e5c610e6ee1068b1731281da7f49792))
+* remove system (Planets/Star/System) and exosims integration; owners: exosims-plugins, skyscapes ([0db3197](https://github.com/CoreySpohn/orbix/commit/0db31976f9a554f1b92a4b4239a050d3d99907fe))
+
 ## [0.9.0](https://github.com/CoreySpohn/orbix/compare/v0.8.0...v0.9.0) (2026-06-23)
 
 
