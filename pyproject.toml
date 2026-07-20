@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "orbix"
 description = "A JAX library of functions useful for exoplanet simulations"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "jax>=0.4.34",
     "numpy>=2.1.2",
@@ -38,9 +38,6 @@ content-type = "text/markdown"
 [[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
 path = "README.md"
 
-[dependency-groups]
-test = ["pytest>=8"]
-
 [project.optional-dependencies]
 docs = [
   "sphinx",
@@ -50,6 +47,7 @@ docs = [
   "sphinx_autodoc_typehints",
   "matplotlib",
 ]
+test = ["pytest"]
 
 [tool.ruff.lint]
 select = ["D", "E", "F", "I"]
