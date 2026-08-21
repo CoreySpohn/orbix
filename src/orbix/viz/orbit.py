@@ -34,6 +34,38 @@ def _resolve_color(ep, style):
     return ep.SourceStyles(["track"])["track"]["color"]
 
 
+def _neutral(level):
+    """A tone ``level`` of the way from the axes facecolor to the text color.
+
+    Resolved from the active rcParams at call time, so the same level is a
+    light gray on a dark background and a dark gray on a light one -- the
+    scenery inverts with the mode instead of freezing one gray for both.
+    """
+    import matplotlib as mpl
+    from matplotlib.colors import to_rgb
+
+    face = np.asarray(to_rgb(mpl.rcParams["axes.facecolor"]))
+    text = np.asarray(to_rgb(mpl.rcParams["text.color"]))
+    return tuple(face + level * (text - face))
+
+
+def _orbit_look(style, ep):
+    """The 3D orbit rendering defaults: marker color and path-line kwargs.
+
+    With no ``style``, the look is the classic star-chart one: markers in
+    the mode's text color (white dots on a dark background) over a
+    transparent dashed gray path. A ``style`` opts out into that source's
+    color for both, with a solid path.
+    """
+    if style is None:
+        import matplotlib as mpl
+
+        marker_color = mpl.rcParams["text.color"]
+        path_kw = {"color": _neutral(0.55), "linestyle": "--", "alpha": 0.5}
+        return marker_color, path_kw
+    return _resolve_color(ep, style), {}
+
+
 def _sky_tracks(orbit_or_radec, t_jd, Ms_kg, dist_pc, trig_solver):
     """Normalize the input to ``(ra, dec)`` arrays of shape ``(K, T)``.
 
@@ -296,8 +328,10 @@ def plot_orbit(
             uses orbix's default.
         ax: A ``projection="3d"`` axes to draw into. None creates one.
         style: A color, or a ``SourceStyles`` entry (which also sets the
-            track marker), applied to every track. None uses the active
-            palette's first color.
+            track marker), applied to every track: solid path and markers
+            in that color. None gives the star-chart default -- markers in
+            the mode's text color (white dots on a dark background) over
+            a transparent dashed gray path.
         marks: Optional set drawn from ``{"periapsis", "nodes"}``. Orbit
             door only -- exact mark geometry needs the elements, so bare
             xyz tracks raise if marks are requested. Periapsis is a
@@ -329,15 +363,16 @@ def plot_orbit(
             "than bare xyz tracks"
         )
 
-    color = _resolve_color(ep, style)
+    marker_color, path_kw = _orbit_look(style, ep)
+    lkw = {**path_kw, **(trail_kw or {})}
     lines, scatters = [], []
     for k in range(positions.shape[0]):
         result = ep.trail(
             positions[k],
             ax=ax,
-            style=style if style is not None else color,
+            style=style if style is not None else marker_color,
             marker_scale=marker_scale,
-            trail_kw=trail_kw,
+            trail_kw=lkw,
         )
         ax = result.ax
         lines.append(result.artists["line"])
@@ -369,14 +404,16 @@ def plot_orbit(
         periapsis, ascending, descending = _mark_geometry(orbit)
         if "periapsis" in marks:
             scatters.append(
-                ax.scatter(*periapsis.T, marker="D", s=30, color=color, zorder=4)
+                ax.scatter(*periapsis.T, marker="D", s=30, color=marker_color, zorder=4)
             )
         if "nodes" in marks:
             scatters.append(
-                ax.scatter(*ascending.T, marker="^", s=30, color=color, zorder=4)
+                ax.scatter(*ascending.T, marker="^", s=30, color=marker_color, zorder=4)
             )
             scatters.append(
-                ax.scatter(*descending.T, marker="v", s=30, color=color, zorder=4)
+                ax.scatter(
+                    *descending.T, marker="v", s=30, color=marker_color, zorder=4
+                )
             )
             for asc, desc in zip(ascending, descending):
                 (node_line,) = ax.plot(

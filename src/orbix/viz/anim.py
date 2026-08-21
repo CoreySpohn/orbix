@@ -17,6 +17,7 @@ import numpy as np
 from orbix.orbit import AbstractOrbit
 from orbix.viz._require import eyepiece
 from orbix.viz.orbit import (
+    _orbit_look,
     _positions,
     _resolve_color,
     _sky_tracks,
@@ -118,7 +119,11 @@ def animate_orbit(
             head's depth cue tracks the moving camera frame by frame.
         fps: Default playback rate carried by the returned animation.
         style: A color or ``SourceStyles`` entry for the tracks, forwarded
-            to the static function and used for the animated artists.
+            to the static function and used for the animated artists. For
+            ``kind="3d"``, None gives the star-chart default: heads in the
+            mode's text color (white dots on a dark background) over
+            transparent dashed gray trails; a ``style`` opts into that
+            source's solid color instead.
         weights: Optional per-track weights (length K), fading both the
             ghost fan and the animated trails.
         data: Optional ``(ra, dec, err)`` observed epochs (sky only).
@@ -195,8 +200,28 @@ def animate_orbit(
                 f"t_jd has {times.shape[0]} entries for a {n_frames}-epoch track"
             )
 
-    color = _resolve_color(ep, style)
     alphas = _track_alphas(n_tracks, weights)
+    if kind == "3d":
+        # the star-chart default: heads in the text color (white dots on a
+        # dark mode) edged in the background color, trails dashed gray; a
+        # style= opts into that source's solid color for both.
+        head_color, path_kw = _orbit_look(style, ep)
+        trail_color = path_kw.get("color", head_color)
+        trail_ls = path_kw.get("linestyle", "-")
+        trail_alpha = 0.75 if style is None else 1.0
+        head_kw = {}
+        if style is None:
+            import matplotlib as mpl
+
+            head_kw = {
+                "markeredgecolor": mpl.rcParams["axes.facecolor"],
+                "markeredgewidth": 0.8,
+            }
+    else:
+        head_color = trail_color = _resolve_color(ep, style)
+        trail_ls = "-"
+        trail_alpha = 1.0
+        head_kw = {}
 
     head_ms = 9.0
     head_scales = None
@@ -234,15 +259,29 @@ def animate_orbit(
     for k in range(n_tracks):
         if history != "none":
             if kind == "sky":
-                (trail_line,) = ax.plot([], [], color=color, lw=1.5, alpha=alphas[k])
+                (trail_line,) = ax.plot(
+                    [], [], color=trail_color, lw=1.5, alpha=alphas[k]
+                )
             else:
                 (trail_line,) = ax.plot(
-                    [], [], [], color=color, lw=1.5, alpha=alphas[k]
+                    [],
+                    [],
+                    [],
+                    color=trail_color,
+                    linestyle=trail_ls,
+                    lw=1.5,
+                    alpha=trail_alpha * alphas[k],
                 )
             trails.append(trail_line)
         if kind == "sky":
             (head,) = ax.plot(
-                [], [], linestyle="", marker="o", ms=6, color=color, alpha=alphas[k]
+                [],
+                [],
+                linestyle="",
+                marker="o",
+                ms=6,
+                color=head_color,
+                alpha=alphas[k],
             )
         else:
             (head,) = ax.plot(
@@ -252,8 +291,9 @@ def animate_orbit(
                 linestyle="",
                 marker="o",
                 ms=6,
-                color=color,
+                color=head_color,
                 alpha=alphas[k],
+                **head_kw,
             )
         heads.append(head)
 
@@ -273,10 +313,11 @@ def animate_orbit(
                 azim=camera["azim"][i],
                 roll=camera["roll"][i],
             )
-        start, stop = _history_slice(i, history)
+        if history != "none":
+            start, stop = _history_slice(i, history)
         for k in range(n_tracks):
-            segment = tracks[k, start:stop]
             if history != "none":
+                segment = tracks[k, start:stop]
                 if kind == "sky":
                     trails[k].set_data(segment[:, 0], segment[:, 1])
                 else:

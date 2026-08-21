@@ -257,3 +257,22 @@ def test_plot_orbit_panes_take_the_axes_facecolor():
     face = result.ax.get_facecolor()
     for pane_axis in (result.ax.xaxis, result.ax.yaxis, result.ax.zaxis):
         assert tuple(pane_axis.pane.get_facecolor()) == pytest.approx(face)
+
+
+def test_plot_orbit_default_star_chart_look():
+    """No style: dashed transparent gray path, text-color markers."""
+    import matplotlib as mpl
+
+    from orbix.viz import plot_orbit
+
+    result = plot_orbit(_orbit(), T_JD, Ms_kg=STELLAR["Ms_kg"])
+    line = result.artists["line"]
+    assert line.get_linestyle() == "--"
+    assert line.get_alpha() == pytest.approx(0.5)
+    text_rgba = matplotlib.colors.to_rgba(mpl.rcParams["text.color"])
+    scatter_rgba = tuple(result.artists["scatter"].get_facecolor()[0])
+    assert scatter_rgba == pytest.approx(text_rgba)
+
+    styled = plot_orbit(_orbit(), T_JD, Ms_kg=STELLAR["Ms_kg"], style="#22aabb")
+    assert styled.artists["line"].get_linestyle() == "-"
+    assert styled.artists["line"].get_color() == "#22aabb"

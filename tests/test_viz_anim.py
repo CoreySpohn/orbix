@@ -84,6 +84,7 @@ def test_animate_orbit_history_modes():
     )
 
     headless = animate_orbit(orbit, T_JD, **kwargs, history="none")
+    headless.draw(headless.fig, 7)
     n_lines_none = len(headless.fig.axes[0].lines)
     with_trail = len(grown.fig.axes[0].lines)
     assert n_lines_none == with_trail - 1
@@ -211,3 +212,27 @@ def test_animate_orbit_rotate_errors():
         )
     with pytest.raises(ValueError, match="unknown rotate"):
         animate_orbit(_orbit(), T_JD, Ms_kg=MSUN_KG, kind="3d", rotate={"spin": (0, 1)})
+
+
+def test_animate_orbit_3d_default_look():
+    """3D default: dashed gray trails, text-color heads with edge."""
+    import matplotlib as mpl
+
+    from orbix.viz import animate_orbit
+
+    anim = animate_orbit(_orbit(3), T_JD, Ms_kg=MSUN_KG, kind="3d")
+    ax = anim.fig.axes[0]
+    anim.draw(anim.fig, 4)
+
+    text_rgba = matplotlib.colors.to_rgba(mpl.rcParams["text.color"])
+    heads = [
+        line
+        for line in ax.lines
+        if line.get_marker() == "o" and line.get_linestyle() == "None"
+    ]
+    assert len(heads) == 3
+    for head in heads:
+        assert matplotlib.colors.to_rgba(head.get_color()) == pytest.approx(text_rgba)
+
+    trails = [line for line in ax.lines if line.get_linestyle() == "--"]
+    assert len(trails) >= 4  # 3 ghosts + at least the drawn trails
