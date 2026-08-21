@@ -171,10 +171,11 @@ def test_animate_orbit_3d_head_carries_depth_cue():
         anim.draw(anim.fig, i)
         head = ax.lines[-1]
         sizes.append(head.get_markersize())
-    # the swing is deliberately gentle (70-100 percent of the base size)
-    # so marker size stays free to encode physical meaning
-    assert max(sizes) > min(sizes) * 1.05
-    assert max(sizes) <= min(sizes) * (1.0 / 0.7) + 1e-9
+    # the swing follows the hand-tuned original: a near-side swell of at
+    # most sqrt(1.5) in diameter, anchored at the base size on the far
+    # side, so marker size stays free to encode physical meaning
+    assert max(sizes) > min(sizes) * 1.02
+    assert max(sizes) <= min(sizes) * np.sqrt(1.5) + 1e-9
 
     beads = [c for c in ax.collections if len(c.get_offsets()) > 1]
     for bead in beads:

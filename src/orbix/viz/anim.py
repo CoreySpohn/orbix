@@ -41,13 +41,20 @@ def _track_alphas(n_tracks, weights):
 
 
 def _depth_size(depth):
-    """Map a [0, 1] depth factor onto a gentle marker-size multiplier.
+    """Map a [0, 1] depth factor onto a marker-diameter multiplier.
 
-    The far side reads as slightly smaller (70 percent), never tiny: a
-    drastic swing would swallow any meaning the marker size itself is
-    meant to carry, such as a planet radius.
+    The tuning is inherited from the original hand-tuned orbit renders:
+    the marker's scatter AREA grew additively by at most half its base
+    on the near side, which in diameter terms is ``sqrt(1 + 0.5 * d)``
+    -- a swell that peaks at about 22 percent. The far side is the
+    anchor at exactly the base size, so the resting size stays free to
+    encode physical meaning such as a planet radius; depth reads as a
+    brief near-side swell, not a shrink.
+
+    Callers styling a scatter artist (whose ``s`` is an area) should
+    square this factor to stay in area units.
     """
-    return 0.7 + 0.3 * depth
+    return np.sqrt(1.0 + 0.5 * depth)
 
 
 def _depth_scale(positions, azim_deg, elev_deg):
