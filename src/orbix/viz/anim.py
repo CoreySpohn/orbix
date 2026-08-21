@@ -79,6 +79,7 @@ def animate_orbit(
     trig_solver=None,
     kind="sky",
     history="all",
+    rotate=None,
     fps=10,
     style=None,
     weights=None,
@@ -108,6 +109,13 @@ def animate_orbit(
         history: ``"all"`` grows the trail from the first epoch, an int
             keeps a trailing window of that many frames, ``"none"`` moves
             the head marker alone.
+        rotate: Optional camera sweep, ``kind="3d"`` only: a dict mapping
+            any of ``"azim"``, ``"elev"``, ``"roll"`` to a
+            ``(start_deg, stop_deg)`` pair interpolated linearly across
+            the frames. A slow azimuth sweep is the classic use -- the
+            parallax it adds is what makes the 3D geometry legible. Axes
+            angles not named keep the camera's current value, and the
+            head's depth cue tracks the moving camera frame by frame.
         fps: Default playback rate carried by the returned animation.
         style: A color or ``SourceStyles`` entry for the tracks, forwarded
             to the static function and used for the animated artists.
@@ -133,6 +141,14 @@ def animate_orbit(
         raise ValueError(
             f'history must be "all", "none", or an int window, got {history!r}'
         )
+    if rotate is not None:
+        if kind != "3d":
+            raise ValueError('rotate only applies to kind="3d"')
+        unknown = set(rotate) - {"azim", "elev", "roll"}
+        if unknown:
+            raise ValueError(
+                f"unknown rotate keys {sorted(unknown)}; expected azim/elev/roll"
+            )
 
     from_orbit = isinstance(orbit_or_tracks, AbstractOrbit)
     base_t = t_jd if from_orbit else None
@@ -184,10 +200,35 @@ def animate_orbit(
 
     head_ms = 9.0
     head_scales = None
+    camera = None
     if kind == "3d":
-        head_scales = np.stack(
-            [_depth_scale(tracks[k], ax.azim, ax.elev) for k in range(n_tracks)]
-        )
+        if rotate is not None:
+            base_angles = {"azim": ax.azim, "elev": ax.elev, "roll": ax.roll}
+            camera = {
+                key: np.linspace(*rotate[key], n_frames)
+                if key in rotate
+                else np.full(n_frames, base_angles[key])
+                for key in ("azim", "elev", "roll")
+            }
+            head_scales = np.stack(
+                [
+                    np.array(
+                        [
+                            _depth_scale(
+                                tracks[k, i : i + 1],
+                                camera["azim"][i],
+                                camera["elev"][i],
+                            )[0]
+                            for i in range(n_frames)
+                        ]
+                    )
+                    for k in range(n_tracks)
+                ]
+            )
+        else:
+            head_scales = np.stack(
+                [_depth_scale(tracks[k], ax.azim, ax.elev) for k in range(n_tracks)]
+            )
 
     trails, heads = [], []
     for k in range(n_tracks):
@@ -226,6 +267,12 @@ def animate_orbit(
 
     def draw(fig, i):
         """Advance every animated artist to epoch ``i`` (a set_data pass)."""
+        if camera is not None:
+            ax.view_init(
+                elev=camera["elev"][i],
+                azim=camera["azim"][i],
+                roll=camera["roll"][i],
+            )
         start, stop = _history_slice(i, history)
         for k in range(n_tracks):
             segment = tracks[k, start:stop]

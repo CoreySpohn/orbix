@@ -175,3 +175,39 @@ def test_animate_orbit_3d_head_carries_depth_cue():
     beads = [c for c in ax.collections if len(c.get_offsets()) > 1]
     for bead in beads:
         assert np.allclose(bead.get_sizes(), 0.0)
+
+
+def test_animate_orbit_rotate_sweeps_the_camera():
+    """A rotate sweep drives view angles across frames, endpoints exact."""
+    from orbix.viz import animate_orbit
+
+    anim = animate_orbit(
+        _orbit(),
+        T_JD,
+        Ms_kg=MSUN_KG,
+        kind="3d",
+        rotate={"azim": (-80.0, -30.0), "elev": (15.0, 35.0)},
+    )
+    ax = anim.fig.axes[0]
+    anim.draw(anim.fig, 0)
+    assert ax.azim == pytest.approx(-80.0)
+    assert ax.elev == pytest.approx(15.0)
+    anim.draw(anim.fig, len(T_JD) - 1)
+    assert ax.azim == pytest.approx(-30.0)
+    assert ax.elev == pytest.approx(35.0)
+
+
+def test_animate_orbit_rotate_errors():
+    """Rotate is 3d-only and rejects unknown angle names."""
+    from orbix.viz import animate_orbit
+
+    with pytest.raises(ValueError, match="3d"):
+        animate_orbit(
+            _orbit(),
+            T_JD,
+            Ms_kg=MSUN_KG,
+            dist_pc=10.0,
+            rotate={"azim": (0.0, 30.0)},
+        )
+    with pytest.raises(ValueError, match="unknown rotate"):
+        animate_orbit(_orbit(), T_JD, Ms_kg=MSUN_KG, kind="3d", rotate={"spin": (0, 1)})
