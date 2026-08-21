@@ -96,11 +96,15 @@ loaded from a file draw through the same door:
 
 ## The orbit in three dimensions
 
-`plot_orbit` draws the star-centric orbit in AU through `eyepiece.trail`,
-whose marker sizes shrink on the far side of the trajectory to cue depth.
-Set the camera before calling it; the depth cue is baked from the camera
-at call time. `marks` adds the exact periapsis (diamond) and the line of
-nodes (triangles mark where the orbit pierces the sky plane).
+`plot_orbit` draws the star-centric orbit in AU through `eyepiece.trail`.
+With no `style` it uses the star-chart look: markers in the mode's text
+color (white dots on this dark background) over a transparent dashed gray
+path, with the 3D panes painted in the background color so the scene
+reads as space. Passing `style=` opts into that source's solid color
+instead. Set the camera before calling it; the per-point depth cue on a
+still is baked from the camera at call time. `marks` adds the exact
+periapsis (diamond) and the line of nodes (triangles mark where the
+orbit pierces the sky plane).
 
 ```{code-cell} ipython3
 import matplotlib.pyplot as plt
@@ -110,8 +114,7 @@ ax = fig.add_subplot(projection="3d")
 ax.view_init(elev=25.0, azim=-50.0)
 
 result = viz.plot_orbit(
-    orbit, t_jd, Ms_kg=MSUN_KG,
-    ax=ax, style=styles["planet b"], marks={"periapsis", "nodes"},
+    orbit, t_jd, Ms_kg=MSUN_KG, ax=ax, marks={"periapsis", "nodes"},
 )
 ```
 
@@ -119,17 +122,35 @@ result = viz.plot_orbit(
 
 `animate_orbit` returns a lazy `eyepiece.Animation`: nothing renders until
 a sink is asked for, and one animation can go to several sinks in one
-pass (`.save("orbit.mp4", "orbit.gif")`). The `history` argument controls
-the trail: `"all"` accumulates from the first epoch, an integer keeps a
-trailing window, `"none"` moves the head marker alone.
+pass (`.save("orbit.mp4", "orbit.gif")`). The 3D defaults do the whole
+star-chart presentation in one call: dashed gray paths, a moving dot per
+orbit that swells gently on the near side of the trajectory, and a slow
+single-axis azimuth sweep (`rotate="auto"`; pass `None` to hold the
+camera, or an angle dict for full control). The `history` argument
+controls the trail: `"all"` accumulates from the first epoch, an integer
+keeps a trailing window, `"none"` moves the head markers alone. The base
+marker size is the anchor the depth cue swells around, so it is where
+physical meaning lives: `size_by_radius` maps planet radii onto marker
+diameters. The same call with `kind="sky"` animates the sky-plane track
+instead.
 
 ```{code-cell} ipython3
 from IPython.display import HTML
 
-t_anim = jnp.linspace(2460000.0, 2460430.0, 30)
+system = KeplerianOrbit(
+    a_AU=np.array([0.72, 1.30, 2.35]),
+    e=np.array([0.05, 0.21, 0.40]),
+    W_rad=np.array([2.20, 2.35, 2.50]),
+    i_rad=np.array([1.00, 1.08, 0.95]),
+    w_rad=np.array([-0.40, -0.70, 0.90]),
+    M0_rad=np.array([0.00, 2.10, 4.30]),
+    t0_d=np.full(3, 2460000.0),
+)
+t_anim = jnp.linspace(2460000.0, 2460000.0 + 365.25 * 2.35**1.5, 30)
+
 anim = viz.animate_orbit(
-    orbit, t_anim, Ms_kg=MSUN_KG, dist_pc=10.0,
-    style=styles["planet b"], iwa=0.06, fps=10,
+    system, t_anim, Ms_kg=MSUN_KG, kind="3d", history="none",
+    base_ms=viz.size_by_radius([1.0, 3.9, 11.2]), fps=10,
 )
 HTML(anim.jshtml(dpi=100))
 ```
