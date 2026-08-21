@@ -66,6 +66,47 @@ def _orbit_look(style, ep):
     return _resolve_color(ep, style), {}
 
 
+def size_by_radius(
+    radius_Rearth, *, ms_range=(3.0, 9.0), radius_range_Rearth=(0.38, 11.2)
+):
+    """Marker diameters encoding planet radii, geometrically interpolated.
+
+    The base marker size is the anchor the depth cue swells around, so it
+    is the place physical meaning lives. This maps radii onto diameters
+    the same way the original hand-tuned renders mapped mass onto marker
+    size: geometrically between ``ms_range`` across
+    ``radius_range_Rearth`` (Mercury to Jupiter by default), so a
+    super-Earth reads visibly larger than a sub-Earth without Jupiter
+    dwarfing everything. Radii outside the range clip to its ends.
+
+    Feed the result to ``animate_orbit(base_ms=...)`` or scale a still's
+    ``marker_scale`` with it.
+
+    Args:
+        radius_Rearth: Planet radii in Earth radii, scalar or ``(K,)``.
+        ms_range: Marker diameters in points at the two ends of the
+            radius range.
+        radius_range_Rearth: The radii mapped onto ``ms_range``'s ends.
+
+    Returns:
+        Marker diameters in points, shape ``(K,)``.
+    """
+    lo, hi = radius_range_Rearth
+    r = np.clip(np.atleast_1d(np.asarray(radius_Rearth, float)), lo, hi)
+    frac = np.log(r / lo) / np.log(hi / lo)
+    return ms_range[0] * (ms_range[1] / ms_range[0]) ** frac
+
+
+def _per_track(values, n_tracks, name):
+    """Broadcast a scalar or length-K sequence to one float per track."""
+    arr = np.atleast_1d(np.asarray(values, float))
+    if arr.shape[0] == 1:
+        return np.full(n_tracks, arr[0])
+    if arr.shape[0] != n_tracks:
+        raise ValueError(f"{name} has {arr.shape[0]} entries for {n_tracks} tracks")
+    return arr
+
+
 def _sky_tracks(orbit_or_radec, t_jd, Ms_kg, dist_pc, trig_solver):
     """Normalize the input to ``(ra, dec)`` arrays of shape ``(K, T)``.
 
@@ -339,8 +380,10 @@ def plot_orbit(
             joined by a dashed line of nodes through the origin.
         marker_scale: Forwarded to ``trail``: marker size at full
             illumination for the per-point depth cue a still figure
-            needs. Pass ``0.0`` for a bare line -- an animation does
-            this, since its moving head carries the depth cue instead.
+            needs. A scalar or one value per track, so a batch can
+            encode per-planet meaning (``size_by_radius``). Pass ``0.0``
+            for a bare line -- an animation does this, since its moving
+            head carries the depth cue instead.
         trail_kw: Extra kwargs for the connecting-line ``ax.plot`` call,
             forwarded to ``trail`` and applied last.
 
@@ -365,13 +408,14 @@ def plot_orbit(
 
     marker_color, path_kw = _orbit_look(style, ep)
     lkw = {**path_kw, **(trail_kw or {})}
+    scales = _per_track(marker_scale, positions.shape[0], "marker_scale")
     lines, scatters = [], []
     for k in range(positions.shape[0]):
         result = ep.trail(
             positions[k],
             ax=ax,
             style=style if style is not None else marker_color,
-            marker_scale=marker_scale,
+            marker_scale=float(scales[k]),
             trail_kw=lkw,
         )
         ax = result.ax

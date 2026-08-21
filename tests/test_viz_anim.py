@@ -262,3 +262,22 @@ def test_animate_orbit_default_rotation_is_single_axis():
 
     with pytest.raises(ValueError, match="rotate must be"):
         animate_orbit(_orbit(), T_JD, Ms_kg=MSUN_KG, kind="3d", rotate="spin")
+
+
+def test_animate_orbit_per_track_base_ms():
+    """base_ms encodes per-track meaning; the sky heads carry it exactly."""
+    from orbix.viz import animate_orbit
+
+    anim = animate_orbit(
+        _orbit(3), T_JD, Ms_kg=MSUN_KG, dist_pc=10.0, base_ms=[4.0, 6.0, 8.0]
+    )
+    ax = anim.fig.axes[0]
+    heads = [
+        line
+        for line in ax.lines
+        if line.get_marker() == "o" and line.get_linestyle() == "None"
+    ]
+    assert [head.get_markersize() for head in heads] == [4.0, 6.0, 8.0]
+
+    with pytest.raises(ValueError, match="base_ms has 2"):
+        animate_orbit(_orbit(3), T_JD, Ms_kg=MSUN_KG, dist_pc=10.0, base_ms=[4.0, 6.0])

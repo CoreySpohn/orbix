@@ -276,3 +276,32 @@ def test_plot_orbit_default_star_chart_look():
     styled = plot_orbit(_orbit(), T_JD, Ms_kg=STELLAR["Ms_kg"], style="#22aabb")
     assert styled.artists["line"].get_linestyle() == "-"
     assert styled.artists["line"].get_color() == "#22aabb"
+
+
+def test_size_by_radius_geometric_mapping():
+    """Endpoints hit the ms range, midpoints interpolate geometrically."""
+    from orbix.viz import size_by_radius
+
+    lo, hi = 0.38, 11.2
+    ms = size_by_radius([lo, hi, np.sqrt(lo * hi)])
+    np.testing.assert_allclose(ms[0], 3.0, rtol=1e-12)
+    np.testing.assert_allclose(ms[1], 9.0, rtol=1e-12)
+    np.testing.assert_allclose(ms[2], np.sqrt(3.0 * 9.0), rtol=1e-12)
+
+    clipped = size_by_radius([0.01, 100.0])
+    np.testing.assert_allclose(clipped, [3.0, 9.0], rtol=1e-12)
+
+
+def test_plot_orbit_per_track_marker_scale():
+    """A marker_scale sequence sizes each track's beads independently."""
+    from orbix.viz import plot_orbit
+
+    result = plot_orbit(
+        _orbit(2), T_JD, Ms_kg=STELLAR["Ms_kg"], marker_scale=[0.0, 20.0]
+    )
+    first, second = result.artists["scatter"]
+    assert np.allclose(first.get_sizes(), 0.0)
+    assert np.max(second.get_sizes()) > 0.0
+
+    with pytest.raises(ValueError, match="marker_scale has 3"):
+        plot_orbit(_orbit(2), T_JD, Ms_kg=STELLAR["Ms_kg"], marker_scale=[1, 2, 3])

@@ -13,6 +13,7 @@ _LAZY = {
     "animate_orbit": "orbix.viz.anim",
     "plot_orbit": "orbix.viz.orbit",
     "plot_sky_track": "orbix.viz.orbit",
+    "size_by_radius": "orbix.viz.orbit",
 }
 
 __all__ = sorted(_LAZY)

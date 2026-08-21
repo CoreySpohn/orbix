@@ -18,6 +18,7 @@ from orbix.orbit import AbstractOrbit
 from orbix.viz._require import eyepiece
 from orbix.viz.orbit import (
     _orbit_look,
+    _per_track,
     _positions,
     _resolve_color,
     _sky_tracks,
@@ -100,6 +101,7 @@ def animate_orbit(
     rotate="auto",
     fps=10,
     style=None,
+    base_ms=6.0,
     weights=None,
     data=None,
     iwa=None,
@@ -144,6 +146,10 @@ def animate_orbit(
             mode's text color (white dots on a dark background) over
             transparent dashed gray trails; a ``style`` opts into that
             source's solid color instead.
+        base_ms: Head-marker diameter in points, a scalar or one value
+            per track. The base size is the anchor the depth cue swells
+            around, so it is where physical meaning lives -- pass
+            ``size_by_radius(radii)`` to encode planet radii.
         weights: Optional per-track weights (length K), fading both the
             ghost fan and the animated trails.
         data: Optional ``(ra, dec, err)`` observed epochs (sky only).
@@ -249,7 +255,7 @@ def animate_orbit(
         trail_alpha = 1.0
         head_kw = {}
 
-    head_ms = 6.0
+    head_ms = _per_track(base_ms, n_tracks, "base_ms")
     head_scales = None
     camera = None
     if kind == "3d":
@@ -307,7 +313,7 @@ def animate_orbit(
                 [],
                 linestyle="",
                 marker="o",
-                ms=6,
+                ms=head_ms[k],
                 color=head_color,
                 alpha=alphas[k],
             )
@@ -318,7 +324,7 @@ def animate_orbit(
                 [],
                 linestyle="",
                 marker="o",
-                ms=6,
+                ms=head_ms[k],
                 color=head_color,
                 alpha=alphas[k],
                 **head_kw,
@@ -357,7 +363,7 @@ def animate_orbit(
                 heads[k].set_data_3d([point[0]], [point[1]], [point[2]])
                 # never vanish entirely: the far side reads as "small",
                 # not "gone behind the star"
-                heads[k].set_markersize(head_ms * _depth_size(head_scales[k, i]))
+                heads[k].set_markersize(head_ms[k] * _depth_size(head_scales[k, i]))
         if label is not None:
             label.set_text(f"t = +{times[i] - times[0]:.0f} d")
 
