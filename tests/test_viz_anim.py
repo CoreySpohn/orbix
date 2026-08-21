@@ -171,7 +171,10 @@ def test_animate_orbit_3d_head_carries_depth_cue():
         anim.draw(anim.fig, i)
         head = ax.lines[-1]
         sizes.append(head.get_markersize())
-    assert max(sizes) > min(sizes) * 1.3
+    # the swing is deliberately gentle (70-100 percent of the base size)
+    # so marker size stays free to encode physical meaning
+    assert max(sizes) > min(sizes) * 1.05
+    assert max(sizes) <= min(sizes) * (1.0 / 0.7) + 1e-9
 
     beads = [c for c in ax.collections if len(c.get_offsets()) > 1]
     for bead in beads:
@@ -236,3 +239,25 @@ def test_animate_orbit_3d_default_look():
 
     trails = [line for line in ax.lines if line.get_linestyle() == "--"]
     assert len(trails) >= 4  # 3 ghosts + at least the drawn trails
+
+
+def test_animate_orbit_default_rotation_is_single_axis():
+    """The default sweep turns azimuth alone; rotate=None holds still."""
+    from orbix.viz import animate_orbit
+
+    anim = animate_orbit(_orbit(), T_JD, Ms_kg=MSUN_KG, kind="3d")
+    ax = anim.fig.axes[0]
+    anim.draw(anim.fig, 0)
+    azim0, elev0 = ax.azim, ax.elev
+    anim.draw(anim.fig, len(T_JD) - 1)
+    assert ax.azim == pytest.approx(azim0 + 40.0)
+    assert ax.elev == pytest.approx(elev0)
+
+    still = animate_orbit(_orbit(), T_JD, Ms_kg=MSUN_KG, kind="3d", rotate=None)
+    ax = still.fig.axes[0]
+    azim_before = ax.azim
+    still.draw(still.fig, len(T_JD) - 1)
+    assert ax.azim == pytest.approx(azim_before)
+
+    with pytest.raises(ValueError, match="rotate must be"):
+        animate_orbit(_orbit(), T_JD, Ms_kg=MSUN_KG, kind="3d", rotate="spin")

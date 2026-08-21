@@ -40,6 +40,16 @@ def _track_alphas(n_tracks, weights):
     return [min(1.0, 0.3 + 0.7 * float(w)) for w in weights]
 
 
+def _depth_size(depth):
+    """Map a [0, 1] depth factor onto a gentle marker-size multiplier.
+
+    The far side reads as slightly smaller (70 percent), never tiny: a
+    drastic swing would swallow any meaning the marker size itself is
+    meant to carry, such as a planet radius.
+    """
+    return 0.7 + 0.3 * depth
+
+
 def _depth_scale(positions, azim_deg, elev_deg):
     """Per-point head-marker scale in [0, 1] from the camera geometry.
 
@@ -80,7 +90,7 @@ def animate_orbit(
     trig_solver=None,
     kind="sky",
     history="all",
-    rotate=None,
+    rotate="auto",
     fps=10,
     style=None,
     weights=None,
@@ -110,13 +120,16 @@ def animate_orbit(
         history: ``"all"`` grows the trail from the first epoch, an int
             keeps a trailing window of that many frames, ``"none"`` moves
             the head marker alone.
-        rotate: Optional camera sweep, ``kind="3d"`` only: a dict mapping
-            any of ``"azim"``, ``"elev"``, ``"roll"`` to a
-            ``(start_deg, stop_deg)`` pair interpolated linearly across
-            the frames. A slow azimuth sweep is the classic use -- the
-            parallax it adds is what makes the 3D geometry legible. Axes
-            angles not named keep the camera's current value, and the
-            head's depth cue tracks the moving camera frame by frame.
+        rotate: Camera sweep, ``kind="3d"`` only. The default ``"auto"``
+            is a slow single-axis sweep about z -- 40 degrees of azimuth
+            from the camera's starting position, elevation held -- since
+            one-axis parallax is what makes the 3D geometry legible
+            without disorienting the viewer. ``None`` holds the camera
+            still. A dict maps any of ``"azim"``, ``"elev"``, ``"roll"``
+            to a ``(start_deg, stop_deg)`` pair interpolated linearly
+            across the frames, for full control. The head's depth cue
+            tracks the moving camera frame by frame. Ignored for
+            ``kind="sky"`` unless a dict is passed, which raises.
         fps: Default playback rate carried by the returned animation.
         style: A color or ``SourceStyles`` entry for the tracks, forwarded
             to the static function and used for the animated artists. For
@@ -146,7 +159,7 @@ def animate_orbit(
         raise ValueError(
             f'history must be "all", "none", or an int window, got {history!r}'
         )
-    if rotate is not None:
+    if isinstance(rotate, dict):
         if kind != "3d":
             raise ValueError('rotate only applies to kind="3d"')
         unknown = set(rotate) - {"azim", "elev", "roll"}
@@ -154,6 +167,12 @@ def animate_orbit(
             raise ValueError(
                 f"unknown rotate keys {sorted(unknown)}; expected azim/elev/roll"
             )
+    elif rotate not in (None, "auto"):
+        raise ValueError(
+            f'rotate must be "auto", None, or an angle dict, got {rotate!r}'
+        )
+    if kind != "3d":
+        rotate = None
 
     from_orbit = isinstance(orbit_or_tracks, AbstractOrbit)
     base_t = t_jd if from_orbit else None
@@ -227,6 +246,8 @@ def animate_orbit(
     head_scales = None
     camera = None
     if kind == "3d":
+        if rotate == "auto":
+            rotate = {"azim": (ax.azim, ax.azim + 40.0)}
         if rotate is not None:
             base_angles = {"azim": ax.azim, "elev": ax.elev, "roll": ax.roll}
             camera = {
@@ -329,7 +350,7 @@ def animate_orbit(
                 heads[k].set_data_3d([point[0]], [point[1]], [point[2]])
                 # never vanish entirely: the far side reads as "small",
                 # not "gone behind the star"
-                heads[k].set_markersize(head_ms * (0.35 + 0.65 * head_scales[k, i]))
+                heads[k].set_markersize(head_ms * _depth_size(head_scales[k, i]))
         if label is not None:
             label.set_text(f"t = +{times[i] - times[0]:.0f} d")
 
