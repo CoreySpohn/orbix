@@ -22,8 +22,29 @@ from orbix.equations.orbit import (
     mean_anomaly_tp,
     mean_motion,
     period_n,
+    period_to_sma,
 )
 from orbix.equations.propagation import single_r
+from orbix.kepler.shortcuts.grid import get_grid_solver
+
+
+def _resolve_trig_solver(trig_solver):
+    """Return ``trig_solver``, or the cached default grid solver when None.
+
+    The default is the scalar bilinear grid solver (trig outputs only),
+    which ``get_grid_solver`` lru-caches, so repeated resolution is free.
+    Passing a non-callable is almost always a time array that was meant
+    for ``t_jd``, so that mistake is named at the call site.
+    """
+    if trig_solver is None:
+        return get_grid_solver(level="scalar", E=False, trig=True, jit=True)
+    if not callable(trig_solver):
+        raise TypeError(
+            "trig_solver must be callable with signature (M, e) -> (sinE, cosE); "
+            f"got {type(trig_solver).__name__}. If you meant to pass times, "
+            "use the keyword: propagate(t_jd=..., Ms_kg=...)."
+        )
+    return trig_solver
 
 
 class AbstractOrbit(eqx.Module):
@@ -37,8 +58,8 @@ class AbstractOrbit(eqx.Module):
     @abstractmethod
     def propagate(
         self,
-        trig_solver,
-        t_jd: Array,
+        trig_solver=None,
+        t_jd: Array = None,
         *,
         Ms_kg: Array,
     ) -> tuple[Array, Array, Array]:
@@ -46,8 +67,12 @@ class AbstractOrbit(eqx.Module):
 
         Args:
             trig_solver: Scalar solver for Kepler's equation,
-                signature ``(M, e) -> (sinE, cosE)``.
-            t_jd: Times in Julian Days, shape ``(T,)``.
+                signature ``(M, e) -> (sinE, cosE)``. None selects the
+                cached default grid solver.
+            t_jd: Times in Julian Days, shape ``(T,)``. Required; it is
+                keyword-friendly (``propagate(t_jd=..., Ms_kg=...)``) so
+                callers relying on the default solver need not pass a
+                positional None.
             Ms_kg: Stellar mass in kg, shape ``(K,)`` or scalar.
 
         Returns:
@@ -90,6 +115,61 @@ class KeplerianOrbit(AbstractOrbit):
                 f"KeplerianOrbit elements must share one (K,) shape, got {shapes}"
             )
 
+    @classmethod
+    def from_period(
+        cls,
+        T_d: Array,
+        e: Array,
+        cos_i: Array,
+        W_rad: Array,
+        cos_w: Array,
+        sin_w: Array,
+        tp_d: Array,
+        *,
+        Ms_kg: Array,
+    ) -> "KeplerianOrbit":
+        """Construct from the period parameterization used by orbit-fitting code.
+
+        Fitting code samples ``(T, e, cos i, W, cos w, sin w, tp)`` rather
+        than the seven fields this class stores, so posterior draws reach
+        the class through this constructor: period converts to semi-major
+        axis via Kepler's third law (which is why ``Ms_kg`` is required
+        here, unlike ``__init__``), and periapsis passage maps exactly to
+        ``(M0_rad=0, t0_d=tp_d)``.
+
+        Args:
+            T_d: Orbital period in days.
+            e: Eccentricity.
+            cos_i: Cosine of the inclination (the fitting basis; the
+                gradient of ``arccos`` diverges at ``|cos_i| = 1``, so
+                keep exactly face-on/edge-on samples out of gradients).
+            W_rad: Longitude of the ascending node in radians.
+            cos_w: Cosine of the argument of periapsis.
+            sin_w: Sine of the argument of periapsis.
+            tp_d: Time of periapsis passage in days (JD in practice).
+            Ms_kg: Stellar mass in kg.
+
+        Returns:
+            A ``KeplerianOrbit`` whose leading axis is the common
+            broadcast shape of the seven inputs, so a batch of posterior
+            draws becomes a ``(K,)``-batched orbit in one call.
+        """
+        T_d, e, cos_i, W_rad, cos_w, sin_w, tp_d = jnp.broadcast_arrays(
+            *(
+                jnp.atleast_1d(jnp.asarray(x))
+                for x in (T_d, e, cos_i, W_rad, cos_w, sin_w, tp_d)
+            )
+        )
+        return cls(
+            a_AU=period_to_sma(T_d, Ms_kg),
+            e=e,
+            W_rad=W_rad,
+            i_rad=jnp.arccos(cos_i),
+            w_rad=jnp.arctan2(sin_w, cos_w),
+            M0_rad=jnp.zeros_like(T_d),
+            t0_d=tp_d,
+        )
+
     def _AB(self) -> tuple[Array, Array]:
         """Compute the AB propagation matrices from the current elements."""
         sqrt_1me2 = jnp.sqrt(1 - self.e**2)
@@ -106,8 +186,8 @@ class KeplerianOrbit(AbstractOrbit):
 
     def propagate(
         self,
-        trig_solver,
-        t_jd: Array,
+        trig_solver=None,
+        t_jd: Array = None,
         *,
         Ms_kg: Array,
     ) -> tuple[Array, Array, Array]:
@@ -119,6 +199,9 @@ class KeplerianOrbit(AbstractOrbit):
                 rho = sqrt(r_x**2 + r_y**2); gradient-safe at conjunction.
             dist_AU: (K, T) star-planet distance.
         """
+        if t_jd is None:
+            raise TypeError("propagate() missing required argument: 't_jd'")
+        trig_solver = _resolve_trig_solver(trig_solver)
         t_jd = jnp.atleast_1d(t_jd)
 
         A_AU, B_AU = self._AB()
@@ -159,8 +242,8 @@ class KeplerianOrbit(AbstractOrbit):
 
     def position_arcsec(
         self,
-        trig_solver,
-        t_jd: Array,
+        trig_solver=None,
+        t_jd: Array = None,
         *,
         Ms_kg: Array,
         dist_pc: Array,
@@ -171,7 +254,7 @@ class KeplerianOrbit(AbstractOrbit):
         need projected position.
         """
         r_AU, _, _ = self.propagate(trig_solver, t_jd, Ms_kg=Ms_kg)
-        dist_AU = dist_pc * pc2AU
+        dist_AU = jnp.atleast_1d(dist_pc) * pc2AU
         scale = rad2arcsec / dist_AU
         ra_arcsec = r_AU[:, 0] * scale[:, None]
         dec_arcsec = r_AU[:, 1] * scale[:, None]
@@ -179,8 +262,8 @@ class KeplerianOrbit(AbstractOrbit):
 
     def separation_arcsec(
         self,
-        trig_solver,
-        t_jd: Array,
+        trig_solver=None,
+        t_jd: Array = None,
         *,
         Ms_kg: Array,
         dist_pc: Array,

@@ -302,3 +302,127 @@ def test_separation_arcsec_matches_projected_distance():
         dist_pc=dist_pc,
     )
     np.testing.assert_allclose(sep, jnp.sqrt(ra**2 + dec**2), rtol=1e-10)
+
+
+def test_default_trig_solver_matches_explicit_grid_solver():
+    """propagate(t_jd=...) with no solver matches the explicit grid solver."""
+    from orbix.kepler.shortcuts.grid import get_grid_solver
+    from orbix.orbit import KeplerianOrbit
+
+    orbit = KeplerianOrbit(**_earthlike_orbit_params())
+    t_jd = jnp.linspace(0.0, 365.0, 7)
+    Ms_kg = jnp.atleast_1d(1.988409870698051e30)
+
+    explicit = get_grid_solver(level="scalar", E=False, trig=True, jit=True)
+    r_default, beta_default, d_default = orbit.propagate(t_jd=t_jd, Ms_kg=Ms_kg)
+    r_explicit, beta_explicit, d_explicit = orbit.propagate(explicit, t_jd, Ms_kg=Ms_kg)
+
+    np.testing.assert_array_equal(r_default, r_explicit)
+    np.testing.assert_array_equal(beta_default, beta_explicit)
+    np.testing.assert_array_equal(d_default, d_explicit)
+
+
+def test_default_solver_on_position_and_separation():
+    """position_arcsec/separation_arcsec accept the default-solver path."""
+    from orbix.orbit import KeplerianOrbit
+
+    orbit = KeplerianOrbit(**_earthlike_orbit_params())
+    t_jd = jnp.linspace(0.0, 365.0, 5)
+    Ms_kg = jnp.atleast_1d(1.988409870698051e30)
+
+    ra, dec = orbit.position_arcsec(t_jd=t_jd, Ms_kg=Ms_kg, dist_pc=10.0)
+    sep = orbit.separation_arcsec(t_jd=t_jd, Ms_kg=Ms_kg, dist_pc=10.0)
+    assert ra.shape == (1, 5)
+    np.testing.assert_allclose(sep, jnp.sqrt(ra**2 + dec**2), rtol=1e-10)
+
+
+def test_propagate_missing_times_raises():
+    """Omitting t_jd raises a TypeError that names the argument."""
+    from orbix.orbit import KeplerianOrbit
+
+    orbit = KeplerianOrbit(**_earthlike_orbit_params())
+    with pytest.raises(TypeError, match="t_jd"):
+        orbit.propagate(Ms_kg=jnp.atleast_1d(2.0e30))
+
+
+def test_propagate_times_passed_as_solver_raises():
+    """Passing a time array where the solver goes names the fix."""
+    from orbix.orbit import KeplerianOrbit
+
+    orbit = KeplerianOrbit(**_earthlike_orbit_params())
+    with pytest.raises(TypeError, match="t_jd"):
+        orbit.propagate(jnp.linspace(0.0, 10.0, 3), Ms_kg=jnp.atleast_1d(2.0e30))
+
+
+def test_from_period_matches_direct_construction():
+    """from_period reproduces a directly constructed orbit exactly.
+
+    Uses an eccentric, inclined, rotated orbit so no element collapses
+    to a fixture symmetry; tp maps to (M0=0, t0=tp) exactly.
+    """
+    from orbix.equations.orbit import period_to_sma
+    from orbix.orbit import KeplerianOrbit
+
+    Ms_kg = jnp.atleast_1d(1.988409870698051e30)
+    T_d = jnp.atleast_1d(431.7)
+    e = jnp.atleast_1d(0.31)
+    i_rad = jnp.atleast_1d(1.05)
+    W_rad = jnp.atleast_1d(2.3)
+    w_rad = jnp.atleast_1d(-0.7)
+    tp_d = jnp.atleast_1d(2460218.5)
+
+    orbit = KeplerianOrbit.from_period(
+        T_d,
+        e,
+        jnp.cos(i_rad),
+        W_rad,
+        jnp.cos(w_rad),
+        jnp.sin(w_rad),
+        tp_d,
+        Ms_kg=Ms_kg,
+    )
+
+    np.testing.assert_allclose(orbit.a_AU, period_to_sma(T_d, Ms_kg), rtol=1e-12)
+    np.testing.assert_allclose(orbit.i_rad, i_rad, rtol=1e-12)
+    np.testing.assert_allclose(orbit.W_rad, W_rad, rtol=1e-12)
+    np.testing.assert_allclose(orbit.w_rad, w_rad, rtol=1e-12)
+    np.testing.assert_array_equal(orbit.M0_rad, jnp.zeros(1))
+    np.testing.assert_array_equal(orbit.t0_d, tp_d)
+
+    direct = KeplerianOrbit(
+        a_AU=period_to_sma(T_d, Ms_kg),
+        e=e,
+        W_rad=W_rad,
+        i_rad=i_rad,
+        w_rad=w_rad,
+        M0_rad=jnp.zeros(1),
+        t0_d=tp_d,
+    )
+    t_jd = tp_d[0] + jnp.linspace(0.0, float(T_d[0]), 9)
+    r_a, _, d_a = orbit.propagate(t_jd=t_jd, Ms_kg=Ms_kg)
+    r_b, _, d_b = direct.propagate(t_jd=t_jd, Ms_kg=Ms_kg)
+    np.testing.assert_allclose(r_a, r_b, rtol=1e-12)
+
+    # At periapsis passage the Kepler distance is a * (1 - e).
+    np.testing.assert_allclose(d_a[:, 0], orbit.a_AU * (1.0 - e), rtol=1e-6)
+
+
+def test_from_period_broadcasts_batched_samples():
+    """A (K,) batch of posterior-style draws becomes a (K,)-batched orbit."""
+    from orbix.orbit import KeplerianOrbit
+
+    K = 4
+    orbit = KeplerianOrbit.from_period(
+        jnp.linspace(300.0, 500.0, K),
+        0.1,
+        0.4,
+        1.0,
+        0.6,
+        0.8,
+        2460000.0,
+        Ms_kg=2.0e30,
+    )
+    assert orbit.a_AU.shape == (K,)
+    assert orbit.t0_d.shape == (K,)
+    r_AU, _, _ = orbit.propagate(t_jd=jnp.linspace(0.0, 100.0, 3), Ms_kg=2.0e30)
+    assert r_AU.shape == (K, 3, 3)
