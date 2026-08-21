@@ -247,3 +247,13 @@ def test_plot_sky_track_per_track_colors():
 
     with pytest.raises(ValueError, match="colors has 1"):
         plot_sky_track(tracks, colors=["#aa3311"])
+
+
+def test_plot_orbit_panes_take_the_axes_facecolor():
+    """The 3D panes follow the axes facecolor instead of matplotlib gray."""
+    from orbix.viz import plot_orbit
+
+    result = plot_orbit(_orbit(), T_JD, Ms_kg=STELLAR["Ms_kg"])
+    face = result.ax.get_facecolor()
+    for pane_axis in (result.ax.xaxis, result.ax.yaxis, result.ax.zaxis):
+        assert tuple(pane_axis.pane.get_facecolor()) == pytest.approx(face)

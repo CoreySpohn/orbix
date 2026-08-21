@@ -353,6 +353,14 @@ def plot_orbit(
     ax.set_ylim(-half, half)
     ax.set_zlim(-half, half)
     ax.set_box_aspect((1.0, 1.0, 1.0))
+
+    # matplotlib's 3D panes are a fixed light gray that ignores the style
+    # mode; take the axes facecolor instead, resolved at call time, so a
+    # dark mode gets black space behind the orbit and a light mode gets
+    # clean white panes.
+    pane_color = ax.get_facecolor()
+    for pane_axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+        pane_axis.set_pane_color(pane_color)
     if orbit is not None:
         ep.label_au(ax)
         ax.set_zlabel(r"$z$ [AU]")
