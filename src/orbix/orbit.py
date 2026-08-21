@@ -77,7 +77,11 @@ class AbstractOrbit(eqx.Module):
 
         Returns:
             r_AU: Position vectors, shape ``(K, 3, T)``.
-            phase_angle_rad: Phase angle beta, shape ``(K, T)``.
+            phase_angle_rad: Phase angle beta, shape ``(K, T)``, measured
+                from the observer (+z) axis to the position vector. The
+                standard planetary star-planet-observer phase angle is
+                ``pi`` minus this; convert before any Lambert phase
+                function.
             dist_AU: Star-planet distance, shape ``(K, T)``.
         """
 
@@ -197,6 +201,10 @@ class KeplerianOrbit(AbstractOrbit):
             r_AU: (K, 3, T) position vectors.
             phase_angle_rad: (K, T) phase angle beta = arctan2(rho, r_z),
                 rho = sqrt(r_x**2 + r_y**2); gradient-safe at conjunction.
+                Measured from the observer (+z) axis, so the standard
+                star-planet-observer phase angle (beta = 0 at full phase)
+                is pi minus this; convert before any Lambert phase
+                function.
             dist_AU: (K, T) star-planet distance.
         """
         if t_jd is None:
