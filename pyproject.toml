@@ -45,9 +45,15 @@ docs = [
   "sphinx-book-theme",
   "sphinx-autoapi",
   "sphinx_autodoc_typehints",
+  "ipython",
   "matplotlib",
+  "eyepiece>=0.1.0",
 ]
 test = ["pytest"]
+# eyepiece>=0.1.0 carries every interface orbix.viz calls (sky_fan, trail,
+# label_au, SourceStyles, PlotResult, animate); checked by interface in the
+# test suite rather than by version string.
+viz = ["eyepiece>=0.1.0"]
 
 [tool.ruff.lint]
 select = ["D", "E", "F", "I"]
