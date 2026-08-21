@@ -156,3 +156,22 @@ def test_animate_orbit_argument_errors():
         animate_orbit(_orbit(), T_JD, Ms_kg=MSUN_KG, dist_pc=10.0, kind="2d")
     with pytest.raises(ValueError, match="history"):
         animate_orbit(_orbit(), T_JD, Ms_kg=MSUN_KG, dist_pc=10.0, history="window")
+
+
+def test_animate_orbit_3d_head_carries_depth_cue():
+    """The 3D head marker shrinks on the far side; the ghost has no beads."""
+    from orbix.viz import animate_orbit
+
+    anim = animate_orbit(_orbit(), T_JD, Ms_kg=MSUN_KG, kind="3d")
+    ax = anim.fig.axes[0]
+
+    sizes = []
+    for i in range(len(T_JD)):
+        anim.draw(anim.fig, i)
+        head = ax.lines[-1]
+        sizes.append(head.get_markersize())
+    assert max(sizes) > min(sizes) * 1.3
+
+    beads = [c for c in ax.collections if len(c.get_offsets()) > 1]
+    for bead in beads:
+        assert np.allclose(bead.get_sizes(), 0.0)

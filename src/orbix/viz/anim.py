@@ -39,6 +39,37 @@ def _track_alphas(n_tracks, weights):
     return [min(1.0, 0.3 + 0.7 * float(w)) for w in weights]
 
 
+def _depth_scale(positions, azim_deg, elev_deg):
+    """Per-point head-marker scale in [0, 1] from the camera geometry.
+
+    The same viewer-angle cue ``eyepiece.trail`` bakes into its per-point
+    markers -- ``(1 + cos(angle)) / 2`` between each position vector and
+    the position-to-viewer vector, with the viewer far along the camera
+    direction -- but here it drives the one moving head marker instead of
+    beads along the whole path: in an animation the head can carry the
+    depth cue itself, so the path stays a clean line.
+    """
+    radius = max(float(np.max(np.linalg.norm(positions, axis=-1))), 1.0)
+    elev_rad, azim_rad = np.deg2rad(elev_deg), np.deg2rad(azim_deg)
+    r_v = (
+        1.0e3
+        * radius
+        * np.array(
+            [
+                np.cos(elev_rad) * np.cos(azim_rad),
+                np.cos(elev_rad) * np.sin(azim_rad),
+                np.sin(elev_rad),
+            ]
+        )
+    )
+    r_ov = positions - r_v
+    dot = -np.einsum("ij,ij->i", r_ov, positions)
+    denom = np.linalg.norm(r_ov, axis=-1) * np.linalg.norm(positions, axis=-1)
+    denom = np.where(denom == 0.0, np.finfo(float).eps, denom)
+    cos_angle = np.clip(dot / denom, -1.0, 1.0)
+    return (1.0 + cos_angle) / 2.0
+
+
 def animate_orbit(
     orbit_or_tracks,
     t_jd=None,
@@ -122,6 +153,9 @@ def animate_orbit(
         ra, dec, _ = _sky_tracks(orbit_or_tracks, base_t, Ms_kg, dist_pc, trig_solver)
         tracks = np.stack([ra, dec], axis=-1)
     else:
+        # marker_scale=0 keeps the ghost a bare line: the moving head
+        # carries the depth cue in an animation, so per-point beads along
+        # the whole path would only be clutter.
         base = plot_orbit(
             orbit_or_tracks,
             base_t,
@@ -129,8 +163,8 @@ def animate_orbit(
             trig_solver=trig_solver,
             style=style,
             marks=marks,
-            marker_scale=10.0,
-            trail_kw={"alpha": 0.3},
+            marker_scale=0.0,
+            trail_kw={"alpha": 0.45},
         )
         tracks, _ = _positions(orbit_or_tracks, base_t, Ms_kg, trig_solver)
 
@@ -147,6 +181,13 @@ def animate_orbit(
 
     color = _resolve_color(ep, style)
     alphas = _track_alphas(n_tracks, weights)
+
+    head_ms = 9.0
+    head_scales = None
+    if kind == "3d":
+        head_scales = np.stack(
+            [_depth_scale(tracks[k], ax.azim, ax.elev) for k in range(n_tracks)]
+        )
 
     trails, heads = [], []
     for k in range(n_tracks):
@@ -198,6 +239,9 @@ def animate_orbit(
                 heads[k].set_data([point[0]], [point[1]])
             else:
                 heads[k].set_data_3d([point[0]], [point[1]], [point[2]])
+                # never vanish entirely: the far side reads as "small",
+                # not "gone behind the star"
+                heads[k].set_markersize(head_ms * (0.35 + 0.65 * head_scales[k, i]))
         if label is not None:
             label.set_text(f"t = +{times[i] - times[0]:.0f} d")
 

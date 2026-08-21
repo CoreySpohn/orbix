@@ -304,7 +304,9 @@ def plot_orbit(
             diamond in the track color; the nodes are up/down triangles
             joined by a dashed line of nodes through the origin.
         marker_scale: Forwarded to ``trail``: marker size at full
-            illumination for the depth cue.
+            illumination for the per-point depth cue a still figure
+            needs. Pass ``0.0`` for a bare line -- an animation does
+            this, since its moving head carries the depth cue instead.
         trail_kw: Extra kwargs for the connecting-line ``ax.plot`` call,
             forwarded to ``trail`` and applied last.
 
