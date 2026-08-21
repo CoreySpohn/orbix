@@ -249,7 +249,7 @@ def animate_orbit(
         trail_alpha = 1.0
         head_kw = {}
 
-    head_ms = 9.0
+    head_ms = 6.0
     head_scales = None
     camera = None
     if kind == "3d":
