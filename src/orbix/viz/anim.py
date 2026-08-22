@@ -41,7 +41,7 @@ def _track_alphas(n_tracks, weights):
     return [min(1.0, 0.3 + 0.7 * float(w)) for w in weights]
 
 
-def _depth_size(depth):
+def depth_size(depth):
     """Map a [0, 1] depth factor onto a marker-diameter multiplier.
 
     The tuning is inherited from the original hand-tuned orbit renders:
@@ -58,7 +58,7 @@ def _depth_size(depth):
     return np.sqrt(1.0 + 0.5 * depth)
 
 
-def _depth_scale(positions, azim_deg, elev_deg):
+def depth_scale(positions, azim_deg, elev_deg):
     """Per-point head-marker scale in [0, 1] from the camera geometry.
 
     The same viewer-angle cue ``eyepiece.trail`` bakes into its per-point
@@ -273,7 +273,7 @@ def animate_orbit(
                 [
                     np.array(
                         [
-                            _depth_scale(
+                            depth_scale(
                                 tracks[k, i : i + 1],
                                 camera["azim"][i],
                                 camera["elev"][i],
@@ -286,7 +286,7 @@ def animate_orbit(
             )
         else:
             head_scales = np.stack(
-                [_depth_scale(tracks[k], ax.azim, ax.elev) for k in range(n_tracks)]
+                [depth_scale(tracks[k], ax.azim, ax.elev) for k in range(n_tracks)]
             )
 
     trails, heads = [], []
@@ -363,7 +363,7 @@ def animate_orbit(
                 heads[k].set_data_3d([point[0]], [point[1]], [point[2]])
                 # never vanish entirely: the far side reads as "small",
                 # not "gone behind the star"
-                heads[k].set_markersize(head_ms[k] * _depth_size(head_scales[k, i]))
+                heads[k].set_markersize(head_ms[k] * depth_size(head_scales[k, i]))
         if label is not None:
             label.set_text(f"t = +{times[i] - times[0]:.0f} d")
 

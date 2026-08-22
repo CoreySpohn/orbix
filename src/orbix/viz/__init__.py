@@ -11,6 +11,8 @@ import importlib
 
 _LAZY = {
     "animate_orbit": "orbix.viz.anim",
+    "depth_scale": "orbix.viz.anim",
+    "depth_size": "orbix.viz.anim",
     "plot_orbit": "orbix.viz.orbit",
     "plot_sky_track": "orbix.viz.orbit",
     "size_by_radius": "orbix.viz.orbit",

@@ -305,3 +305,16 @@ def test_plot_orbit_per_track_marker_scale():
 
     with pytest.raises(ValueError, match="marker_scale has 3"):
         plot_orbit(_orbit(2), T_JD, Ms_kg=STELLAR["Ms_kg"], marker_scale=[1, 2, 3])
+
+
+def test_depth_helpers_are_public():
+    """Two consumer scripts hand-rolled the head depth cue from privates."""
+    import orbix.viz as viz
+
+    assert viz.depth_size(0.0) == pytest.approx(1.0)
+    assert viz.depth_size(1.0) == pytest.approx(np.sqrt(1.5))
+
+    positions = np.array([[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]])
+    scales = viz.depth_scale(positions, azim_deg=0.0, elev_deg=0.0)
+    assert scales.shape == (2,)
+    assert scales[0] > scales[1]
