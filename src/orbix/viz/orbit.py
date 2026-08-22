@@ -79,8 +79,13 @@ def size_by_radius(
     super-Earth reads visibly larger than a sub-Earth without Jupiter
     dwarfing everything. Radii outside the range clip to its ends.
 
-    Feed the result to ``animate_orbit(base_ms=...)`` or scale a still's
-    ``marker_scale`` with it.
+    The result is a set of marker DIAMETERS in points, which is what
+    ``animate_orbit(base_ms=...)`` takes (matplotlib's ``ms``). Do NOT pass
+    it to ``plot_orbit(marker_scale=...)``: that reaches ``scatter(s=...)``,
+    an AREA in points squared, so the diameters would be read as areas and
+    the encoding silently square-rooted -- an 11.2-Earth-radius planet drawn
+    1.48x an Earth instead of 2.19x. Square the result first if you need an
+    area.
 
     Args:
         radius_Rearth: Planet radii in Earth radii, scalar or ``(K,)``.
@@ -378,12 +383,17 @@ def plot_orbit(
             xyz tracks raise if marks are requested. Periapsis is a
             diamond in the track color; the nodes are up/down triangles
             joined by a dashed line of nodes through the origin.
-        marker_scale: Forwarded to ``trail``: marker size at full
-            illumination for the per-point depth cue a still figure
-            needs. A scalar or one value per track, so a batch can
-            encode per-planet meaning (``size_by_radius``). Pass ``0.0``
+        marker_scale: Forwarded to ``trail``: marker AREA in points
+            squared (matplotlib's ``scatter(s=)``) at full illumination,
+            for the per-point depth cue a still figure needs. Pass ``0.0``
             for a bare line -- an animation does this, since its moving
-            head carries the depth cue instead.
+            head carries the depth cue instead. Note the unit: this is an
+            area, while ``size_by_radius`` returns diameters, so the two
+            do not compose directly. Note also that ``trail``'s still
+            depth law takes marker area to zero on the far side, so a
+            per-track ``marker_scale`` encoding a physical quantity is
+            unrecoverable there; encode physical size on an animation's
+            ``base_ms`` instead, whose law is anchored at the base size.
         trail_kw: Extra kwargs for the connecting-line ``ax.plot`` call,
             forwarded to ``trail`` and applied last.
 

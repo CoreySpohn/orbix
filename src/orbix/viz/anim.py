@@ -2,7 +2,7 @@
 
 Built on ``eyepiece.animate`` in update mode: the figure is drawn once
 (the full track as a faint ghost, via the static plot functions, so an
-animated figure looks exactly like its still counterpart), the animated
+animated figure's ghost matches its still counterpart's path), the animated
 artists are created empty, and each frame is a ``set_data`` -- nothing is
 cleared and no artist is created inside the frame loop.
 
@@ -39,6 +39,57 @@ def _track_alphas(n_tracks, weights):
     if weights is None:
         return [1.0] * n_tracks
     return [min(1.0, 0.3 + 0.7 * float(w)) for w in weights]
+
+
+def _auto_camera(tracks, n_frames, roll_deg, tilt_deg=55.0, sweep_deg=40.0):
+    """A sweep that turns the orbit without changing how big it is drawn.
+
+    Sweeping raw azimuth from wherever the axes happened to be pointing
+    changes the projected area of a fixed orbit -- from matplotlib's default
+    camera this orbit's drawn area swings by a factor of six, which a reader
+    reads as a change in the orbit. It is the same failure as an axis that
+    rescales between frames, with a rotation matrix in front of it.
+
+    A camera on a cone about the orbit normal cannot do that: the projected
+    area of a planar ellipse is ``pi * a * b * cos(tilt)``, so holding the
+    tilt fixed holds the drawn size fixed exactly, and the sweep turns the
+    ellipse in the page plane instead of inflating it. The parallax that
+    makes the geometry legible is unchanged.
+
+    Args:
+        tracks: Positions, shape ``(K, T, 3)``, in the plot's own units.
+        n_frames: Number of frames to generate angles for.
+        roll_deg: Camera roll, held fixed across the sweep.
+        tilt_deg: Angle between the camera and the orbit normal. Well away
+            from 0 (face-on, where the depth cue flattens to nothing) and
+            from 90 (edge-on, where the orbit collapses to a line).
+        sweep_deg: How far around the cone to travel.
+
+    Returns:
+        Dict with ``"azim"``, ``"elev"`` and ``"roll"`` arrays.
+    """
+    points = np.asarray(tracks, float).reshape(-1, 3)
+    centered = points - points.mean(axis=0)
+    normal = np.linalg.svd(centered, full_matrices=False)[2][-1]
+    normal = normal / np.linalg.norm(normal)
+
+    seed = np.array([0.0, 0.0, 1.0])
+    if abs(float(normal @ seed)) > 0.9:
+        seed = np.array([1.0, 0.0, 0.0])
+    u = np.cross(normal, seed)
+    u /= np.linalg.norm(u)
+    v = np.cross(normal, u)
+
+    tilt = np.deg2rad(tilt_deg)
+    phase = np.deg2rad(np.linspace(0.0, sweep_deg, n_frames))
+    direction = np.cos(tilt) * normal[None, :] + np.sin(tilt) * (
+        np.cos(phase)[:, None] * u + np.sin(phase)[:, None] * v
+    )
+    return {
+        "elev": np.degrees(np.arcsin(np.clip(direction[:, 2], -1.0, 1.0))),
+        "azim": np.degrees(np.arctan2(direction[:, 1], direction[:, 0])),
+        "roll": np.full(n_frames, roll_deg),
+    }
 
 
 def depth_size(depth):
@@ -260,8 +311,8 @@ def animate_orbit(
     camera = None
     if kind == "3d":
         if rotate == "auto":
-            rotate = {"azim": (ax.azim, ax.azim + 40.0)}
-        if rotate is not None:
+            camera = _auto_camera(tracks, n_frames, ax.roll)
+        elif rotate is not None:
             base_angles = {"azim": ax.azim, "elev": ax.elev, "roll": ax.roll}
             camera = {
                 key: np.linspace(*rotate[key], n_frames)
@@ -269,6 +320,7 @@ def animate_orbit(
                 else np.full(n_frames, base_angles[key])
                 for key in ("azim", "elev", "roll")
             }
+        if camera is not None:
             head_scales = np.stack(
                 [
                     np.array(

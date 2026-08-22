@@ -242,8 +242,16 @@ def test_animate_orbit_3d_default_look():
     assert len(trails) >= 4  # 3 ghosts + at least the drawn trails
 
 
-def test_animate_orbit_default_rotation_is_single_axis():
-    """The default sweep turns azimuth alone; rotate=None holds still."""
+def test_animate_orbit_default_rotation_orbits_the_normal():
+    """The default sweep travels around the orbit normal, not around azimuth.
+
+    A single-axis azimuth sweep from whatever camera the axes happened to
+    carry changes how big the orbit is drawn -- by a factor of six from
+    matplotlib's default view -- so the default deliberately moves both
+    angles instead, holding the tilt to the orbit plane fixed. The size
+    invariance that buys is asserted in
+    `test_auto_sweep_keeps_the_drawn_size_fixed`.
+    """
     from orbix.viz import animate_orbit
 
     anim = animate_orbit(_orbit(), T_JD, Ms_kg=MSUN_KG, kind="3d")
@@ -251,8 +259,8 @@ def test_animate_orbit_default_rotation_is_single_axis():
     anim.draw(anim.fig, 0)
     azim0, elev0 = ax.azim, ax.elev
     anim.draw(anim.fig, len(T_JD) - 1)
-    assert ax.azim == pytest.approx(azim0 + 40.0)
-    assert ax.elev == pytest.approx(elev0)
+    assert ax.azim != pytest.approx(azim0)
+    assert (ax.azim, ax.elev) != (azim0, elev0)
 
     still = animate_orbit(_orbit(), T_JD, Ms_kg=MSUN_KG, kind="3d", rotate=None)
     ax = still.fig.axes[0]
@@ -281,3 +289,71 @@ def test_animate_orbit_per_track_base_ms():
 
     with pytest.raises(ValueError, match="base_ms has 2"):
         animate_orbit(_orbit(3), T_JD, Ms_kg=MSUN_KG, dist_pc=10.0, base_ms=[4.0, 6.0])
+
+
+def _projected_area(points, azim_deg, elev_deg):
+    """Enclosed area of a closed track as drawn at one camera angle."""
+    a, e = np.deg2rad(azim_deg), np.deg2rad(elev_deg)
+    forward = np.array([np.cos(e) * np.cos(a), np.cos(e) * np.sin(a), np.sin(e)])
+    seed = np.array([0.0, 0.0, 1.0])
+    if abs(float(forward @ seed)) > 0.9:
+        seed = np.array([1.0, 0.0, 0.0])
+    u = np.cross(forward, seed)
+    u /= np.linalg.norm(u)
+    v = np.cross(forward, u)
+    p = np.stack([points @ u, points @ v], axis=1)
+    return 0.5 * abs(np.sum(p[:-1, 0] * p[1:, 1] - p[1:, 0] * p[:-1, 1]))
+
+
+def test_auto_sweep_keeps_the_drawn_size_fixed():
+    """A camera that inflates a fixed orbit lies about it.
+
+    Sweeping raw azimuth from matplotlib's default camera swings this
+    orbit's drawn area by a factor of about six, which reads as a change
+    in the orbit. A cone about the orbit normal holds it constant.
+    """
+    from orbix import KeplerianOrbit
+    from orbix.viz.anim import _auto_camera
+
+    orbit = KeplerianOrbit(
+        a_AU=1.3, e=0.31, W_rad=2.3, i_rad=1.05, w_rad=-0.7, M0_rad=0.4, t0_d=0.0
+    )
+    t = np.linspace(0.0, 541.4, 400)
+    xyz, _, _ = orbit.propagate(t_jd=t, Ms_kg=np.atleast_1d(1.988409870698051e30))
+    track = np.moveaxis(np.asarray(xyz), 1, 2)[0]
+
+    camera = _auto_camera(track[None, ...], 60, roll_deg=0.0)
+    areas = np.array(
+        [
+            _projected_area(track, camera["azim"][i], camera["elev"][i])
+            for i in range(60)
+        ]
+    )
+    assert areas.max() / areas.min() < 1.25
+
+    # the old behavior, for contrast: raw azimuth from the default camera
+    naive = np.linspace(-60.0, -20.0, 60)
+    naive_areas = np.array([_projected_area(track, a, 30.0) for a in naive])
+    assert naive_areas.max() / naive_areas.min() > 4.0
+
+
+def test_auto_sweep_avoids_edge_on_and_face_on():
+    """The tilt is held off both degenerate views for the whole sweep."""
+    from orbix import KeplerianOrbit
+    from orbix.viz.anim import _auto_camera
+
+    orbit = KeplerianOrbit(
+        a_AU=1.3, e=0.31, W_rad=2.3, i_rad=1.05, w_rad=-0.7, M0_rad=0.4, t0_d=0.0
+    )
+    t = np.linspace(0.0, 541.4, 400)
+    xyz, _, _ = orbit.propagate(t_jd=t, Ms_kg=np.atleast_1d(1.988409870698051e30))
+    track = np.moveaxis(np.asarray(xyz), 1, 2)[0]
+
+    camera = _auto_camera(track[None, ...], 40, roll_deg=0.0)
+    centered = track - track.mean(axis=0)
+    normal = np.linalg.svd(centered, full_matrices=False)[2][-1]
+    for i in range(40):
+        a, e = np.deg2rad(camera["azim"][i]), np.deg2rad(camera["elev"][i])
+        forward = np.array([np.cos(e) * np.cos(a), np.cos(e) * np.sin(a), np.sin(e)])
+        tilt = np.degrees(np.arccos(abs(float(forward @ normal))))
+        assert 20.0 < tilt < 80.0
