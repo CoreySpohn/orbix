@@ -158,9 +158,13 @@ Mercury and Jupiter by default. The resting marker size is the anchor the
 depth cue swells around, so it is the place physical meaning belongs.
 
 ```{code-cell} ipython3
-for name, r_earth in [("Mercury", 0.38), ("Earth", 1.0),
-                      ("Neptune", 3.9), ("Jupiter", 11.2)]:
-    print(f"{name:8s} {r_earth:5.2f} R_earth -> {float(viz.size_by_radius(r_earth)):5.2f} pt")
+names = ["Mercury", "Earth", "Neptune", "Jupiter"]
+radii = [0.38, 1.0, 3.9, 11.2]
+
+# One vectorized call: the result is always an array of shape (K,), so a
+# scalar radius comes back as a one-element array rather than a float.
+for name, r_earth, ms in zip(names, radii, viz.size_by_radius(radii)):
+    print(f"{name:8s} {r_earth:5.2f} R_earth -> {ms:5.2f} pt")
 ```
 
 The result is a set of marker **diameters**, which is what
