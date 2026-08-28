@@ -266,6 +266,98 @@ anim = viz.animate_orbit(
 HTML(anim.jshtml(dpi=130))
 ```
 
+## The same plot, different options
+
+Each function above takes the same data and renders it several ways. These
+matrices vary one argument at a time so the effect of each is visible on its
+own, rather than described.
+
+`plot_sky_track` on one posterior fan, one option added per panel:
+
+```{code-cell} ipython3
+# Three colours from ONE SourceStyles: a fresh SourceStyles restarts the
+# palette, so asking for three separate ones would give the same colour thrice.
+families = ep.SourceStyles(["alias A", "alias B", "alias C"])
+per_track = [families[f"alias {c}"]["color"] for c in "ABC"] * (len(weights) // 3)
+
+# Deliberately lumpy weights; a near-uniform posterior fades almost invisibly.
+lumpy = np.random.default_rng(3).dirichlet(np.full(len(weights), 0.35))
+
+variants = [
+    ("plot_sky_track(fan, ...)", {}),
+    ("weights=posterior_mass", {"weights": lumpy}),
+    ("colors=per_track", {"colors": per_track}),
+    ("iwa=0.06", {"iwa": 0.06}),
+    ("data=(ra, dec, err)", {"data": epochs}),
+    ("invert_ra=False", {"invert_ra": False}),
+]
+fig, axes = plt.subplots(2, 3, figsize=(12.0, 7.4), layout="constrained")
+for ax, (label, kw) in zip(axes.ravel(), variants):
+    viz.plot_sky_track(
+        fan, t_jd, Ms_kg=MSUN_KG, dist_pc=10.0, ax=ax,
+        style=styles["planet b"], **kw,
+    )
+    ax.set_title(label, fontsize=10.5)
+```
+
+`plot_orbit` on the same system. With no `style` it uses the star-chart look --
+markers in the mode's text colour over a transparent dashed grey path -- and
+`style=` opts into a source's solid colour instead:
+
+```{code-cell} ipython3
+fig, axes = plt.subplots(
+    1, 3, figsize=(12.6, 4.2), layout="constrained",
+    subplot_kw={"projection": "3d"},
+)
+orbit_variants = [
+    ("star-chart default", {}),
+    ("style=", {"style": styles["planet b"]}),
+    ("marks={'periapsis', 'nodes'}",
+     {"style": styles["planet b"], "marks": {"periapsis", "nodes"}}),
+]
+for ax, (label, kw) in zip(axes, orbit_variants):
+    ax.view_init(elev=42.0, azim=-130.0)
+    viz.plot_orbit(system, t_system, Ms_kg=MSUN_KG, ax=ax, **kw)
+    ax.set_title(label, fontsize=10.5)
+```
+
+And the trail. `history` decides how much of the path behind each planet stays
+drawn, which is the difference between a plot that reads as motion and one that
+reads as a snapshot. Note that this only shows up against a solid `style`: under
+the star-chart default the trail is the same dim grey as the ghost path and the
+three settings look identical.
+
+`animate_orbit` builds its own figure and takes no `ax`, unlike the static
+functions, so these three frames are rendered separately and tiled:
+
+```{code-cell} ipython3
+import io
+
+frames = []
+for history in ["all", 15, "none"]:
+    anim = viz.animate_orbit(
+        system, t_system[::4], Ms_kg=MSUN_KG, kind="3d", history=history,
+        rotate=None, style=styles["planet b"],
+        base_ms=viz.size_by_radius([1.0, 3.9, 11.2]),
+    )
+    for i, frame in enumerate(anim.frames):
+        anim.draw(frame, i)
+        if i == 44:
+            break
+    buf = io.BytesIO()
+    anim.fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
+    plt.close(anim.fig)
+    buf.seek(0)
+    frames.append(plt.imread(buf))
+
+fig, axes = plt.subplots(1, 3, figsize=(12.6, 4.4), layout="constrained")
+for ax, image, label in zip(axes, frames,
+                            ['history="all"', "history=15", 'history="none"']):
+    ax.imshow(image)
+    ax.set_axis_off()
+    ax.set_title(label, fontsize=10.5)
+```
+
 ## `size_by_radius`
 
 Marker diameters from planet radii, interpolated geometrically between
