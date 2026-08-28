@@ -22,6 +22,7 @@ module, and declare the document's cast.
 
 ```{code-cell} ipython3
 import hwostyle
+import matplotlib
 import jax.numpy as jnp
 import numpy as np
 import eyepiece as ep
@@ -30,6 +31,17 @@ from orbix import KeplerianOrbit
 from orbix import viz
 
 hwostyle.use("dark")
+
+# Docs-builder concerns, not lines to copy into your own scripts. hwostyle asks
+# for Inter/Helvetica/Arial and a CI builder has none of them, so name the face
+# matplotlib always ships as a last resort -- otherwise every figure emits a
+# findfont warning. And render at a resolution that holds up on a high-DPI
+# screen; the notebook default of 100 dpi does not.
+matplotlib.rcParams["font.sans-serif"] = list(
+    matplotlib.rcParams["font.sans-serif"]
+) + ["DejaVu Sans"]
+matplotlib.rcParams["figure.dpi"] = 160
+
 styles = ep.SourceStyles(["planet b"])
 ```
 
@@ -125,9 +137,19 @@ a sink is asked for, and one animation can go to several sinks in one
 pass (`.save("orbit.mp4", "orbit.gif")`). The 3D defaults do the whole
 star-chart presentation in one call: dashed gray paths, a moving dot per
 orbit that swells gently on the near side of the trajectory, and a slow
-single-axis azimuth sweep (`rotate="auto"`; pass `None` to hold the
-camera, or an angle dict for full control). The `history` argument
-controls the trail: `"all"` accumulates from the first epoch, an integer
+single-axis azimuth sweep, with elevation held. `rotate` takes a dict of
+`(start_deg, stop_deg)` pairs and holds any axis you leave out, so the call
+below sweeps azimuth alone; `rotate="auto"` instead travels a cone about
+the orbit normal, and `None` holds the camera still.
+
+Place the sweep with care. The projected area of a planar ellipse goes as
+`cos(tilt)` to the orbit normal, so an azimuth window that changes the tilt
+changes the drawn size: from azimuth -50 to -10 this system swings by 5.7x
+and reads as the orbit inflating. The window below holds it to 1.09x while
+staying 56 degrees off the normal, far enough from face-on that the depth
+cue still reads.
+
+The `history` argument controls the trail: `"all"` accumulates from the first epoch, an integer
 keeps a trailing window, `"none"` moves the head markers alone. The base
 marker size is the anchor the depth cue swells around, so it is where
 physical meaning lives: `size_by_radius` maps planet radii onto marker
@@ -146,11 +168,12 @@ system = KeplerianOrbit(
     M0_rad=np.array([0.00, 2.10, 4.30]),
     t0_d=np.full(3, 2460000.0),
 )
-t_anim = jnp.linspace(2460000.0, 2460000.0 + 365.25 * 2.35**1.5, 30)
+t_anim = jnp.linspace(2460000.0, 2460000.0 + 365.25 * 2.35**1.5, 72)
 
 anim = viz.animate_orbit(
     system, t_anim, Ms_kg=MSUN_KG, kind="3d", history="none",
-    base_ms=viz.size_by_radius([1.0, 3.9, 11.2]), fps=10,
+    base_ms=viz.size_by_radius([1.0, 3.9, 11.2]), fps=15,
+    rotate={"azim": (-150.0, -110.0), "elev": (20.0, 20.0)},
 )
-HTML(anim.jshtml(dpi=100))
+HTML(anim.jshtml(dpi=130))
 ```

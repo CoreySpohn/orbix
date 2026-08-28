@@ -23,6 +23,7 @@ the build rather than the documentation host.
 
 ```{code-cell} ipython3
 import hwostyle
+import matplotlib
 import jax.numpy as jnp
 import numpy as np
 import eyepiece as ep
@@ -31,6 +32,16 @@ from orbix import KeplerianOrbit
 from orbix import viz
 
 hwostyle.use("dark")
+
+# Docs-builder concerns, not lines to copy into your own scripts. hwostyle asks
+# for Inter/Helvetica/Arial and a CI builder has none of them, so name the face
+# matplotlib always ships as a last resort -- otherwise every figure emits a
+# findfont warning. And render at a resolution that holds up on a high-DPI
+# screen; the notebook default of 100 dpi does not.
+matplotlib.rcParams["font.sans-serif"] = list(
+    matplotlib.rcParams["font.sans-serif"]
+) + ["DejaVu Sans"]
+matplotlib.rcParams["figure.dpi"] = 160
 
 MSUN_KG = 1.988409870698051e30
 styles = ep.SourceStyles(["planet b", "planet c", "planet d"])
@@ -130,6 +141,21 @@ no ffmpeg and so survives any documentation builder.
 track. `history` controls the trail: `"all"` accumulates, an integer keeps a
 trailing window, `"none"` moves the heads alone.
 
+`rotate` controls the camera sweep. A dict of `(start_deg, stop_deg)` pairs
+gives full manual control, and any axis left out is held at its current value,
+so the call below is a single-axis azimuth sweep with elevation pinned.
+
+Where you put that sweep matters more than how wide it is. The projected area
+of a planar ellipse is `pi * a * b * cos(tilt)`, with `tilt` measured to the
+orbit normal, so an azimuth sweep that changes the tilt changes the drawn size
+and the orbit reads as inflating rather than turning. Swept from azimuth -50 to
+-10 this system's drawn size swings by 5.7x; the window used here holds it to
+1.09x while staying 56 degrees off the normal, which is far enough from face-on
+to keep the depth cue alive (the head markers span 0.09 to 0.91 of full scale).
+`rotate="auto"` avoids the question by travelling a cone about the orbit normal
+at fixed tilt, which holds the size exactly but moves azimuth and elevation
+together; `None` holds the camera still.
+
 ```{code-cell} ipython3
 from IPython.display import HTML
 
@@ -142,13 +168,14 @@ system = KeplerianOrbit(
     M0_rad=np.array([0.00, 2.10, 4.30]),
     t0_d=np.full(3, 2460000.0),
 )
-t_anim = jnp.linspace(2460000.0, 2460000.0 + 365.25 * 2.35**1.5, 30)
+t_anim = jnp.linspace(2460000.0, 2460000.0 + 365.25 * 2.35**1.5, 72)
 
 anim = viz.animate_orbit(
     system, t_anim, Ms_kg=MSUN_KG, kind="3d", history="none",
-    base_ms=viz.size_by_radius([1.0, 3.9, 11.2]), fps=10,
+    base_ms=viz.size_by_radius([1.0, 3.9, 11.2]), fps=15,
+    rotate={"azim": (-150.0, -110.0), "elev": (20.0, 20.0)},
 )
-HTML(anim.jshtml(dpi=100))
+HTML(anim.jshtml(dpi=130))
 ```
 
 ## `size_by_radius`

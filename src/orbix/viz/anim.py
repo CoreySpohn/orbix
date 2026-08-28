@@ -181,11 +181,14 @@ def animate_orbit(
             keeps a trailing window of that many frames, ``"none"`` moves
             the head marker alone.
         rotate: Camera sweep, ``kind="3d"`` only. The default ``"auto"``
-            is a slow single-axis sweep about z -- 40 degrees of azimuth
-            from the camera's starting position, elevation held -- since
-            one-axis parallax is what makes the 3D geometry legible
-            without disorienting the viewer. ``None`` holds the camera
-            still. A dict maps any of ``"azim"``, ``"elev"``, ``"roll"``
+            travels 40 degrees around a cone about the ORBIT NORMAL, at a
+            fixed tilt to it, so azimuth and elevation both vary. That is
+            deliberate: holding the tilt fixed holds the projected area
+            ``pi * a * b * cos(tilt)`` fixed, where a plain azimuth sweep
+            about z at held elevation changes the tilt and so swings the
+            drawn size -- by 5.7x on the three-planet system in the docs,
+            which a reader misreads as the orbit growing. ``None`` holds
+            the camera still. A dict maps any of ``"azim"``, ``"elev"``, ``"roll"``
             to a ``(start_deg, stop_deg)`` pair interpolated linearly
             across the frames, for full control. The head's depth cue
             tracks the moving camera frame by frame. Ignored for

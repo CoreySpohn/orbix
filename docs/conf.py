@@ -64,3 +64,9 @@ nb_execution_raise_on_error = True
 # ... and prints the failing cell's traceback. Without this the build fails
 # naming only the page, which is not enough to fix it from a CI log.
 nb_execution_show_tb = True
+
+# Warnings belong in the build log, not stamped across the page. hwostyle asks
+# for Inter/Helvetica/Arial and a docs builder has none of them, which emitted a
+# findfont warning per figure and pushed ~50 stderr blocks onto the rendered
+# pages. "remove-warn" drops them from the page and still reports them here.
+nb_output_stderr = "remove-warn"
