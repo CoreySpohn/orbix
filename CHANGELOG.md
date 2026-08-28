@@ -11,6 +11,13 @@
 * The broken predict/pdet functions and the `discrete_e` factory were removed
   (they did not work correctly and had no working callers).
 
+## [1.2.0](https://github.com/CoreySpohn/orbix/compare/v1.1.0...v1.2.0) (2026-08-28)
+
+
+### Features
+
+* **viz:** forward trail's depth cue and drop the fat per-point beads ([7cabf68](https://github.com/CoreySpohn/orbix/commit/7cabf686eaf8c04b87c0f9737bba3dd807f0c788))
+
 ## [1.1.0](https://github.com/CoreySpohn/orbix/compare/v1.0.0...v1.1.0) (2026-08-28)
 
 
