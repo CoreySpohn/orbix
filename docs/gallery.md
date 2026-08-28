@@ -62,6 +62,23 @@ orbit = KeplerianOrbit(
     w_rad=SMALL_OMEGA_RAD, M0_rad=M0_RAD, t0_d=T0_D,
 )
 t_jd = jnp.linspace(T0_D, T0_D + PERIOD_D, 240)
+
+# A second cast for the 3D views: three near-coplanar planets, the way a
+# planetary system actually sits. Keeping the mutual inclinations small (7 to
+# 16 degrees) keeps the z excursion to about a quarter of the in-plane extent,
+# so the orbits read as nested ellipses seen from above rather than as thin
+# slivers pointed at the camera.
+system = KeplerianOrbit(
+    a_AU=np.array([0.72, 1.30, 2.35]),
+    e=np.array([0.05, 0.21, 0.40]),
+    W_rad=np.array([2.20, 2.35, 2.50]),
+    i_rad=np.array([0.12, 0.20, 0.28]),
+    w_rad=np.array([-0.40, -0.70, 0.90]),
+    M0_rad=np.array([0.00, 2.10, 4.30]),
+    t0_d=np.full(3, T0_D),
+)
+OUTER_PERIOD_D = 2.35**1.5 * 365.25
+t_system = jnp.linspace(T0_D, T0_D + OUTER_PERIOD_D, 240)
 ```
 
 ## `plot_sky_track`
@@ -121,9 +138,19 @@ through the same door: `viz.plot_sky_track((ra, dec))`.
 
 ## `plot_orbit`
 
-The star-centric orbit in three dimensions, in AU, through
-`eyepiece.trail`. `marks` adds the exact periapsis (a diamond) and the line
-of nodes (triangles, where the orbit pierces the sky plane).
+The star-centric orbits in three dimensions, in AU, through `eyepiece.trail`.
+This is the three-planet system rather than the single track above, because a
+set of near-coplanar orbits is what the view is for: they nest, and the outer
+planet's eccentricity shows as the star sitting off centre.
+
+Point the camera down on the system's own plane rather than at its edge. The
+default 3D view looks 79 degrees off this kind of orbit normal, which squashes
+an ellipse to a fifth of its width and reads as a sliver aimed at the viewer;
+`elev=46, azim=-130` sits 58 degrees off, open enough to read and still far
+enough from face-on for the depth cue to work.
+
+`marks` adds the exact periapsis (a diamond) and the line of nodes (triangles,
+where each orbit pierces the sky plane).
 
 Set the camera *before* calling: the per-point depth cue on a still is baked
 from the camera at call time, so a `view_init` afterwards moves the scene
@@ -135,10 +162,10 @@ import matplotlib.pyplot as plt
 
 fig = plt.figure(layout="constrained")
 ax = fig.add_subplot(projection="3d")
-ax.view_init(elev=25.0, azim=-50.0)
+ax.view_init(elev=46.0, azim=-130.0)
 
 result = viz.plot_orbit(
-    orbit, t_jd, Ms_kg=MSUN_KG, ax=ax, marks={"periapsis", "nodes"},
+    system, t_system, Ms_kg=MSUN_KG, ax=ax, marks={"periapsis", "nodes"},
 )
 ```
 
@@ -157,35 +184,28 @@ trailing window, `"none"` moves the heads alone.
 gives full manual control, and any axis left out is held at its current value,
 so the call below is a single-axis azimuth sweep with elevation pinned.
 
-Where you put that sweep matters more than how wide it is. The projected area
-of a planar ellipse is `pi * a * b * cos(tilt)`, with `tilt` measured to the
-orbit normal, so an azimuth sweep that changes the tilt changes the drawn size
-and the orbit reads as inflating rather than turning. Swept from azimuth -50 to
--10 this system's drawn size swings by 5.7x; the window used here holds it to
-1.09x while staying 56 degrees off the normal, which is far enough from face-on
-to keep the depth cue alive (the head markers span 0.09 to 0.91 of full scale).
-`rotate="auto"` avoids the question by travelling a cone about the orbit normal
-at fixed tilt, which holds the size exactly but moves azimuth and elevation
+Where you put that sweep still matters. The projected area of a planar ellipse
+is `pi * a * b * cos(tilt)`, with `tilt` measured to the orbit normal, so an
+azimuth sweep that changes the tilt changes the drawn size and the orbits read
+as inflating rather than turning. A near-coplanar system makes this easy,
+because its normal is only 14 degrees off the rotation axis: centred on that
+normal's own azimuth the window below holds the drawn size to 1.02x, where a
+window placed a quarter turn away gives 1.18x. Elevation 46 leaves the camera
+58 degrees off the normal, far enough from face-on that the depth cue still
+reads across the outer planet (0.07 to 0.93 of full scale). `rotate="auto"`
+sidesteps the placement question by travelling a cone about the orbit normal at
+fixed tilt, which holds the size exactly but moves azimuth and elevation
 together; `None` holds the camera still.
 
 ```{code-cell} ipython3
 from IPython.display import HTML
 
-system = KeplerianOrbit(
-    a_AU=np.array([0.72, 1.30, 2.35]),
-    e=np.array([0.05, 0.21, 0.40]),
-    W_rad=np.array([2.20, 2.35, 2.50]),
-    i_rad=np.array([1.00, 1.08, 0.95]),
-    w_rad=np.array([-0.40, -0.70, 0.90]),
-    M0_rad=np.array([0.00, 2.10, 4.30]),
-    t0_d=np.full(3, 2460000.0),
-)
-t_anim = jnp.linspace(2460000.0, 2460000.0 + 365.25 * 2.35**1.5, 72)
+t_anim = jnp.linspace(T0_D, T0_D + OUTER_PERIOD_D, 72)
 
 anim = viz.animate_orbit(
     system, t_anim, Ms_kg=MSUN_KG, kind="3d", history="none",
     base_ms=viz.size_by_radius([1.0, 3.9, 11.2]), fps=15,
-    rotate={"azim": (-150.0, -110.0), "elev": (20.0, 20.0)},
+    rotate={"azim": (-150.0, -110.0), "elev": (46.0, 46.0)},
 )
 HTML(anim.jshtml(dpi=130))
 ```
