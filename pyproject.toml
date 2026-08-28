@@ -47,16 +47,17 @@ docs = [
   "sphinx_autodoc_typehints",
   "ipython",
   "matplotlib",
-  "eyepiece>=0.1.0",
+  "eyepiece>=0.4.0",
 ]
 # The viz tests import matplotlib and eyepiece, so the test extra has to carry
 # the viz extra: without it those modules fail to IMPORT on a clean runner and
 # the whole viz suite silently does not run.
 test = ["pytest", "orbix[viz]"]
-# eyepiece>=0.1.0 carries every interface orbix.viz calls (sky_fan, trail,
-# label_au, SourceStyles, PlotResult, animate); checked by interface in the
-# test suite rather than by version string.
-viz = ["eyepiece>=0.1.0"]
+# eyepiece>=0.4.0 for trail's `depth=` argument, which plot_orbit forwards;
+# earlier eyepiece carries every other interface orbix.viz calls (sky_fan,
+# trail, label_au, SourceStyles, PlotResult, animate), checked by interface in
+# the test suite rather than by version string.
+viz = ["eyepiece>=0.4.0"]
 
 [tool.ruff.lint]
 select = ["D", "E", "F", "I"]

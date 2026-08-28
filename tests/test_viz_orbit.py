@@ -259,13 +259,13 @@ def test_plot_orbit_panes_take_the_axes_facecolor():
         assert tuple(pane_axis.pane.get_facecolor()) == pytest.approx(face)
 
 
-def test_plot_orbit_default_star_chart_look():
-    """No style: dashed transparent gray path, text-color markers."""
+def test_plot_orbit_star_chart_look_under_markers():
+    """depth="markers", no style: dashed gray path, text-color markers."""
     import matplotlib as mpl
 
     from orbix.viz import plot_orbit
 
-    result = plot_orbit(_orbit(), T_JD, Ms_kg=STELLAR["Ms_kg"])
+    result = plot_orbit(_orbit(), T_JD, Ms_kg=STELLAR["Ms_kg"], depth="markers")
     line = result.artists["line"]
     assert line.get_linestyle() == "--"
     assert line.get_alpha() == pytest.approx(0.5)
@@ -273,9 +273,32 @@ def test_plot_orbit_default_star_chart_look():
     scatter_rgba = tuple(result.artists["scatter"].get_facecolor()[0])
     assert scatter_rgba == pytest.approx(text_rgba)
 
-    styled = plot_orbit(_orbit(), T_JD, Ms_kg=STELLAR["Ms_kg"], style="#22aabb")
+    styled = plot_orbit(
+        _orbit(), T_JD, Ms_kg=STELLAR["Ms_kg"], style="#22aabb", depth="markers"
+    )
     assert styled.artists["line"].get_linestyle() == "-"
     assert styled.artists["line"].get_color() == "#22aabb"
+
+
+def test_plot_orbit_unstyled_path_is_visible_without_markers():
+    """The star-chart gray only works because markers carry the color.
+
+    Under the default hidden-line cue there are no markers, so an unstyled
+    orbit has to put the text color on the path itself; leaving it at the
+    dim gray would render the orbit as a barely-there line.
+    """
+    import matplotlib as mpl
+
+    from orbix.viz import plot_orbit
+
+    result = plot_orbit(_orbit(), T_JD, Ms_kg=STELLAR["Ms_kg"])
+    text_rgba = matplotlib.colors.to_rgba(mpl.rcParams["text.color"])
+    line_rgba = matplotlib.colors.to_rgba(result.artists["line"].get_color())
+    assert line_rgba == pytest.approx(text_rgba)
+    # the per-track cue is now the solid near-half overlay, not a scatter
+    near = result.artists["scatter"]
+    assert near.get_linestyle() in ("-", "solid")
+    assert matplotlib.colors.to_rgba(near.get_color()) == pytest.approx(text_rgba)
 
 
 def test_size_by_radius_geometric_mapping():
@@ -297,7 +320,11 @@ def test_plot_orbit_per_track_marker_scale():
     from orbix.viz import plot_orbit
 
     result = plot_orbit(
-        _orbit(2), T_JD, Ms_kg=STELLAR["Ms_kg"], marker_scale=[0.0, 20.0]
+        _orbit(2),
+        T_JD,
+        Ms_kg=STELLAR["Ms_kg"],
+        marker_scale=[0.0, 20.0],
+        depth="markers",
     )
     first, second = result.artists["scatter"]
     assert np.allclose(first.get_sizes(), 0.0)

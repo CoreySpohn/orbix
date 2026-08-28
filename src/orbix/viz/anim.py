@@ -291,7 +291,10 @@ def animate_orbit(
         # the star-chart default: heads in the text color (white dots on a
         # dark mode) edged in the background color, trails dashed gray; a
         # style= opts into that source's solid color for both.
-        head_color, path_kw = _orbit_look(style, ep)
+        # The animation always wants the star-chart pairing: a dim dashed
+        # ghost path with the depth cue carried by the moving head marker,
+        # which is exactly what _orbit_look builds for "markers".
+        head_color, path_kw = _orbit_look(style, ep, "markers")
         trail_color = path_kw.get("color", head_color)
         trail_ls = path_kw.get("linestyle", "-")
         trail_alpha = 0.75 if style is None else 1.0

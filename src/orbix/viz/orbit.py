@@ -49,20 +49,28 @@ def _neutral(level):
     return tuple(face + level * (text - face))
 
 
-def _orbit_look(style, ep):
+def _orbit_look(style, ep, depth):
     """The 3D orbit rendering defaults: marker color and path-line kwargs.
 
-    With no ``style``, the look is the classic star-chart one: markers in
-    the mode's text color (white dots on a dark background) over a
-    transparent dashed gray path. A ``style`` opts out into that source's
-    color for both, with a solid path.
+    With no ``style`` and ``depth="markers"``, the look is the classic
+    star-chart one: markers in the mode's text color (white dots on a dark
+    background) over a transparent dashed gray path. Under any other depth
+    cue there are no markers, so the path itself has to be the visible
+    element and takes the text color rather than a dim gray -- otherwise an
+    unstyled orbit renders as a barely-there gray line. A ``style`` opts out
+    into that source's color either way.
     """
     if style is None:
         import matplotlib as mpl
 
         marker_color = mpl.rcParams["text.color"]
-        path_kw = {"color": _neutral(0.55), "linestyle": "--", "alpha": 0.5}
-        return marker_color, path_kw
+        if depth == "markers":
+            return marker_color, {
+                "color": _neutral(0.55),
+                "linestyle": "--",
+                "alpha": 0.5,
+            }
+        return marker_color, {"color": marker_color}
     return _resolve_color(ep, style), {}
 
 
@@ -348,6 +356,7 @@ def plot_orbit(
     ax=None,
     style=None,
     marks=None,
+    depth=None,
     marker_scale=25.0,
     trail_kw=None,
 ):
@@ -383,6 +392,12 @@ def plot_orbit(
             xyz tracks raise if marks are requested. Periapsis is a
             diamond in the track color; the nodes are up/down triangles
             joined by a dashed line of nodes through the origin.
+        depth: Forwarded to ``eyepiece.trail``: how the path shows which
+            half faces the camera. ``None`` takes trail's own default,
+            the hidden-line convention -- the whole orbit dashed and dim
+            with the near half overdrawn solid. ``"markers"`` restores the
+            older per-point markers, which also restores the star-chart
+            look when no ``style`` is given. ``"none"`` drops the cue.
         marker_scale: Forwarded to ``trail``: marker AREA in points
             squared (matplotlib's ``scatter(s=)``) at full illumination,
             for the per-point depth cue a still figure needs. Pass ``0.0``
@@ -400,9 +415,13 @@ def plot_orbit(
     Returns:
         An ``eyepiece.PlotResult``. For a single track the artists are
         ``trail``'s ``"line"`` and ``"scatter"``; for K tracks they are
-        ``"lines"`` and ``"scatter"`` lists in track order. Mark artists
-        are appended to ``"scatter"`` (periapsis first, then nodes) and
-        the line of nodes to ``"lines"``, after the per-track entries.
+        ``"lines"`` and ``"scatter"`` lists in track order. ``"scatter"``
+        holds one depth-cue artist per track, whichever the mode drew: a
+        ``PathCollection`` under ``depth="markers"``, the solid near-half
+        ``Line3D`` under the default hidden-line cue, and nothing at all
+        under ``depth="none"``. Mark artists are appended to ``"scatter"``
+        (periapsis first, then nodes) and the line of nodes to ``"lines"``,
+        after the per-track entries.
     """
     ep = eyepiece()
     positions, orbit = _positions(orbit_or_xyz, t_jd, Ms_kg, trig_solver)
@@ -416,7 +435,8 @@ def plot_orbit(
             "than bare xyz tracks"
         )
 
-    marker_color, path_kw = _orbit_look(style, ep)
+    depth = "hidden" if depth is None else depth
+    marker_color, path_kw = _orbit_look(style, ep, depth)
     lkw = {**path_kw, **(trail_kw or {})}
     scales = _per_track(marker_scale, positions.shape[0], "marker_scale")
     lines, scatters = [], []
@@ -425,12 +445,17 @@ def plot_orbit(
             positions[k],
             ax=ax,
             style=style if style is not None else marker_color,
+            depth=depth,
             marker_scale=float(scales[k]),
             trail_kw=lkw,
         )
         ax = result.ax
         lines.append(result.artists["line"])
-        scatters.append(result.artists["scatter"])
+        # `"near"` under the hidden-line cue, `"scatter"` under markers, and
+        # neither under "none": whichever the mode drew joins the same list.
+        for key in ("near", "scatter"):
+            if key in result.artists:
+                scatters.append(result.artists[key])
 
     import matplotlib as mpl
 
