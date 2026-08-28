@@ -42,7 +42,7 @@ matplotlib.rcParams["font.sans-serif"] = list(
 ) + ["DejaVu Sans"]
 matplotlib.rcParams["figure.dpi"] = 160
 
-styles = ep.SourceStyles(["planet b"])
+styles = ep.SourceStyles(["planet b", "planet c", "planet d"])
 ```
 
 ## One orbit on the sky
@@ -77,15 +77,32 @@ t_jd = jnp.linspace(T0_D, T0_D + PERIOD_D, 240)
 # 16 degrees) keeps the z excursion to about a quarter of the in-plane extent,
 # so the orbits read as nested ellipses seen from above rather than as thin
 # slivers pointed at the camera.
+PLANETS = ["planet b", "planet c", "planet d"]
+SYS_A_AU = np.array([0.72, 1.30, 2.35])
+SYS_ECC = np.array([0.05, 0.21, 0.40])
+SYS_BIG_OMEGA = np.array([2.20, 2.35, 2.50])
+SYS_INC = np.array([0.12, 0.20, 0.28])
+SYS_SMALL_OMEGA = np.array([-0.40, -0.70, 0.90])
+SYS_M0 = np.array([0.00, 2.10, 4.30])
+
 system = KeplerianOrbit(
-    a_AU=np.array([0.72, 1.30, 2.35]),
-    e=np.array([0.05, 0.21, 0.40]),
-    W_rad=np.array([2.20, 2.35, 2.50]),
-    i_rad=np.array([0.12, 0.20, 0.28]),
-    w_rad=np.array([-0.40, -0.70, 0.90]),
-    M0_rad=np.array([0.00, 2.10, 4.30]),
-    t0_d=np.full(3, T0_D),
+    a_AU=SYS_A_AU, e=SYS_ECC, W_rad=SYS_BIG_OMEGA, i_rad=SYS_INC,
+    w_rad=SYS_SMALL_OMEGA, M0_rad=SYS_M0, t0_d=np.full(3, T0_D),
 )
+
+# The same three planets one at a time. plot_orbit applies a single style to
+# every track it is handed -- a fan of draws for one planet is one source -- so
+# giving each planet its own colour means one call per planet.
+one_planet = [
+    KeplerianOrbit(
+        a_AU=SYS_A_AU[k:k + 1], e=SYS_ECC[k:k + 1],
+        W_rad=SYS_BIG_OMEGA[k:k + 1], i_rad=SYS_INC[k:k + 1],
+        w_rad=SYS_SMALL_OMEGA[k:k + 1], M0_rad=SYS_M0[k:k + 1],
+        t0_d=np.array([T0_D]),
+    )
+    for k in range(3)
+]
+
 OUTER_PERIOD_D = 2.35**1.5 * 365.25
 t_system = jnp.linspace(T0_D, T0_D + OUTER_PERIOD_D, 240)
 
@@ -154,22 +171,56 @@ still is baked from the camera at call time. `marks` adds the exact
 periapsis (diamond) and the line of nodes (triangles mark where each
 orbit pierces the sky plane).
 
-This draws the three-planet system rather than the single track above: a
-set of near-coplanar orbits is what a 3D view is for, since they nest and
-the outer planet's eccentricity shows as the star sitting off centre. Point
-the camera down on the system's plane rather than at its edge -- the default
-3D view sits 79 degrees off an orbit normal like this one, which squashes an
-ellipse to a fifth of its width and reads as a sliver aimed at the viewer.
+This draws the three-planet system beside the same system on the sky, so
+the two doors can be read against each other. `SourceStyles` ties them
+together: each planet keeps its colour in both panels, so the outer yellow
+ring at 2.35 AU on the left is the yellow ring reaching 0.24 arcsec on the
+right. Point the 3D camera down on the system's plane rather than at its
+edge -- the default view sits 79 degrees off an orbit normal like this one,
+which squashes an ellipse to a fifth of its width and reads as a sliver
+aimed at the viewer.
 
 ```{code-cell} ipython3
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from matplotlib.ticker import MaxNLocator
 
-fig = plt.figure(layout="constrained")
-ax = fig.add_subplot(projection="3d")
-ax.view_init(elev=46.0, azim=-130.0)
+fig = plt.figure(figsize=(11.5, 4.8), layout="constrained")
+gs = fig.add_gridspec(1, 2, width_ratios=[1.25, 1.0])
+ax3d = fig.add_subplot(gs[0], projection="3d")
+ax3d.view_init(elev=42.0, azim=-130.0)
+axsky = fig.add_subplot(gs[1])
 
-result = viz.plot_orbit(
-    system, t_system, Ms_kg=MSUN_KG, ax=ax, marks={"periapsis", "nodes"},
+for name, planet in zip(PLANETS, one_planet):
+    viz.plot_orbit(
+        planet, t_system, Ms_kg=MSUN_KG, ax=ax3d,
+        style=styles[name], marks={"periapsis"},
+    )
+
+# plot_orbit sizes the 3D box as a cube. That is right for a steep orbit, but a
+# near-coplanar system then leaves about three quarters of the height empty.
+# Shrinking the z limit and the box aspect by the SAME factor fills the frame
+# and keeps the scale equal on all three axes; the tick locator keeps the
+# shorter axis from crowding its labels together.
+z_half = 1.15 * float(np.max(np.abs(
+    np.asarray(system.propagate(t_jd=t_system, Ms_kg=MSUN_KG)[0])[:, 2]
+)))
+xy_half = ax3d.get_xlim()[1]
+ax3d.set_zlim(-z_half, z_half)
+ax3d.set_box_aspect((1.0, 1.0, z_half / xy_half))
+ax3d.zaxis.set_major_locator(MaxNLocator(3))
+ax3d.set_title("plot_orbit -- star-centric, AU")
+
+viz.plot_sky_track(
+    system, t_system, Ms_kg=MSUN_KG, dist_pc=10.0, ax=axsky,
+    colors=[styles[name]["color"] for name in PLANETS], iwa=0.06,
+    fan_kw={"lw": 1.8},
+)
+axsky.set_title("plot_sky_track -- as seen from Earth")
+axsky.legend(
+    handles=[Line2D([], [], color=styles[n]["color"], lw=2.5, label=n)
+             for n in PLANETS],
+    loc="upper left", frameon=False, fontsize=9,
 )
 ```
 
