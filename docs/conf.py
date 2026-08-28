@@ -61,3 +61,6 @@ nb_execution_timeout = 300
 # Every page executes at build time; a cell that stops working fails the build
 # here rather than rendering a broken page on the documentation host.
 nb_execution_raise_on_error = True
+# ... and prints the failing cell's traceback. Without this the build fails
+# naming only the page, which is not enough to fix it from a CI log.
+nb_execution_show_tb = True
