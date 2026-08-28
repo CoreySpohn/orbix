@@ -11,6 +11,29 @@
 * The broken predict/pdet functions and the `discrete_e` factory were removed
   (they did not work correctly and had no working callers).
 
+## [1.1.0](https://github.com/CoreySpohn/orbix/compare/v1.0.0...v1.1.0) (2026-08-28)
+
+
+### Features
+
+* add from_period constructor and a default Kepler trig solver ([8f9424c](https://github.com/CoreySpohn/orbix/commit/8f9424c04462e8a0707224563777093036675c63))
+* **viz:** add a rotate camera sweep to animate_orbit ([9ac7aef](https://github.com/CoreySpohn/orbix/commit/9ac7aef3331a73257875abdfd3fb1770bf9dc1a6))
+* **viz:** add plot_sky_track, plot_orbit, and animate_orbit on eyepiece ([b9b73f9](https://github.com/CoreySpohn/orbix/commit/b9b73f9d5f097cf9fea0c8a57619bbf5513118db))
+* **viz:** carry the 3D depth cue on the moving head instead of path beads ([76cd317](https://github.com/CoreySpohn/orbix/commit/76cd31718de55f4b99912f5579cf6e6059925d18))
+* **viz:** default 3D orbits to text-color dots over dashed gray paths ([9961964](https://github.com/CoreySpohn/orbix/commit/99619645383cdd08e1b555f3387a5275d8bde646))
+* **viz:** default a single-axis camera sweep and soften the depth-size swing ([4db9277](https://github.com/CoreySpohn/orbix/commit/4db9277bdb8a4477603f3c6313cfad391823e705))
+* **viz:** encode planet radii in marker sizes via size_by_radius and per-track base_ms ([2ab19c3](https://github.com/CoreySpohn/orbix/commit/2ab19c320908c7354fbb82ab381cbd6a74ebf605))
+* **viz:** make the head depth-cue helpers public ([05c442f](https://github.com/CoreySpohn/orbix/commit/05c442f874d17aa92eddafc6b0348735c46739a0))
+* **viz:** match the 3D pane color to the axes facecolor ([ee5e4d4](https://github.com/CoreySpohn/orbix/commit/ee5e4d48df65b3f6b95222dae8eecf4235cd460a))
+
+
+### Bug Fixes
+
+* **docs:** call size_by_radius vectorized so the gallery builds on a clean env ([6f3437b](https://github.com/CoreySpohn/orbix/commit/6f3437bd279b48d0f13e1156d41d0ae2e00b66d3))
+* **viz:** restore the hand-tuned near-side swell for the depth cue ([40ad1bc](https://github.com/CoreySpohn/orbix/commit/40ad1bc94dcda92460fca4a9de673a5a6f3c629d))
+* **viz:** shrink the default head marker to the standard base size ([5ebc01e](https://github.com/CoreySpohn/orbix/commit/5ebc01e85569805e7368ff8e0843e4a45929fa36))
+* **viz:** sweep the auto camera about the orbit normal so the drawn size holds ([2f9812e](https://github.com/CoreySpohn/orbix/commit/2f9812e2aee0ce72b4ab277d674ec7531510f65c))
+
 ## [1.0.0](https://github.com/CoreySpohn/orbix/compare/v0.9.0...v1.0.0) (2026-07-20)
 
 
