@@ -58,3 +58,6 @@ source_suffix = {
 # Pages are authored output-free as MyST markdown and execute at build.
 nb_execution_mode = "auto"
 nb_execution_timeout = 300
+# Every page executes at build time; a cell that stops working fails the build
+# here rather than rendering a broken page on the documentation host.
+nb_execution_raise_on_error = True
