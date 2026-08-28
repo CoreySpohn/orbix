@@ -46,12 +46,22 @@ matplotlib.rcParams["figure.dpi"] = 160
 MSUN_KG = 1.988409870698051e30
 styles = ep.SourceStyles(["planet b", "planet c", "planet d"])
 
-# One eccentric, inclined orbit carries most of this page.
+# One eccentric, inclined orbit carries most of this page. Its elements are
+# named here because the posterior fan further down is built around them.
+A_AU, ECC, INC_RAD = 1.3, 0.31, 1.05
+BIG_OMEGA_RAD, SMALL_OMEGA_RAD, M0_RAD = 2.3, -0.7, 0.4
+T0_D = 2460000.0
+
+# Kepler's third law for a solar-mass star, so the track below can span
+# exactly one period and close on itself.
+PERIOD_D = A_AU**1.5 * 365.25
+PERIAPSIS_D = T0_D - M0_RAD * PERIOD_D / (2.0 * np.pi)
+
 orbit = KeplerianOrbit(
-    a_AU=1.3, e=0.31, W_rad=2.3, i_rad=1.05, w_rad=-0.7,
-    M0_rad=0.4, t0_d=2460000.0,
+    a_AU=A_AU, e=ECC, W_rad=BIG_OMEGA_RAD, i_rad=INC_RAD,
+    w_rad=SMALL_OMEGA_RAD, M0_rad=M0_RAD, t0_d=T0_D,
 )
-t_jd = jnp.linspace(2460000.0, 2460500.0, 120)
+t_jd = jnp.linspace(T0_D, T0_D + PERIOD_D, 240)
 ```
 
 ## `plot_sky_track`
@@ -73,24 +83,33 @@ epochs as points with error bars.
 
 ```{code-cell} ipython3
 rng = np.random.default_rng(11)
+# The measured epochs come FROM the orbit above, perturbed by the measurement
+# error -- otherwise the figure shows a posterior next to data it disagrees
+# with, which is exactly the thing a fan is supposed to rule out.
+SIGMA_ARCSEC = 0.008
+t_obs = T0_D + np.array([70.0, 250.0, 430.0])
+ra_true, dec_true = orbit.position_arcsec(
+    t_jd=jnp.asarray(t_obs), Ms_kg=MSUN_KG, dist_pc=10.0
+)
+epochs = (
+    np.asarray(ra_true)[0] + SIGMA_ARCSEC * rng.standard_normal(3),
+    np.asarray(dec_true)[0] + SIGMA_ARCSEC * rng.standard_normal(3),
+    np.full(3, SIGMA_ARCSEC),
+)
+
+# ... and the fan is a posterior scattered around that same orbit.
 K = 60
 fan = KeplerianOrbit.from_period(
-    T_d=431.7 * (1.0 + 0.06 * rng.standard_normal(K)),
-    e=np.clip(0.31 + 0.05 * rng.standard_normal(K), 0.0, 0.9),
-    cos_i=np.clip(0.5 + 0.08 * rng.standard_normal(K), -1.0, 1.0),
-    W_rad=2.3 + 0.1 * rng.standard_normal(K),
-    cos_w=np.cos(-0.7 + 0.2 * rng.standard_normal(K)),
-    sin_w=np.sin(-0.7 + 0.2 * rng.standard_normal(K)),
-    tp_d=2460000.0 + 15.0 * rng.standard_normal(K),
+    T_d=PERIOD_D * (1.0 + 0.04 * rng.standard_normal(K)),
+    e=np.clip(ECC + 0.04 * rng.standard_normal(K), 0.0, 0.9),
+    cos_i=np.clip(np.cos(INC_RAD) + 0.06 * rng.standard_normal(K), -1.0, 1.0),
+    W_rad=BIG_OMEGA_RAD + 0.08 * rng.standard_normal(K),
+    cos_w=np.cos(SMALL_OMEGA_RAD + 0.15 * rng.standard_normal(K)),
+    sin_w=np.sin(SMALL_OMEGA_RAD + 0.15 * rng.standard_normal(K)),
+    tp_d=PERIAPSIS_D + 12.0 * rng.standard_normal(K),
     Ms_kg=MSUN_KG,
 )
 weights = rng.dirichlet(np.full(K, 3.0))
-
-epochs = (
-    np.array([0.10, -0.05, -0.11]),      # RA offset, arcsec
-    np.array([0.04, 0.11, -0.02]),       # Dec offset, arcsec
-    np.array([0.008, 0.008, 0.008]),     # 1-sigma
-)
 result = viz.plot_sky_track(
     fan, t_jd, Ms_kg=MSUN_KG, dist_pc=10.0,
     style=styles["planet b"], weights=weights, iwa=0.06, data=epochs,
@@ -111,15 +130,8 @@ from the camera at call time, so a `view_init` afterwards moves the scene
 without moving the cue. That is also why this page creates the 3D axes by
 hand here rather than letting the function do it.
 
-Matplotlib's tight-bbox cropping, which the notebook backend applies by
-default, does not account for a 3D axes' z label and slices it off. That is a
-matplotlib limitation rather than something for `plot_orbit` to distort its
-layout around, so a notebook embedding these figures turns the cropping off.
-
 ```{code-cell} ipython3
 import matplotlib.pyplot as plt
-
-%config InlineBackend.print_figure_kwargs = {"bbox_inches": None}
 
 fig = plt.figure(layout="constrained")
 ax = fig.add_subplot(projection="3d")
@@ -224,8 +236,6 @@ there should not be: a primitive that wrapped `ax.plot` would be
 reimplementing matplotlib, not adding anything.
 
 ```{code-cell} ipython3
-%config InlineBackend.print_figure_kwargs = {"bbox_inches": "tight"}
-
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9.0, 3.2), layout="constrained")
 
 ax1.plot(depth, lw=1.5)

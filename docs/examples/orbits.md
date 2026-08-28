@@ -55,11 +55,22 @@ origin, and an equal aspect so the ellipse is not distorted.
 ```{code-cell} ipython3
 MSUN_KG = 1.988409870698051e30
 
+# The elements are named because the posterior fan further down is built
+# around this same orbit.
+A_AU, ECC, INC_RAD = 1.3, 0.31, 1.05
+BIG_OMEGA_RAD, SMALL_OMEGA_RAD, M0_RAD = 2.3, -0.7, 0.4
+T0_D = 2460000.0
+
+# Kepler's third law for a solar-mass star, so the track spans exactly one
+# period and the ellipse closes instead of stopping in mid-air.
+PERIOD_D = A_AU**1.5 * 365.25
+PERIAPSIS_D = T0_D - M0_RAD * PERIOD_D / (2.0 * np.pi)
+
 orbit = KeplerianOrbit(
-    a_AU=1.3, e=0.31, W_rad=2.3, i_rad=1.05, w_rad=-0.7,
-    M0_rad=0.4, t0_d=2460000.0,
+    a_AU=A_AU, e=ECC, W_rad=BIG_OMEGA_RAD, i_rad=INC_RAD,
+    w_rad=SMALL_OMEGA_RAD, M0_rad=M0_RAD, t0_d=T0_D,
 )
-t_jd = jnp.linspace(2460000.0, 2460500.0, 120)
+t_jd = jnp.linspace(T0_D, T0_D + PERIOD_D, 240)
 
 result = viz.plot_sky_track(
     orbit, t_jd, Ms_kg=MSUN_KG, dist_pc=10.0,
@@ -79,23 +90,31 @@ become a fan in two calls.
 
 ```{code-cell} ipython3
 rng = np.random.default_rng(7)
+
+# The measured epochs are sampled from the orbit above and perturbed by the
+# measurement error, so the fan and the data describe the same system.
+SIGMA_ARCSEC = 0.008
+t_obs = T0_D + np.array([70.0, 250.0, 430.0])
+ra_true, dec_true = orbit.position_arcsec(
+    t_jd=jnp.asarray(t_obs), Ms_kg=MSUN_KG, dist_pc=10.0
+)
+epochs = (
+    np.asarray(ra_true)[0] + SIGMA_ARCSEC * rng.standard_normal(3),
+    np.asarray(dec_true)[0] + SIGMA_ARCSEC * rng.standard_normal(3),
+    np.full(3, SIGMA_ARCSEC),
+)
+
 K = 40
 draws = dict(
-    T_d=431.7 * (1.0 + 0.06 * rng.standard_normal(K)),
-    e=np.clip(0.31 + 0.05 * rng.standard_normal(K), 0.0, 0.9),
-    cos_i=np.clip(0.5 + 0.08 * rng.standard_normal(K), -1.0, 1.0),
-    W_rad=2.3 + 0.1 * rng.standard_normal(K),
-    cos_w=np.cos(-0.7 + 0.2 * rng.standard_normal(K)),
-    sin_w=np.sin(-0.7 + 0.2 * rng.standard_normal(K)),
-    tp_d=2460000.0 + 15.0 * rng.standard_normal(K),
+    T_d=PERIOD_D * (1.0 + 0.04 * rng.standard_normal(K)),
+    e=np.clip(ECC + 0.04 * rng.standard_normal(K), 0.0, 0.9),
+    cos_i=np.clip(np.cos(INC_RAD) + 0.06 * rng.standard_normal(K), -1.0, 1.0),
+    W_rad=BIG_OMEGA_RAD + 0.08 * rng.standard_normal(K),
+    cos_w=np.cos(SMALL_OMEGA_RAD + 0.15 * rng.standard_normal(K)),
+    sin_w=np.sin(SMALL_OMEGA_RAD + 0.15 * rng.standard_normal(K)),
+    tp_d=PERIAPSIS_D + 12.0 * rng.standard_normal(K),
 )
 fan = KeplerianOrbit.from_period(**draws, Ms_kg=MSUN_KG)
-
-epochs = (
-    np.array([0.10, -0.05, -0.11]),
-    np.array([0.04, 0.11, -0.02]),
-    np.array([0.008, 0.008, 0.008]),
-)
 result = viz.plot_sky_track(
     fan, t_jd, Ms_kg=MSUN_KG, dist_pc=10.0,
     style=styles["planet b"], iwa=0.06, data=epochs,
