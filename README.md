@@ -20,7 +20,13 @@ from orbix.orbit import KeplerianOrbit
 from orbix.kepler.shortcuts.grid import get_grid_solver
 
 orbit = KeplerianOrbit(
-    a_AU=1.0, e=0.0167, W_rad=0.0, i_rad=0.0, w_rad=0.0, M0_rad=0.0, t0_d=0.0,
+    a_AU=1.0,
+    e=0.0167,
+    W_rad=0.0,
+    i_rad=0.0,
+    w_rad=0.0,
+    M0_rad=0.0,
+    t0_d=0.0,
 )
 trig_solver = get_grid_solver(level="scalar", E=False, trig=True)
 t_jd = jnp.linspace(2451545.0, 2451545.0 + 365.25, 5)
