@@ -44,8 +44,8 @@ import hwostyle
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
+from hwoutils.constants import Msun2kg
 from IPython.display import HTML
-from matplotlib.font_manager import FontProperties
 
 import eyepiece.mpl as mpl
 from eyepiece.prepared import find_element
@@ -62,12 +62,10 @@ matplotlib.rcParams["font.sans-serif"] = list(
 ) + ["DejaVu Sans"]
 matplotlib.rcParams["savefig.dpi"] = 120
 
-# One cast and one profile for every output on this page. A profile names a
-# single font family, so it is given the face Matplotlib actually finds from
-# the style's list rather than a first choice this machine may not have.
+# One cast and one profile for every output on this page, sized from the
+# active style's rc settings.
 CAST = SourceCast(["planet b"])
 PROFILE = snapshot_profile(
-    font_family=FontProperties(family=plt.rcParams["font.sans-serif"]).get_name(),
     text_size_pt=plt.rcParams["font.size"],
     stroke_width_pt=plt.rcParams["lines.linewidth"],
 )
@@ -80,7 +78,6 @@ mass star at 10 pc, three measured positions drawn from it with 8 mas
 errors, and forty posterior draws scattered around it, each with a weight.
 
 ```{code-cell} ipython3
-MSUN_KG = 1.988409870698051e30
 DIST_PC = 10.0
 A_AU, ECC, INC_RAD = 1.3, 0.31, 1.05
 BIG_OMEGA_RAD, SMALL_OMEGA_RAD, M0_RAD = 2.3, -0.7, 0.4
@@ -97,7 +94,7 @@ rng = np.random.default_rng(0)
 # Observed positions: the true orbit at three epochs, perturbed by the error.
 SIGMA_ARCSEC = 0.008
 t_obs = T0_D + np.array([70.0, 250.0, 430.0])
-ra, dec = orbit.position_arcsec(t_jd=t_obs, Ms_kg=MSUN_KG, dist_pc=DIST_PC)
+ra, dec = orbit.position_arcsec(t_jd=t_obs, Ms_kg=Msun2kg, dist_pc=DIST_PC)
 xy_obs = np.column_stack([np.asarray(ra)[0], np.asarray(dec)[0]])
 xy_obs = xy_obs + SIGMA_ARCSEC * rng.standard_normal(xy_obs.shape)
 sigma = np.full(len(t_obs), SIGMA_ARCSEC)
@@ -113,7 +110,7 @@ fan = KeplerianOrbit.from_period(
     cos_w=np.cos(SMALL_OMEGA_RAD + 0.15 * rng.standard_normal(K)),
     sin_w=np.sin(SMALL_OMEGA_RAD + 0.15 * rng.standard_normal(K)),
     tp_d=PERIAPSIS_D + 12.0 * rng.standard_normal(K),
-    Ms_kg=MSUN_KG,
+    Ms_kg=Msun2kg,
 )
 weights = rng.dirichlet(np.full(K, 3.0))
 
@@ -136,7 +133,7 @@ part of the view, not options.
 view = prepare_sky_view(
     fan,
     t_jd=t_jd,
-    Ms_kg=MSUN_KG,
+    Ms_kg=Msun2kg,
     dist_pc=DIST_PC,
     source_ids="planet b",
     weights=weights,
@@ -165,7 +162,7 @@ keeps a sliding window of that many samples, here about ninety days.
 sequence = prepare_sky_track(
     fan,
     t_jd=t_jd,
-    Ms_kg=MSUN_KG,
+    Ms_kg=Msun2kg,
     dist_pc=DIST_PC,
     source_ids="planet b",
     weights=weights,
@@ -195,17 +192,14 @@ print(f"t = {between:.1f} d holds sample {sample.index}:", np.array_equal(held, 
 
 `sequence.frame(i)` is the complete state at sample `i`, and
 `sequence.strip(indices)` lays chosen samples side by side. Each strip slot's
-IDs are prefixed with its position, and each slot gains its own time label,
-which makes the clock redundant, so the strip hides the clock through its
-part. The heads show where the planet could be at each epoch: the spread of
+IDs are prefixed with its position, and each slot's clock is its time label,
+restamped with that slot's time. The heads show where the planet could be at each epoch: the spread of
 the forty heads is the posterior uncertainty in its position at that time.
 
 ```{code-cell} ipython3
 picks = [0, 60, 120]
 fig, axes = plt.subplots(1, 3, figsize=(10.0, 3.6), layout="constrained")
 strip = mpl.render(sequence.strip(picks), axes=axes, cast=CAST, profile=PROFILE)
-for slot in range(len(picks)):
-    strip.parts[f"{slot}/clock"].set_visible(False)
 ```
 
 ## A movie
@@ -275,3 +269,35 @@ Render it with Manim's caching disabled (`manim --disable_caching`). The
 playback follows the same physical-time schedule as the Matplotlib movie.
 Eyepiece's [Manim guide](https://eyepiece.readthedocs.io/en/latest/manim.html)
 covers the parts, reveals, and Manim Slides.
+
+## Migrating from the earlier sky-track functions
+
+Earlier releases drew sky tracks directly through `eyepiece.sky_fan`.
+`plot_sky_track` and `animate_orbit(kind="sky")` now prepare the tracks
+first and render them through eyepiece, which changes the following
+behavior.
+
+- Bare tracks are shaped `(K, T, 2)`, (RA, Dec) last, or given as an
+  `(ra, dec)` pair of `(T,)` or `(K, T)` arrays. The earlier `(2, T)` and
+  `(K, 2, T)` arrays are no longer read: pass a `(2, T)` array as the pair
+  `tuple(tracks)`, and a `(K, 2, T)` array as `np.moveaxis(tracks, 1, 2)`.
+- `invert_ra=` is removed. RA always increases to the left.
+- `plot_sky_track` returns an `eyepiece.mpl.MplResult`, not a `PlotResult`.
+  Track `k`'s line is `result.parts["path/k"]`, and the IWA disk and the
+  observations are `result.parts["iwa"]` and `result.parts["observations"]`.
+- Bare tracks are in arcsec and get the same RA and Dec offset axis labels
+  as propagated orbits.
+- A lone track is drawn at opacity 0.80, the top of the shared weight
+  mapping, rather than 0.75. Heads carry their track's weight and fade with
+  it.
+- An `"alpha"` in `fan_kw=` is set last, so it replaces the weight-derived
+  opacity instead of scaling it.
+- `plot_sky_track` still accepts `data=(ra, dec, err)` and `iwa=` and
+  converts them to `observations=` and `iwa_arcsec=`. `animate_orbit` with
+  `kind="sky"` takes only `observations=(xy, xerr, yerr)` and `iwa_arcsec=`,
+  so convert there by hand: `observations=(np.column_stack([ra, dec]), err,
+  err)`.
+- `animate_orbit(kind="sky")` refuses `style=`, `base_ms=`, and `marks=`,
+  which apply to `kind="3d"` only; sky colors come from the cast. It needs
+  `t_jd=` for bare tracks too, because the sample times drive its clock and
+  its physical-time playback.
