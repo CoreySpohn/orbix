@@ -65,6 +65,11 @@ _TIME_UNIT = "d"
 _CLOCK_XY = (0.02, 0.98)
 _MARGIN = 0.05
 _MAX_CLOCK_DECIMALS = 3
+# Offsets within this many days of a printed value count as printed exactly.
+_CLOCK_EXACT_D = 1e-6
+# Largest rounding error, as a fraction of the smallest step, accepted when
+# no clock precision prints every offset exactly.
+_CLOCK_STEP_FRACTION = 0.05
 
 
 def _element_id(prefix, k):
@@ -287,7 +292,12 @@ def _build_view(
     marks.append(Points(STAR_ID, np.zeros((1, 2))))
     if heads:
         marks += [
-            Points(_element_id(HEAD_PREFIX, k), tracks[k, :1], source_id=sources[k])
+            Points(
+                _element_id(HEAD_PREFIX, k),
+                tracks[k, :1],
+                source_id=sources[k],
+                weight=track_weights[k],
+            )
             for k in range(n_tracks)
         ]
     # the measurements go above every candidate, so a cluster of heads
@@ -308,19 +318,31 @@ def _build_view(
 
 
 def _clock_format(offsets_d):
-    """A clock format with enough decimals to tell adjacent samples apart.
+    """A clock format that prints every sample's offset exactly, when it can.
 
-    Whole days when samples are at least a day apart; otherwise the fewest
-    decimals (at most three) that write the smallest step exactly, so a
-    quarter-day grid reads 0.25, 0.50, ... rather than repeating a label.
+    The fewest decimals (at most three) that write every offset exactly,
+    so a 1.5-day grid reads 0.0, 1.5, 3.0, ... and a quarter-day grid 0.00,
+    0.25, 0.50, ... rather than rounding to repeated or misleading labels.
+    Julian-day differences carry float noise near a microday, which the
+    comparison tolerates. When no three-decimal number writes every offset
+    (a grid of 12 samples over 400 days, say), the fewest decimals that
+    place every offset within a twentieth of the smallest step are used,
+    so adjacent labels stay distinct without printing noise digits.
     """
-    steps = np.diff(offsets_d)
-    decimals = 0
-    if steps.size and steps.min() < 1.0:
-        step = float(steps.min())
-        for decimals in range(1, _MAX_CLOCK_DECIMALS + 1):
-            if abs(round(step, decimals) - step) <= 1e-9 * step:
-                break
+    offsets = np.asarray(offsets_d, dtype=float)
+    choices = range(_MAX_CLOCK_DECIMALS + 1)
+
+    def error(decimals):
+        return float(np.max(np.abs(np.round(offsets, decimals) - offsets)))
+
+    exact = [d for d in choices if error(d) <= _CLOCK_EXACT_D]
+    if exact:
+        decimals = exact[0]
+    else:
+        steps = np.diff(offsets)
+        tolerance = _CLOCK_STEP_FRACTION * float(steps.min()) if steps.size else 0.0
+        close = [d for d in choices if error(d) <= tolerance]
+        decimals = close[0] if close else _MAX_CLOCK_DECIMALS
     return "t = +{value:." + str(decimals) + "f} {unit}"
 
 
@@ -339,6 +361,7 @@ def prepare_sky_track(
     observations=None,
     iwa_arcsec=None,
     history=None,
+    clock_fmt=None,
 ):
     """Prepare sky-plane tracks once, as a replayable ``Sequence``.
 
@@ -362,6 +385,8 @@ def prepare_sky_track(
             share a color while each stays its own element.
         weights: Optional per-track weights (length K), typically the
             posterior mass of each draw; renderers map them to opacity.
+            Each track's head carries its track's weight, so it fades
+            with the track.
         observations: Optional ``(xy_arcsec, xerr_arcsec, yerr_arcsec)``
             of observed positions, shaped ``(P, 2)``, ``(P,)``, ``(P,)``,
             with symmetric one-sigma errors along RA and Dec.
@@ -370,6 +395,13 @@ def prepare_sky_track(
         history: None for no trail, ``"all"`` for a trail growing from the
             first sample, or a positive int for a trail of at most that
             many samples ending at the current one.
+        clock_fmt: ``str.format`` template for the acquisition-time label,
+            using only ``{value}`` (days since the first sample, a float)
+            and ``{unit}``, e.g. ``"t = {value:.1f} {unit}"``. None writes
+            ``"t = +<offset> d"`` with the fewest decimals (at most three)
+            that print every sample's offset exactly, or, when no such
+            precision exists, that keep every label within a twentieth of
+            the smallest step. Frames and a strip's panels share it.
 
     Returns:
         An ``eyepiece.prepared.Sequence`` over a ``TrackView`` with element
@@ -382,12 +414,13 @@ def prepare_sky_track(
     Raises:
         TypeError: If the orbit door is missing a propagation argument.
         ValueError: If the tracks, times, per-track arguments,
-            observations, IWA radius, or history are malformed, naming the
-            argument. Time and history errors are raised before the orbit
-            is propagated.
+            observations, IWA radius, history, or clock format are
+            malformed, naming the argument. Time, history, and clock-format
+            errors are raised before the orbit is propagated.
     """
     times_jd = _sample_times(t_jd)
     trail, window = _trail_window(history)
+    custom_clock = None if clock_fmt is None else Clock(CLOCK_ID, fmt=clock_fmt)
     tracks = _sky_xy(orbit_or_radec, t_jd, Ms_kg, dist_pc, trig_solver)
     if tracks.shape[1] != times_jd.size:
         raise ValueError(
@@ -395,7 +428,11 @@ def prepare_sky_track(
         )
 
     offsets_d = times_jd - times_jd[0]
-    clock = Clock(CLOCK_ID, fmt=_clock_format(offsets_d))
+    clock = (
+        Clock(CLOCK_ID, fmt=_clock_format(offsets_d))
+        if custom_clock is None
+        else custom_clock
+    )
     template = _build_view(
         tracks,
         source_ids=source_ids,

@@ -162,10 +162,40 @@ def test_the_clock_reports_days_since_the_first_epoch():
     )
     assert find_element(sequence.frame(0), "clock").text == "t = +0 d"
     assert find_element(sequence.frame(11), "clock").text == "t = +400 d"
-    assert find_element(sequence.strip([11]), "0/time").text == "t = +400 d"
+    strip = sequence.strip([11])
+    assert find_element(strip, "0/clock").text == "t = +400 d"
+    with pytest.raises(KeyError):
+        find_element(strip, "0/time")  # the clock is the only time label
 
     finer = prepare_sky_track(_circle(3), t_jd=np.array([0.0, 0.25, 0.5]))
     assert find_element(finer.frame(1), "clock").text == "t = +0.25 d"
+
+
+def test_fractional_multi_day_steps_print_every_offset_exactly():
+    """A 1.5-day grid keeps its half days instead of rounding them away."""
+    t_jd = 2460000.3 + np.array([0.0, 1.5, 3.0, 4.5, 6.0])
+    sequence = prepare_sky_track(_circle(5), t_jd=t_jd)
+    texts = [find_element(sequence.frame(i), "clock").text for i in range(5)]
+    assert texts == [f"t = +{v} d" for v in ("0.0", "1.5", "3.0", "4.5", "6.0")]
+
+    # A step no precision writes exactly keeps the fewest readable decimals.
+    dense = prepare_sky_track(_circle(200), t_jd=np.linspace(0.0, 600.0, 200))
+    assert find_element(dense.frame(100), "clock").text == "t = +301.5 d"
+
+
+def test_clock_fmt_sets_the_label_and_is_checked_before_propagating():
+    """A caller's clock format labels frames and strips; a bad one fails first."""
+    sequence = prepare_sky_track(
+        _circle(3), t_jd=np.array([0.0, 1.0, 2.5]), clock_fmt="{value:.2f} {unit}"
+    )
+    assert find_element(sequence.frame(2), "clock").text == "2.50 d"
+    assert find_element(sequence.strip([2]), "0/clock").text == "2.50 d"
+    # The orbit door is missing Ms_kg and dist_pc, so propagating would raise
+    # a TypeError; the format error comes first.
+    with pytest.raises(ValueError, match="fmt"):
+        prepare_sky_track(
+            _circular_orbit(), t_jd=np.array([0.0, 1.0, 2.5]), clock_fmt="{when}"
+        )
 
 
 def test_the_view_has_the_named_marks_in_one_ra_left_frame():
@@ -339,12 +369,20 @@ def test_weights_and_repeated_source_identity():
         0.5,
         0.0,
     ]
+    assert [find_element(view, f"head/{k}").weight for k in range(3)] == [
+        1.0,
+        0.5,
+        0.0,
+    ]
 
     from eyepiece import mpl
 
     result = mpl.render(view)
     alphas = [result.parts[f"path/{k}"].get_alpha() for k in range(3)]
     np.testing.assert_allclose(alphas, weight_opacity(weights))
+    # Each head fades exactly as its track does.
+    heads = [result.parts[f"head/{k}"].get_alpha() for k in range(3)]
+    np.testing.assert_allclose(heads, alphas)
     colors = [result.parts[f"path/{k}"].get_color() for k in range(3)]
     assert colors[0] == colors[1] != colors[2]
     assert result.cast.names == ("b", "c")
