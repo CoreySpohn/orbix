@@ -27,6 +27,7 @@ import matplotlib
 import jax.numpy as jnp
 import numpy as np
 import eyepiece as ep
+from eyepiece.style import SourceCast
 
 from orbix import KeplerianOrbit
 from orbix import viz
@@ -102,18 +103,21 @@ t_system = jnp.linspace(T0_D, T0_D + OUTER_PERIOD_D, 240)
 
 The sky-plane track in arcseconds: RA offset increasing to the left per the
 astronomical convention, Dec offset up, the star at the origin, equal
-aspect. `iwa` shades the inner working angle a coronagraph cannot see into.
+aspect. The direction of RA and the equal aspect are part of the prepared
+view, not options. `iwa_arcsec` shades the inner working angle a coronagraph
+cannot see into.
 
 ```{code-cell} ipython3
 result = viz.plot_sky_track(
     orbit, t_jd, Ms_kg=MSUN_KG, dist_pc=10.0,
-    style=styles["planet b"], iwa=0.06,
+    style=styles["planet b"], iwa_arcsec=0.06,
 )
 ```
 
 The same function draws a `(K,)`-batched orbit as a fan of candidates faded
-by weight, which is what a posterior looks like. `data` overlays measured
-epochs as points with error bars.
+by weight, which is what a posterior looks like. `observations` overlays
+measured epochs as points with error bars, given as `(xy, xerr, yerr)` with
+`xy` shaped `(P, 2)`.
 
 ```{code-cell} ipython3
 rng = np.random.default_rng(11)
@@ -126,8 +130,11 @@ ra_true, dec_true = orbit.position_arcsec(
     t_jd=jnp.asarray(t_obs), Ms_kg=MSUN_KG, dist_pc=10.0
 )
 epochs = (
-    np.asarray(ra_true)[0] + SIGMA_ARCSEC * rng.standard_normal(3),
-    np.asarray(dec_true)[0] + SIGMA_ARCSEC * rng.standard_normal(3),
+    np.column_stack([
+        np.asarray(ra_true)[0] + SIGMA_ARCSEC * rng.standard_normal(3),
+        np.asarray(dec_true)[0] + SIGMA_ARCSEC * rng.standard_normal(3),
+    ]),
+    np.full(3, SIGMA_ARCSEC),
     np.full(3, SIGMA_ARCSEC),
 )
 
@@ -146,7 +153,8 @@ fan = KeplerianOrbit.from_period(
 weights = rng.dirichlet(np.full(K, 3.0))
 result = viz.plot_sky_track(
     fan, t_jd, Ms_kg=MSUN_KG, dist_pc=10.0,
-    style=styles["planet b"], weights=weights, iwa=0.06, data=epochs,
+    style=styles["planet b"], weights=weights, iwa_arcsec=0.06,
+    observations=epochs,
 )
 ```
 
@@ -214,7 +222,7 @@ ax3d.set_title("plot_orbit -- star-centric, AU")
 
 viz.plot_sky_track(
     system, t_system, Ms_kg=MSUN_KG, dist_pc=10.0, ax=axsky,
-    colors=[styles[name]["color"] for name in PLANETS], iwa=0.06,
+    colors=[styles[name]["color"] for name in PLANETS], iwa_arcsec=0.06,
     fan_kw={"lw": 1.8},
 )
 axsky.set_title("plot_sky_track -- as seen from Earth")
@@ -266,6 +274,47 @@ anim = viz.animate_orbit(
 HTML(anim.jshtml(dpi=130))
 ```
 
+## `prepare_sky_view` and `prepare_sky_track`
+
+The two functions under `plot_sky_track` and `animate_orbit(kind="sky")`.
+They do the orbit science once, propagating over the whole time grid and
+projecting to arcseconds, and return eyepiece prepared records rather than a
+figure: `prepare_sky_view` a static `TrackView`, and `prepare_sky_track` a
+`Sequence` whose samples are the propagated epochs, with a head per track, an
+optional trail, and a clock. `eyepiece.mpl` draws either one, and
+`eyepiece.manim` draws the same records natively for a talk. Each element has
+a stable ID (`path/<k>`, `head/<k>`, `trail/<k>`, `observations`, `iwa`,
+`star`, `clock`), which is how a caller reaches its artist afterwards.
+{doc}`examples/prepared` takes one sequence to a still, a strip, and a movie.
+
+```{code-cell} ipython3
+import eyepiece.mpl as mpl
+from eyepiece.style import snapshot_profile
+from matplotlib.font_manager import FontProperties
+
+view = viz.prepare_sky_view(
+    fan, t_jd=t_jd, Ms_kg=MSUN_KG, dist_pc=10.0, source_ids="planet b",
+    weights=weights, observations=epochs, iwa_arcsec=0.06,
+)
+sequence = viz.prepare_sky_track(
+    orbit, t_jd=t_jd, Ms_kg=MSUN_KG, dist_pc=10.0, source_ids="planet b",
+    observations=epochs, iwa_arcsec=0.06, history=60,
+)
+cast = SourceCast(["planet b"])
+# A profile names one font family: give it the face Matplotlib finds from the
+# style's list, since the first choice may not be installed on a builder.
+profile = snapshot_profile(
+    font_family=FontProperties(family=plt.rcParams["font.sans-serif"]).get_name(),
+    text_size_pt=plt.rcParams["font.size"],
+    stroke_width_pt=plt.rcParams["lines.linewidth"],
+)
+fig, axes = plt.subplots(1, 2, figsize=(9.0, 4.2), layout="constrained")
+mpl.render(view, ax=axes[0], cast=cast, profile=profile)
+axes[0].set_title("prepare_sky_view", fontsize=10.5)
+mpl.render(sequence.frame(100), ax=axes[1], cast=cast, profile=profile)
+axes[1].set_title("prepare_sky_track, frame 100", fontsize=10.5)
+```
+
 ## The same plot, different options
 
 Each function above takes the same data and renders it several ways. These
@@ -280,6 +329,11 @@ own, rather than described.
 families = ep.SourceStyles(["alias A", "alias B", "alias C"])
 per_track = [families[f"alias {c}"]["color"] for c in "ABC"] * (len(weights) // 3)
 
+# The same three families as sources: the renderer colors each track by its
+# source through one cast, instead of recoloring the drawn lines afterwards.
+aliases = [f"alias {c}" for c in "ABC"] * (len(weights) // 3)
+alias_cast = SourceCast(["alias A", "alias B", "alias C"])
+
 # Deliberately lumpy weights; a near-uniform posterior fades almost invisibly.
 lumpy = np.random.default_rng(3).dirichlet(np.full(len(weights), 0.35))
 
@@ -287,18 +341,25 @@ variants = [
     ("plot_sky_track(fan, ...)", {}),
     ("weights=posterior_mass", {"weights": lumpy}),
     ("colors=per_track", {"colors": per_track}),
-    ("iwa=0.06", {"iwa": 0.06}),
-    ("data=(ra, dec, err)", {"data": epochs}),
-    ("invert_ra=False", {"invert_ra": False}),
+    ("source_ids=aliases", {"source_ids": aliases, "cast": alias_cast, "style": None}),
+    ("iwa_arcsec=0.06", {"iwa_arcsec": 0.06}),
+    ("observations=(xy, xerr, yerr)", {"observations": epochs}),
 ]
 fig, axes = plt.subplots(2, 3, figsize=(12.0, 7.4), layout="constrained")
 for ax, (label, kw) in zip(axes.ravel(), variants):
     viz.plot_sky_track(
         fan, t_jd, Ms_kg=MSUN_KG, dist_pc=10.0, ax=ax,
-        style=styles["planet b"], **kw,
+        **{"style": styles["planet b"], **kw},
     )
     ax.set_title(label, fontsize=10.5)
 ```
+
+`colors=` recolors each drawn track after rendering, and `source_ids=` with a
+cast has the renderer color each track by its source; both panels color the
+three alias families the same way. A `style` recolors every track after
+rendering, so the `source_ids` panel passes `style=None` to keep the cast
+colors. RA increases to the left in every panel: the view fixes the
+direction, so no option flips it.
 
 `plot_orbit` on the same system. With no `style` it uses the star-chart look --
 markers in the mode's text colour over a transparent dashed grey path -- and

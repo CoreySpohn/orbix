@@ -14,8 +14,9 @@ kernelspec:
 `orbix.viz` turns an orbit into a figure in one call. It is installed with
 the `viz` extra (`pip install 'orbix[viz]'`) and is built on eyepiece, so
 every figure here follows the same conventions as any other figure in the
-eyepiece fleet: stateless ax-first functions, a `PlotResult` back, and
-style resolved from hwostyle at call time.
+eyepiece fleet: stateless functions that draw into a given axes or a new
+figure, a result back that holds every artist drawn, and style resolved from
+hwostyle at call time.
 
 Every page starts the same way: activate a style mode, import the plotting
 module, and declare the document's cast.
@@ -50,7 +51,10 @@ styles = ep.SourceStyles(["planet b", "planet c", "planet d"])
 `plot_sky_track` propagates an orbit and draws its sky-plane track in
 arcseconds: RA offset on the x axis (increasing to the left, per the
 astronomical convention), Dec offset on the y axis, the star at the
-origin, and an equal aspect so the ellipse is not distorted.
+origin, and an equal aspect so the ellipse is not distorted. The sky-plane
+functions share one preparation step that propagates the orbit once; the
+{doc}`prepared` page uses it directly for a still, a strip, and a movie from
+one set of tracks.
 
 ```{code-cell} ipython3
 MSUN_KG = 1.988409870698051e30
@@ -108,7 +112,7 @@ t_system = jnp.linspace(T0_D, T0_D + OUTER_PERIOD_D, 240)
 
 result = viz.plot_sky_track(
     orbit, t_jd, Ms_kg=MSUN_KG, dist_pc=10.0,
-    style=styles["planet b"], iwa=0.06,
+    style=styles["planet b"], iwa_arcsec=0.06,
 )
 ```
 
@@ -132,9 +136,14 @@ t_obs = T0_D + np.array([70.0, 250.0, 430.0])
 ra_true, dec_true = orbit.position_arcsec(
     t_jd=jnp.asarray(t_obs), Ms_kg=MSUN_KG, dist_pc=10.0
 )
+# Observations are (xy, xerr, yerr): positions shaped (P, 2) and one-sigma
+# errors along RA and Dec.
 epochs = (
-    np.asarray(ra_true)[0] + SIGMA_ARCSEC * rng.standard_normal(3),
-    np.asarray(dec_true)[0] + SIGMA_ARCSEC * rng.standard_normal(3),
+    np.column_stack([
+        np.asarray(ra_true)[0] + SIGMA_ARCSEC * rng.standard_normal(3),
+        np.asarray(dec_true)[0] + SIGMA_ARCSEC * rng.standard_normal(3),
+    ]),
+    np.full(3, SIGMA_ARCSEC),
     np.full(3, SIGMA_ARCSEC),
 )
 
@@ -151,7 +160,7 @@ draws = dict(
 fan = KeplerianOrbit.from_period(**draws, Ms_kg=MSUN_KG)
 result = viz.plot_sky_track(
     fan, t_jd, Ms_kg=MSUN_KG, dist_pc=10.0,
-    style=styles["planet b"], iwa=0.06, data=epochs,
+    style=styles["planet b"], iwa_arcsec=0.06, observations=epochs,
 )
 ```
 
@@ -213,7 +222,7 @@ ax3d.set_title("plot_orbit -- star-centric, AU")
 
 viz.plot_sky_track(
     system, t_system, Ms_kg=MSUN_KG, dist_pc=10.0, ax=axsky,
-    colors=[styles[name]["color"] for name in PLANETS], iwa=0.06,
+    colors=[styles[name]["color"] for name in PLANETS], iwa_arcsec=0.06,
     fan_kw={"lw": 1.8},
 )
 axsky.set_title("plot_sky_track -- as seen from Earth")
@@ -250,7 +259,8 @@ keeps a trailing window, `"none"` moves the head markers alone. The base
 marker size is the anchor the depth cue swells around, so it is where
 physical meaning lives: `size_by_radius` maps planet radii onto marker
 diameters. The same call with `kind="sky"` animates the sky-plane track
-instead.
+instead, played in physical time from the prepared sequence described in
+{doc}`prepared`.
 
 ```{code-cell} ipython3
 from IPython.display import HTML

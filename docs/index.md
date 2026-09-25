@@ -24,13 +24,16 @@ r_AU, phase_angle_rad, dist_AU = orbit.propagate(
 Plotting lives in the optional `orbix.viz` package, built on
 [eyepiece](https://eyepiece.readthedocs.io) and installed with
 `pip install 'orbix[viz]'`; the base install carries no plotting stack.
-Start with {doc}`examples/orbits`; {doc}`gallery` shows every function it exports.
+Start with {doc}`examples/orbits`; {doc}`examples/prepared` prepares sky
+tracks once for a still, a strip, a movie, and a Manim clip; {doc}`gallery`
+shows every function it exports.
 
 ```{toctree}
 :maxdepth: 1
 :caption: Examples
 
 examples/orbits
+examples/prepared
 ```
 
 ```{toctree}
