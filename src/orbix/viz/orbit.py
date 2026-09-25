@@ -3,20 +3,24 @@
 orbix supplies only what eyepiece cannot know: how to turn an orbit into
 tracks (propagation, projection, units), which axis is RA (and that
 astronomers draw it increasing to the left), and where periapsis and the
-nodes sit. The rendering itself is eyepiece's ``sky_fan`` and ``trail``,
-so figures drawn here match every other figure built on eyepiece.
+nodes sit. The sky plane is prepared once (``orbix.viz._prepare``) and
+drawn by ``eyepiece.mpl``; the 3D rendering is eyepiece's ``trail``, so
+figures drawn here match every other figure built on eyepiece.
 
 Every function that accepts an orbit also accepts bare track arrays, for
 consumers holding precomputed coordinates (a CSV of posterior traces, a
-cached ephemeris) rather than a live ``KeplerianOrbit``. On the bare-array
-door the units belong to the caller, so no axis labels are set.
+cached ephemeris) rather than a live ``KeplerianOrbit``. Bare sky tracks
+are arcsec offsets; bare 3D positions are in the caller's units, so no
+axis labels are set on that door.
 """
 
+import dataclasses
 from collections.abc import Mapping
 
 import numpy as np
 
 from orbix.orbit import AbstractOrbit
+from orbix.viz._prepare import PATH_PREFIX, prepare_sky_view
 from orbix.viz._require import eyepiece
 
 
@@ -120,58 +124,40 @@ def _per_track(values, n_tracks, name):
     return arr
 
 
-def _sky_tracks(orbit_or_radec, t_jd, Ms_kg, dist_pc, trig_solver):
-    """Normalize the input to ``(ra, dec)`` arrays of shape ``(K, T)``.
+def _legacy_observations(observations, data):
+    """Convert the pre-prepared ``data=(ra, dec, err)`` to ``observations``."""
+    if data is None:
+        return observations
+    if observations is not None:
+        raise ValueError("pass observations or data, not both")
+    ra, dec, err = (np.asarray(v, float) for v in data)
+    err = np.broadcast_to(err, ra.shape)
+    return np.stack([ra, dec], axis=-1), err, err
 
-    Returns:
-        ``(ra, dec, from_orbit)`` where ``from_orbit`` records whether the
-        tracks were propagated here (and are therefore known to be in
-        arcsec) or handed in raw.
+
+def _widened(view, ax):
+    """``view`` with axis limits grown to cover what ``ax`` already shows.
+
+    Overplotting a second set of tracks must not crop the first, so a
+    caller axes that already holds data widens the new view's fixed limits
+    to include its current ones.
     """
-    if isinstance(orbit_or_radec, AbstractOrbit):
-        missing = [
-            name
-            for name, val in (
-                ("t_jd", t_jd),
-                ("Ms_kg", Ms_kg),
-                ("dist_pc", dist_pc),
-            )
-            if val is None
-        ]
-        if missing:
-            raise TypeError(
-                "plotting an orbit requires " + ", ".join(missing) + " to propagate it"
-            )
-        ra, dec = orbit_or_radec.position_arcsec(
-            trig_solver,
-            t_jd,
-            Ms_kg=Ms_kg,
-            dist_pc=dist_pc,
-        )
-        return np.asarray(ra, float), np.asarray(dec, float), True
-
-    if t_jd is not None:
-        raise TypeError(
-            "t_jd only applies when propagating an orbit; bare (ra, dec) "
-            "tracks are drawn as given"
-        )
-    if isinstance(orbit_or_radec, (tuple, list)) and len(orbit_or_radec) == 2:
-        ra = np.atleast_2d(np.asarray(orbit_or_radec[0], float))
-        dec = np.atleast_2d(np.asarray(orbit_or_radec[1], float))
-        if ra.shape != dec.shape:
-            raise ValueError(
-                f"(ra, dec) tracks must share a shape, got {ra.shape} and {dec.shape}"
-            )
-        return ra, dec, False
-    arr = np.asarray(orbit_or_radec, float)
-    if arr.ndim == 2 and arr.shape[0] == 2:
-        return arr[0][None, :], arr[1][None, :], False
-    if arr.ndim == 3 and arr.shape[1] == 2:
-        return arr[:, 0, :], arr[:, 1, :], False
-    raise ValueError(
-        "expected an AbstractOrbit, an (ra, dec) pair of (T,) or (K, T) "
-        f"arrays, or an array shaped (2, T) or (K, 2, T); got shape {arr.shape}"
+    if not ax.has_data():
+        return view
+    x_low, x_high = sorted(ax.get_xlim())
+    y_low, y_high = sorted(ax.get_ylim())
+    axes = dataclasses.replace(
+        view.axes,
+        x_limits=(
+            min(view.axes.x_limits[0], x_low),
+            max(view.axes.x_limits[1], x_high),
+        ),
+        y_limits=(
+            min(view.axes.y_limits[0], y_low),
+            max(view.axes.y_limits[1], y_high),
+        ),
     )
+    return dataclasses.replace(view, axes=axes)
 
 
 def plot_sky_track(
@@ -182,93 +168,121 @@ def plot_sky_track(
     dist_pc=None,
     trig_solver=None,
     ax=None,
+    source_ids=None,
+    weights=None,
+    observations=None,
+    iwa_arcsec=None,
+    cast=None,
+    profile=None,
     style=None,
     colors=None,
-    weights=None,
     data=None,
     iwa=None,
-    invert_ra=True,
     fan_kw=None,
 ):
     """Draw sky-plane orbit tracks: one orbit, or a fan of K candidates.
 
     A ``(K,)``-batched orbit (posterior draws through
     ``KeplerianOrbit.from_period``, for instance) becomes a fan of K
-    tracks faded by ``weights``; a single orbit becomes one solid track.
-    Delegation is to ``eyepiece.sky_fan``, which owns the equal aspect,
-    the central-star marker, the optional inner-working-angle disk, and
-    the optional observed-epoch errorbars.
+    tracks faded by ``weights``; a single orbit becomes one track. The
+    tracks are prepared once with ``prepare_sky_view`` and drawn with
+    ``eyepiece.mpl.render``, which owns the equal aspect, RA increasing to
+    the left, the central star, the shaded inner-working-angle disk, and
+    the observation error bars.
 
     Args:
         orbit_or_radec: An ``AbstractOrbit`` (propagated here, requiring
-            ``t_jd``, ``Ms_kg``, ``dist_pc``), or bare tracks: an
-            ``(ra, dec)`` pair of ``(T,)`` or ``(K, T)`` arrays, or an
-            array shaped ``(2, T)`` or ``(K, 2, T)``. Bare tracks are in
-            whatever units the caller made them, so no axis labels are
-            set on that door.
+            ``t_jd``, ``Ms_kg``, ``dist_pc``), or bare arcsec tracks: an
+            array shaped ``(K, T, 2)``, or an ``(ra, dec)`` pair of
+            ``(T,)`` or ``(K, T)`` arrays.
         t_jd: Times in Julian Days, shape ``(T,)``. Orbit door only.
         Ms_kg: Stellar mass in kg. Orbit door only.
         dist_pc: Distance to the star in parsecs. Orbit door only.
         trig_solver: Optional Kepler solver forwarded to the orbit; None
             uses orbix's default.
-        ax: Axes to draw into. None creates a new figure and axes.
-        style: A color, or a ``SourceStyles`` entry, applied to every
-            track -- a fan of candidates for one planet is one source, so
-            it takes one color rather than cycling the palette. None uses
-            the active palette's first color.
-        colors: Optional per-track color list (length K), for a fan whose
-            tracks carry distinct meaning (period-alias families, for
-            instance). Overrides ``style`` for the track colors.
+        ax: Axes to draw into. None creates a new figure and axes. An axes
+            that already holds data keeps it in view: the new limits grow
+            to cover the old ones.
+        source_ids: The source of each track, as for ``prepare_sky_view``;
+            renderers color by source, so K draws of one planet share a
+            color and period-alias families can take one each.
         weights: Optional per-track weights (length K), fading each
-            track's alpha; typically posterior mass per draw.
-        data: Optional ``(ra, dec, err)`` tuple of observed epochs, drawn
-            as errorbars by ``sky_fan``.
-        iwa: Optional inner-working-angle radius, in the same units as
-            the tracks (arcsec on the orbit door), drawn as a shaded disk.
-        invert_ra: Invert the x axis so RA offset increases to the left
-            (the astronomer's convention; orbix's own frame maps x to RA
-            with no flip). An already-inverted axis is left alone, so
-            overplotting onto the same axes does not flip it back.
-        fan_kw: Extra kwargs for each track's ``ax.plot`` call, routed
-            through ``sky_fan`` and applied last. For a single track the
-            base alpha defaults to 0.75 (a solid line) instead of
-            ``sky_fan``'s fan default.
+            track's opacity; typically posterior mass per draw.
+        observations: Optional ``(xy_arcsec, xerr_arcsec, yerr_arcsec)``
+            observed positions, shaped ``(P, 2)``, ``(P,)``, ``(P,)``.
+        iwa_arcsec: Optional inner-working-angle radius in arcsec.
+        cast: ``eyepiece.style.SourceCast`` assigning colors to source
+            IDs. None builds one in first-encounter order.
+        profile: ``eyepiece.style.RenderProfile``; None snapshots the
+            active style.
+        style: Kept for existing callers: a color, or a ``SourceStyles``
+            entry, set on every track after rendering, overriding the
+            cast color.
+        colors: Kept for existing callers: one color per track (length
+            K), set on track k after rendering, overriding ``style`` and
+            the cast colors -- for a fan whose tracks carry distinct
+            meaning, such as period-alias families.
+        data: Kept for existing callers: ``(ra, dec, err)`` observed
+            epochs, converted to ``observations`` with ``err`` on both
+            axes. Exclusive with ``observations``.
+        iwa: Kept for existing callers: the same as ``iwa_arcsec``, with
+            which it is exclusive.
+        fan_kw: Kept for existing callers: ``Line2D`` properties set on
+            every track after rendering, last (an ``"alpha"`` here replaces
+            the weight-derived opacity).
 
     Returns:
-        The ``eyepiece.PlotResult`` from ``sky_fan``: artists ``"lines"``
-        (one ``Line2D`` per track), plus ``"ellipse"`` when ``iwa`` is
-        given and ``"collection"`` when ``data`` is given.
+        The ``eyepiece.mpl.MplResult``; ``result.parts["path/<k>"]`` is
+        track k's ``Line2D``.
     """
-    ep = eyepiece()
-    ra, dec, from_orbit = _sky_tracks(orbit_or_radec, t_jd, Ms_kg, dist_pc, trig_solver)
-    n_tracks = ra.shape[0]
+    eyepiece()
+    from eyepiece import mpl
 
-    if colors is not None and len(colors) != n_tracks:
-        raise ValueError(f"colors has {len(colors)} entries for {n_tracks} tracks")
-    track_colors = (
-        list(colors) if colors is not None else [_resolve_color(ep, style)] * n_tracks
-    )
-    kw = dict(fan_kw or {})
-    if n_tracks == 1:
-        kw.setdefault("alpha", 0.75)
-        kw.setdefault("lw", 1.5)
+    observations = _legacy_observations(observations, data)
+    if iwa is not None:
+        if iwa_arcsec is not None:
+            raise ValueError("pass iwa_arcsec or iwa, not both")
+        iwa_arcsec = iwa
 
-    result = ep.sky_fan(
-        [(ra[k], dec[k]) for k in range(n_tracks)],
-        ax=ax,
-        colors=track_colors,
+    view = prepare_sky_view(
+        orbit_or_radec,
+        t_jd=t_jd,
+        Ms_kg=Ms_kg,
+        dist_pc=dist_pc,
+        trig_solver=trig_solver,
+        source_ids=source_ids,
         weights=weights,
-        iwa=iwa,
-        data=data,
-        fan_kw=kw,
+        observations=observations,
+        iwa_arcsec=iwa_arcsec,
     )
+    n_tracks = sum(1 for mark in view.marks if mark.id.startswith(PATH_PREFIX + "/"))
+    track_colors = _track_colors(style, colors, n_tracks)
+    if ax is not None:
+        view = _widened(view, ax)
+    result = mpl.render(view, ax=ax, cast=cast, profile=profile)
 
-    if from_orbit:
-        result.ax.set_xlabel("RA offset [arcsec]")
-        result.ax.set_ylabel("Dec offset [arcsec]")
-    if invert_ra and not result.ax.xaxis_inverted():
-        result.ax.invert_xaxis()
+    tracks = [result.parts[f"{PATH_PREFIX}/{k}"] for k in range(n_tracks)]
+    if track_colors is not None:
+        for line, color in zip(tracks, track_colors, strict=True):
+            line.set_color(color)
+    for line in tracks:
+        line.set(**(fan_kw or {}))
     return result
+
+
+def _track_colors(style, colors, n_tracks):
+    """Per-track override colors from ``colors`` or ``style``, or None.
+
+    ``colors`` (one per track, length-checked before anything is drawn)
+    wins over ``style`` (one color for every track).
+    """
+    if colors is not None:
+        if len(colors) != n_tracks:
+            raise ValueError(f"colors has {len(colors)} entries for {n_tracks} tracks")
+        return list(colors)
+    if style is not None:
+        return [_resolve_color(eyepiece(), style)] * n_tracks
+    return None
 
 
 def _positions(orbit_or_xyz, t_jd, Ms_kg, trig_solver):

@@ -8,10 +8,11 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
+from hwoutils.constants import Msun2kg
 
 matplotlib.use("Agg")
 
-MSUN_KG = 1.988409870698051e30
+MSUN_KG = Msun2kg
 
 
 @pytest.fixture(autouse=True)
@@ -122,20 +123,70 @@ def test_animate_orbit_time_label_advances():
 
 
 def test_animate_orbit_bare_tracks_door():
-    """Bare tracks animate; t_jd labels them when lengths agree."""
+    """Bare tracks animate on their sample times; the times are required."""
     from orbix.viz import animate_orbit
 
     theta = np.linspace(0.0, 2.0 * np.pi, 15)
     ra, dec = 0.3 * np.cos(theta), 0.2 * np.sin(theta)
 
-    anim = animate_orbit((ra, dec))
-    assert anim.n_frames == 15
-
     anim = animate_orbit((ra, dec), np.linspace(0.0, 140.0, 15))
+    assert anim.n_frames == 15
     anim.draw(anim.fig, 1)
 
-    with pytest.raises(ValueError, match="epoch"):
+    with pytest.raises(TypeError, match="t_jd"):
+        animate_orbit((ra, dec))
+    with pytest.raises(ValueError, match="t_jd has 4"):
         animate_orbit((ra, dec), np.linspace(0.0, 1.0, 4))
+
+
+def test_animate_orbit_sky_propagates_once(monkeypatch):
+    """The sky animation prepares its tracks once and never propagates in draw."""
+    from orbix.orbit import KeplerianOrbit
+    from orbix.viz import animate_orbit
+
+    calls = []
+    original = KeplerianOrbit.propagate
+
+    def counting(self, *args, **kwargs):
+        calls.append(1)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(KeplerianOrbit, "propagate", counting)
+    anim = animate_orbit(_orbit(3), T_JD, Ms_kg=MSUN_KG, dist_pc=10.0)
+    for i in range(anim.n_frames):
+        anim.draw(anim.fig, i)
+    assert len(calls) == 1
+
+
+def test_animate_orbit_sky_heads_follow_the_prepared_samples():
+    """Each frame's head sits on the propagated sample for that epoch."""
+    from orbix.viz import animate_orbit, prepare_sky_track
+
+    orbit = _orbit(2)
+    anim = animate_orbit(orbit, T_JD, Ms_kg=MSUN_KG, dist_pc=10.0, history=3)
+    sequence = prepare_sky_track(orbit, t_jd=T_JD, Ms_kg=MSUN_KG, dist_pc=10.0)
+    from eyepiece.prepared import find_element
+
+    heads = anim.fig.axes[0].collections[-2:]  # head/0 and head/1 are drawn last
+    assert len(heads) == 2
+    for i in (0, 5, len(T_JD) - 1):
+        anim.draw(anim.fig, i)
+        for k, head in enumerate(heads):
+            expected = find_element(sequence.template, f"path/{k}").xy[i]
+            np.testing.assert_allclose(np.asarray(head.get_offsets())[0], expected)
+
+
+def test_animate_orbit_kind_specific_arguments_are_refused():
+    """3D-only styling is refused on the sky, and sky-only marks in 3D."""
+    from orbix.viz import animate_orbit
+
+    kwargs = dict(Ms_kg=MSUN_KG, dist_pc=10.0)
+    with pytest.raises(ValueError, match="kind='3d'"):
+        animate_orbit(_orbit(), T_JD, **kwargs, base_ms=4.0)
+    with pytest.raises(ValueError, match="kind='3d'"):
+        animate_orbit(_orbit(), T_JD, **kwargs, style="#22aabb")
+    with pytest.raises(ValueError, match="kind='sky'"):
+        animate_orbit(_orbit(), T_JD, Ms_kg=MSUN_KG, kind="3d", iwa_arcsec=0.1)
 
 
 def test_animate_orbit_jshtml_renders():
@@ -273,11 +324,11 @@ def test_animate_orbit_default_rotation_orbits_the_normal():
 
 
 def test_animate_orbit_per_track_base_ms():
-    """base_ms encodes per-track meaning; the sky heads carry it exactly."""
+    """base_ms encodes per-track meaning; the 3D heads start at it exactly."""
     from orbix.viz import animate_orbit
 
     anim = animate_orbit(
-        _orbit(3), T_JD, Ms_kg=MSUN_KG, dist_pc=10.0, base_ms=[4.0, 6.0, 8.0]
+        _orbit(3), T_JD, Ms_kg=MSUN_KG, kind="3d", rotate=None, base_ms=[4.0, 6.0, 8.0]
     )
     ax = anim.fig.axes[0]
     heads = [
@@ -288,7 +339,7 @@ def test_animate_orbit_per_track_base_ms():
     assert [head.get_markersize() for head in heads] == [4.0, 6.0, 8.0]
 
     with pytest.raises(ValueError, match="base_ms has 2"):
-        animate_orbit(_orbit(3), T_JD, Ms_kg=MSUN_KG, dist_pc=10.0, base_ms=[4.0, 6.0])
+        animate_orbit(_orbit(3), T_JD, Ms_kg=MSUN_KG, kind="3d", base_ms=[4.0, 6.0])
 
 
 def _projected_area(points, azim_deg, elev_deg):
@@ -319,7 +370,7 @@ def test_auto_sweep_keeps_the_drawn_size_fixed():
         a_AU=1.3, e=0.31, W_rad=2.3, i_rad=1.05, w_rad=-0.7, M0_rad=0.4, t0_d=0.0
     )
     t = np.linspace(0.0, 541.4, 400)
-    xyz, _, _ = orbit.propagate(t_jd=t, Ms_kg=np.atleast_1d(1.988409870698051e30))
+    xyz, _, _ = orbit.propagate(t_jd=t, Ms_kg=np.atleast_1d(MSUN_KG))
     track = np.moveaxis(np.asarray(xyz), 1, 2)[0]
 
     camera = _auto_camera(track[None, ...], 60, roll_deg=0.0)
@@ -346,7 +397,7 @@ def test_auto_sweep_avoids_edge_on_and_face_on():
         a_AU=1.3, e=0.31, W_rad=2.3, i_rad=1.05, w_rad=-0.7, M0_rad=0.4, t0_d=0.0
     )
     t = np.linspace(0.0, 541.4, 400)
-    xyz, _, _ = orbit.propagate(t_jd=t, Ms_kg=np.atleast_1d(1.988409870698051e30))
+    xyz, _, _ = orbit.propagate(t_jd=t, Ms_kg=np.atleast_1d(MSUN_KG))
     track = np.moveaxis(np.asarray(xyz), 1, 2)[0]
 
     camera = _auto_camera(track[None, ...], 40, roll_deg=0.0)
