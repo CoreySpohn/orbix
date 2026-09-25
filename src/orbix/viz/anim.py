@@ -1,10 +1,13 @@
 """Orbit animation: a ghost of the full path, a growing trail, a moving head.
 
-Built on ``eyepiece.animate`` in update mode: the figure is drawn once
-(the full track as a faint ghost, via the static plot functions, so an
-animated figure's ghost matches its still counterpart's path), the animated
-artists are created empty, and each frame is a ``set_data`` -- nothing is
-cleared and no artist is created inside the frame loop.
+The sky-plane animation is a prepared sequence (``prepare_sky_track``)
+played by ``eyepiece.mpl.animate``: the orbit is propagated once, and each
+output frame holds the propagated sample at its physical time. The 3D
+animation is built on ``eyepiece.animate`` in update mode: the figure is
+drawn once (the full track as a faint ghost, via the static plot function,
+so an animated figure's ghost matches its still counterpart's path), the
+animated artists are created empty, and each frame is a ``set_data`` --
+nothing is cleared and no artist is created inside the frame loop.
 
 The ``history`` vocabulary carries over from the key-strategy idea in
 earlier orbit-animation code: ``"all"`` accumulates the trail from the
@@ -15,16 +18,16 @@ first epoch, an int keeps a trailing window of that many frames, and
 import numpy as np
 
 from orbix.orbit import AbstractOrbit
+from orbix.viz._prepare import prepare_sky_track
 from orbix.viz._require import eyepiece
 from orbix.viz.orbit import (
     _orbit_look,
     _per_track,
     _positions,
-    _resolve_color,
-    _sky_tracks,
     plot_orbit,
-    plot_sky_track,
 )
+
+_DEFAULT_BASE_MS = 6.0
 
 
 def _history_slice(i, history):
@@ -152,11 +155,15 @@ def animate_orbit(
     rotate="auto",
     fps=10,
     style=None,
-    base_ms=6.0,
+    base_ms=None,
     weights=None,
-    data=None,
-    iwa=None,
     marks=None,
+    source_ids=None,
+    observations=None,
+    iwa_arcsec=None,
+    run_time=None,
+    cast=None,
+    profile=None,
 ):
     """Animate one or more orbits and return a lazy ``eyepiece.Animation``.
 
@@ -165,18 +172,21 @@ def animate_orbit(
     and the test path never needs ffmpeg.
 
     Args:
-        orbit_or_tracks: An ``AbstractOrbit``, or bare tracks in the same
-            forms the static functions accept (``(ra, dec)`` arrays or
-            ``(2, T)`` / ``(K, 2, T)`` for ``kind="sky"``; ``(T, 3)`` /
-            ``(K, T, 3)`` for ``kind="3d"``).
-        t_jd: Times in Julian Days, shape ``(T,)``. Required on the orbit
-            door; on the bare-track door it is optional and used only for
-            the elapsed-time label (length must match the track).
+        orbit_or_tracks: An ``AbstractOrbit``, or bare tracks: for
+            ``kind="sky"`` the arcsec forms ``prepare_sky_track`` accepts
+            (``(K, T, 2)`` or an ``(ra, dec)`` pair); for ``kind="3d"``
+            ``(T, 3)`` / ``(K, T, 3)`` positions.
+        t_jd: Times in Julian Days, shape ``(T,)``. Required for
+            ``kind="sky"``, where the samples' physical times drive the
+            playback clock, and on the 3D orbit door; on the 3D bare-track
+            door it is optional and used only for the elapsed-time label
+            (length must match the track).
         Ms_kg: Stellar mass in kg. Orbit door only.
         dist_pc: Distance in parsecs. Orbit door with ``kind="sky"`` only.
         trig_solver: Optional Kepler solver; None uses orbix's default.
-        kind: ``"sky"`` (sky-plane arcsec, via ``plot_sky_track``) or
-            ``"3d"`` (star-centric AU, via ``plot_orbit``).
+        kind: ``"sky"`` (sky-plane arcsec: ``prepare_sky_track`` played by
+            ``eyepiece.mpl.animate``) or ``"3d"`` (star-centric AU, via
+            ``plot_orbit``).
         history: ``"all"`` grows the trail from the first epoch, an int
             keeps a trailing window of that many frames, ``"none"`` moves
             the head marker alone.
@@ -193,31 +203,43 @@ def animate_orbit(
             across the frames, for full control. The head's depth cue
             tracks the moving camera frame by frame. Ignored for
             ``kind="sky"`` unless a dict is passed, which raises.
-        fps: Default playback rate carried by the returned animation.
-        style: A color or ``SourceStyles`` entry for the tracks, forwarded
-            to the static function and used for the animated artists. For
-            ``kind="3d"``, None gives the star-chart default: heads in the
-            mode's text color (white dots on a dark background) over
+        fps: Playback rate carried by the returned animation.
+        style: ``kind="3d"`` only. A color or ``SourceStyles`` entry for
+            the tracks, forwarded to the static function and used for the
+            animated artists. None gives the star-chart default: heads in
+            the mode's text color (white dots on a dark background) over
             transparent dashed gray trails; a ``style`` opts into that
-            source's solid color instead.
-        base_ms: Head-marker diameter in points, a scalar or one value
-            per track. The base size is the anchor the depth cue swells
-            around, so it is where physical meaning lives -- pass
-            ``size_by_radius(radii)`` to encode planet radii.
-        weights: Optional per-track weights (length K), fading both the
-            ghost fan and the animated trails.
-        data: Optional ``(ra, dec, err)`` observed epochs (sky only).
-        iwa: Optional inner-working-angle disk radius (sky only).
+            source's solid color instead. Sky colors come from
+            ``source_ids`` and ``cast``.
+        base_ms: ``kind="3d"`` only. Head-marker diameter in points, a
+            scalar or one value per track (default 6). The base size is
+            the anchor the depth cue swells around, so it is where
+            physical meaning lives -- pass ``size_by_radius(radii)`` to
+            encode planet radii.
+        weights: Optional per-track weights (length K), fading the ghost
+            fan and the animated trails.
         marks: Optional ``{"periapsis", "nodes"}`` (3d orbit door only).
+        source_ids: ``kind="sky"`` only: the source of each track, as for
+            ``prepare_sky_track``.
+        observations: ``kind="sky"`` only: ``(xy_arcsec, xerr_arcsec,
+            yerr_arcsec)`` observed positions.
+        iwa_arcsec: ``kind="sky"`` only: inner-working-angle radius.
+        run_time: ``kind="sky"`` only: presentation duration in seconds.
+            None plays ``T / fps`` seconds, one output frame per sample of
+            an evenly spaced grid. Output frames are evenly spaced in
+            physical time and each holds the latest sample.
+        cast: ``kind="sky"`` only: an ``eyepiece.style.SourceCast``.
+        profile: ``kind="sky"`` only: an ``eyepiece.style.RenderProfile``.
 
     Returns:
-        An ``eyepiece.Animation`` bound to the built figure, with one
-        frame per epoch of the track.
+        An ``eyepiece.Animation`` bound to the built figure. A 3D
+        animation has one frame per epoch of the track.
 
     Raises:
+        TypeError: If a sky animation has no ``t_jd``.
         ValueError: If ``kind`` or ``history`` is not one of the
-            documented values, or if a labeled ``t_jd`` does not match the
-            track length.
+            documented values, an argument belongs to the other kind, or
+            a labeled ``t_jd`` does not match the track length.
     """
     ep = eyepiece()
     if kind not in ("sky", "3d"):
@@ -238,42 +260,72 @@ def animate_orbit(
         raise ValueError(
             f'rotate must be "auto", None, or an angle dict, got {rotate!r}'
         )
-    if kind != "3d":
-        rotate = None
+    if kind == "sky":
+        three_d_only = [
+            name
+            for name, value in (
+                ("style", style),
+                ("base_ms", base_ms),
+                ("marks", marks),
+            )
+            if value is not None
+        ]
+        if three_d_only:
+            raise ValueError(
+                ", ".join(three_d_only) + " only apply to kind='3d'; sky colors "
+                "come from source_ids and cast"
+            )
+        return _animate_sky(
+            orbit_or_tracks,
+            t_jd,
+            Ms_kg=Ms_kg,
+            dist_pc=dist_pc,
+            trig_solver=trig_solver,
+            history=history,
+            fps=fps,
+            weights=weights,
+            source_ids=source_ids,
+            observations=observations,
+            iwa_arcsec=iwa_arcsec,
+            run_time=run_time,
+            cast=cast,
+            profile=profile,
+        )
+
+    sky_only = [
+        name
+        for name, value in (
+            ("source_ids", source_ids),
+            ("observations", observations),
+            ("iwa_arcsec", iwa_arcsec),
+            ("run_time", run_time),
+            ("cast", cast),
+            ("profile", profile),
+        )
+        if value is not None
+    ]
+    if sky_only:
+        raise ValueError(", ".join(sky_only) + " only apply to kind='sky'")
+    if base_ms is None:
+        base_ms = _DEFAULT_BASE_MS
 
     from_orbit = isinstance(orbit_or_tracks, AbstractOrbit)
     base_t = t_jd if from_orbit else None
 
-    if kind == "sky":
-        base = plot_sky_track(
-            orbit_or_tracks,
-            base_t,
-            Ms_kg=Ms_kg,
-            dist_pc=dist_pc,
-            trig_solver=trig_solver,
-            style=style,
-            weights=weights,
-            data=data,
-            iwa=iwa,
-            fan_kw={"alpha": 0.3} if _single(orbit_or_tracks) else None,
-        )
-        ra, dec, _ = _sky_tracks(orbit_or_tracks, base_t, Ms_kg, dist_pc, trig_solver)
-        tracks = np.stack([ra, dec], axis=-1)
-    else:
-        # marker_scale=0 keeps the ghost a bare line: the moving head
-        # carries the depth cue in an animation, so per-point beads along
-        # the whole path would only be clutter.
-        base = plot_orbit(
-            orbit_or_tracks,
-            base_t,
-            Ms_kg=Ms_kg,
-            trig_solver=trig_solver,
-            style=style,
-            marks=marks,
-            marker_scale=0.0,
-            trail_kw={"alpha": 0.45},
-        )
-        tracks, _ = _positions(orbit_or_tracks, base_t, Ms_kg, trig_solver)
+    # marker_scale=0 keeps the ghost a bare line: the moving head carries
+    # the depth cue in an animation, so per-point beads along the whole
+    # path would only be clutter.
+    base = plot_orbit(
+        orbit_or_tracks,
+        base_t,
+        Ms_kg=Ms_kg,
+        trig_solver=trig_solver,
+        style=style,
+        marks=marks,
+        marker_scale=0.0,
+        trail_kw={"alpha": 0.45},
+    )
+    tracks, _ = _positions(orbit_or_tracks, base_t, Ms_kg, trig_solver)
 
     ax = base.ax
     n_tracks, n_frames = tracks.shape[0], tracks.shape[1]
@@ -287,115 +339,87 @@ def animate_orbit(
             )
 
     alphas = _track_alphas(n_tracks, weights)
-    if kind == "3d":
-        # the star-chart default: heads in the text color (white dots on a
-        # dark mode) edged in the background color, trails dashed gray; a
-        # style= opts into that source's solid color for both.
-        # The animation always wants the star-chart pairing: a dim dashed
-        # ghost path with the depth cue carried by the moving head marker,
-        # which is exactly what _orbit_look builds for "markers".
-        head_color, path_kw = _orbit_look(style, ep, "markers")
-        trail_color = path_kw.get("color", head_color)
-        trail_ls = path_kw.get("linestyle", "-")
-        trail_alpha = 0.75 if style is None else 1.0
-        head_kw = {}
-        if style is None:
-            import matplotlib as mpl
+    # the star-chart default: heads in the text color (white dots on a
+    # dark mode) edged in the background color, trails dashed gray; a
+    # style= opts into that source's solid color for both.
+    # The animation always wants the star-chart pairing: a dim dashed
+    # ghost path with the depth cue carried by the moving head marker,
+    # which is exactly what _orbit_look builds for "markers".
+    head_color, path_kw = _orbit_look(style, ep, "markers")
+    trail_color = path_kw.get("color", head_color)
+    trail_ls = path_kw.get("linestyle", "-")
+    trail_alpha = 0.75 if style is None else 1.0
+    head_kw = {}
+    if style is None:
+        import matplotlib as mpl
 
-            head_kw = {
-                "markeredgecolor": mpl.rcParams["axes.facecolor"],
-                "markeredgewidth": 0.8,
-            }
-    else:
-        head_color = trail_color = _resolve_color(ep, style)
-        trail_ls = "-"
-        trail_alpha = 1.0
-        head_kw = {}
+        head_kw = {
+            "markeredgecolor": mpl.rcParams["axes.facecolor"],
+            "markeredgewidth": 0.8,
+        }
 
     head_ms = _per_track(base_ms, n_tracks, "base_ms")
-    head_scales = None
     camera = None
-    if kind == "3d":
-        if rotate == "auto":
-            camera = _auto_camera(tracks, n_frames, ax.roll)
-        elif rotate is not None:
-            base_angles = {"azim": ax.azim, "elev": ax.elev, "roll": ax.roll}
-            camera = {
-                key: np.linspace(*rotate[key], n_frames)
-                if key in rotate
-                else np.full(n_frames, base_angles[key])
-                for key in ("azim", "elev", "roll")
-            }
-        if camera is not None:
-            head_scales = np.stack(
-                [
-                    np.array(
-                        [
-                            depth_scale(
-                                tracks[k, i : i + 1],
-                                camera["azim"][i],
-                                camera["elev"][i],
-                            )[0]
-                            for i in range(n_frames)
-                        ]
-                    )
-                    for k in range(n_tracks)
-                ]
-            )
-        else:
-            head_scales = np.stack(
-                [depth_scale(tracks[k], ax.azim, ax.elev) for k in range(n_tracks)]
-            )
+    if rotate == "auto":
+        camera = _auto_camera(tracks, n_frames, ax.roll)
+    elif rotate is not None:
+        base_angles = {"azim": ax.azim, "elev": ax.elev, "roll": ax.roll}
+        camera = {
+            key: np.linspace(*rotate[key], n_frames)
+            if key in rotate
+            else np.full(n_frames, base_angles[key])
+            for key in ("azim", "elev", "roll")
+        }
+    if camera is not None:
+        head_scales = np.stack(
+            [
+                np.array(
+                    [
+                        depth_scale(
+                            tracks[k, i : i + 1],
+                            camera["azim"][i],
+                            camera["elev"][i],
+                        )[0]
+                        for i in range(n_frames)
+                    ]
+                )
+                for k in range(n_tracks)
+            ]
+        )
+    else:
+        head_scales = np.stack(
+            [depth_scale(tracks[k], ax.azim, ax.elev) for k in range(n_tracks)]
+        )
 
     trails, heads = [], []
     for k in range(n_tracks):
         if history != "none":
-            if kind == "sky":
-                (trail_line,) = ax.plot(
-                    [], [], color=trail_color, lw=1.5, alpha=alphas[k]
-                )
-            else:
-                (trail_line,) = ax.plot(
-                    [],
-                    [],
-                    [],
-                    color=trail_color,
-                    linestyle=trail_ls,
-                    lw=1.5,
-                    alpha=trail_alpha * alphas[k],
-                )
+            (trail_line,) = ax.plot(
+                [],
+                [],
+                [],
+                color=trail_color,
+                linestyle=trail_ls,
+                lw=1.5,
+                alpha=trail_alpha * alphas[k],
+            )
             trails.append(trail_line)
-        if kind == "sky":
-            (head,) = ax.plot(
-                [],
-                [],
-                linestyle="",
-                marker="o",
-                ms=head_ms[k],
-                color=head_color,
-                alpha=alphas[k],
-            )
-        else:
-            (head,) = ax.plot(
-                [],
-                [],
-                [],
-                linestyle="",
-                marker="o",
-                ms=head_ms[k],
-                color=head_color,
-                alpha=alphas[k],
-                **head_kw,
-            )
+        (head,) = ax.plot(
+            [],
+            [],
+            [],
+            linestyle="",
+            marker="o",
+            ms=head_ms[k],
+            color=head_color,
+            alpha=alphas[k],
+            **head_kw,
+        )
         heads.append(head)
 
     label = None
     if times is not None:
-        text_kw = {"transform": ax.transAxes, "ha": "left", "va": "top"}
-        if kind == "sky":
-            label = ax.text(0.02, 0.98, "", **text_kw)
-        else:
-            label = ax.text2D(0.02, 0.98, "", **text_kw)
+        label = ax.text2D(0.02, 0.98, "", transform=ax.transAxes, ha="left", va="top")
 
     def draw(fig, i):
         """Advance every animated artist to epoch ``i`` (a set_data pass)."""
@@ -410,34 +434,53 @@ def animate_orbit(
         for k in range(n_tracks):
             if history != "none":
                 segment = tracks[k, start:stop]
-                if kind == "sky":
-                    trails[k].set_data(segment[:, 0], segment[:, 1])
-                else:
-                    trails[k].set_data_3d(segment[:, 0], segment[:, 1], segment[:, 2])
+                trails[k].set_data_3d(segment[:, 0], segment[:, 1], segment[:, 2])
             point = tracks[k, i]
-            if kind == "sky":
-                heads[k].set_data([point[0]], [point[1]])
-            else:
-                heads[k].set_data_3d([point[0]], [point[1]], [point[2]])
-                # never vanish entirely: the far side reads as "small",
-                # not "gone behind the star"
-                heads[k].set_markersize(head_ms[k] * depth_size(head_scales[k, i]))
+            heads[k].set_data_3d([point[0]], [point[1]], [point[2]])
+            # never vanish entirely: the far side reads as "small",
+            # not "gone behind the star"
+            heads[k].set_markersize(head_ms[k] * depth_size(head_scales[k, i]))
         if label is not None:
             label.set_text(f"t = +{times[i] - times[0]:.0f} d")
 
     return ep.animate(base.fig, draw, n_frames, fps=fps)
 
 
-def _single(orbit_or_tracks):
-    """Whether the input is a single track (K == 1), cheaply and safely.
+def _animate_sky(
+    orbit_or_tracks,
+    t_jd,
+    *,
+    Ms_kg,
+    dist_pc,
+    trig_solver,
+    history,
+    fps,
+    weights,
+    source_ids,
+    observations,
+    iwa_arcsec,
+    run_time,
+    cast,
+    profile,
+):
+    """Prepare the sky tracks once and play them through ``eyepiece.mpl``."""
+    eyepiece()
+    from eyepiece import mpl
 
-    Only tunes the ghost's alpha, so an exotic ``AbstractOrbit`` without
-    element arrays to inspect just keeps the fan default.
-    """
-    if isinstance(orbit_or_tracks, AbstractOrbit):
-        elements = getattr(orbit_or_tracks, "a_AU", None)
-        return elements is not None and int(np.asarray(elements).shape[0]) == 1
-    if isinstance(orbit_or_tracks, (tuple, list)) and len(orbit_or_tracks) == 2:
-        return np.asarray(orbit_or_tracks[0]).ndim == 1
-    arr = np.asarray(orbit_or_tracks)
-    return arr.ndim == 2
+    if t_jd is None:
+        raise TypeError("a sky animation needs t_jd: the sample times drive its clock")
+    sequence = prepare_sky_track(
+        orbit_or_tracks,
+        t_jd=t_jd,
+        Ms_kg=Ms_kg,
+        dist_pc=dist_pc,
+        trig_solver=trig_solver,
+        source_ids=source_ids,
+        weights=weights,
+        observations=observations,
+        iwa_arcsec=iwa_arcsec,
+        history=None if history == "none" else history,
+    )
+    if run_time is None:
+        run_time = len(sequence.times) / fps
+    return mpl.animate(sequence, run_time=run_time, fps=fps, cast=cast, profile=profile)

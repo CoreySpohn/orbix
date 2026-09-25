@@ -5,6 +5,10 @@ eyepiece and, through it, matplotlib and hwostyle. The base install stays
 free of all three: names are re-exported lazily (PEP 562), so importing
 this package imports no plotting stack, and the eyepiece requirement is
 checked only when a plot function is first touched.
+
+``prepare_sky_track`` and ``prepare_sky_view`` build renderer-neutral
+``eyepiece.prepared`` records and import neither Matplotlib nor a renderer;
+``eyepiece.mpl`` and ``eyepiece.manim`` draw what they return.
 """
 
 import importlib
@@ -15,6 +19,8 @@ _LAZY = {
     "depth_size": "orbix.viz.anim",
     "plot_orbit": "orbix.viz.orbit",
     "plot_sky_track": "orbix.viz.orbit",
+    "prepare_sky_track": "orbix.viz._prepare",
+    "prepare_sky_view": "orbix.viz._prepare",
     "size_by_radius": "orbix.viz.orbit",
 }
 

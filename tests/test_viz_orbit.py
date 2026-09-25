@@ -9,10 +9,11 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
+from hwoutils.constants import Msun2kg
 
 matplotlib.use("Agg")
 
-MSUN_KG = 1.988409870698051e30
+MSUN_KG = Msun2kg
 
 
 @pytest.fixture(autouse=True)
@@ -43,56 +44,108 @@ STELLAR = dict(Ms_kg=jnp.atleast_1d(MSUN_KG), dist_pc=jnp.atleast_1d(10.0))
 
 
 def test_plot_sky_track_single_orbit_contract():
-    """One orbit: PlotResult, vocabulary keys, labels, equal aspect, RA flip."""
-    import eyepiece as ep
+    """One orbit: an MplResult of the prepared view, labels, equal aspect, RA left."""
+    from eyepiece.mpl import MplResult
 
     from orbix.viz import plot_sky_track
 
     result = plot_sky_track(_orbit(), T_JD, **STELLAR)
-    assert isinstance(result, ep.PlotResult)
-    assert set(result.artists) <= ep.ARTIST_KEYS
-    assert len(result.artists["lines"]) == 1
+    assert isinstance(result, MplResult)
+    assert "path/0" in result.parts and "star" in result.parts
+    assert "path/1" not in result.parts
     assert result.ax.get_aspect() == 1.0
     assert result.ax.xaxis_inverted()
     assert "RA offset" in result.ax.get_xlabel()
     assert "Dec offset" in result.ax.get_ylabel()
 
 
-def test_plot_sky_track_fan_with_weights_iwa_data():
-    """K orbits fan out in one shared color with IWA disk and epochs."""
+def test_plot_sky_track_fan_with_weights_iwa_observations():
+    """K orbits fan out in one shared color, faded by weight, with IWA and data."""
+    from eyepiece.prepared import weight_opacity
+
     from orbix.viz import plot_sky_track
 
     K = 4
-    data = (np.array([0.05, -0.03]), np.array([0.02, 0.06]), np.array([0.01, 0.01]))
+    weights = [1.0, 0.5, 0.2, 0.1]
+    obs = (np.array([[0.05, 0.02], [-0.03, 0.06]]), np.full(2, 0.01), np.full(2, 0.01))
     result = plot_sky_track(
-        _orbit(K),
+        _orbit(K), T_JD, **STELLAR, weights=weights, iwa_arcsec=0.06, observations=obs
+    )
+    lines = [result.parts[f"path/{k}"] for k in range(K)]
+    assert len({line.get_color() for line in lines}) == 1
+    np.testing.assert_allclose(
+        [line.get_alpha() for line in lines], weight_opacity(np.array(weights))
+    )
+    assert result.parts["iwa"].get_radius() == pytest.approx(0.06)
+    assert "observations/xerr" in result.parts
+
+
+def test_plot_sky_track_legacy_data_iwa_style_and_fan_kw():
+    """The pre-prepared keywords convert explicitly onto the prepared view."""
+    from orbix.viz import plot_sky_track
+
+    data = (np.array([0.05, -0.03]), np.array([0.02, 0.06]), np.array([0.01, 0.02]))
+    result = plot_sky_track(
+        _orbit(3),
         T_JD,
         **STELLAR,
-        weights=[1.0, 0.5, 0.2, 0.1],
         iwa=0.06,
         data=data,
+        style={"color": "#22aabb", "marker": "o"},
+        fan_kw={"lw": 2.2, "zorder": 5},
     )
-    lines = result.artists["lines"]
-    assert len(lines) == K
-    assert len({line.get_color() for line in lines}) == 1
-    assert "ellipse" in result.artists
-    assert "collection" in result.artists
+    np.testing.assert_allclose(
+        result.parts["observations"].get_offsets(), np.stack(data[:2], axis=1)
+    )
+    y_segments = np.asarray(result.parts["observations/yerr"].get_segments())
+    np.testing.assert_allclose(y_segments[:, 1, 1] - y_segments[:, 0, 1], 2 * data[2])
+    assert result.parts["iwa"].get_radius() == pytest.approx(0.06)
+    for k in range(3):
+        line = result.parts[f"path/{k}"]
+        assert line.get_color() == "#22aabb"
+        assert line.get_linewidth() == pytest.approx(2.2)
+        assert line.get_zorder() == 5
+
+    with pytest.raises(ValueError, match="observations or data"):
+        plot_sky_track(
+            _orbit(), T_JD, **STELLAR, data=data, observations=(np.zeros((1, 2)),) * 3
+        )
+    with pytest.raises(ValueError, match="iwa_arcsec or iwa"):
+        plot_sky_track(_orbit(), T_JD, **STELLAR, iwa=0.1, iwa_arcsec=0.1)
+
+
+def test_plot_sky_track_propagates_once(monkeypatch):
+    """The static plot prepares the tracks with one propagation."""
+    from orbix.orbit import KeplerianOrbit
+    from orbix.viz import plot_sky_track
+
+    calls = []
+    original = KeplerianOrbit.propagate
+
+    def counting(self, *args, **kwargs):
+        calls.append(1)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(KeplerianOrbit, "propagate", counting)
+    plot_sky_track(_orbit(3), T_JD, **STELLAR)
+    assert len(calls) == 1
 
 
 def test_plot_sky_track_bare_arrays_door():
-    """Bare (ra, dec) tracks draw without labels or propagation arguments."""
+    """Bare arcsec tracks draw without propagation arguments."""
     from orbix.viz import plot_sky_track
 
     theta = np.linspace(0.0, 2.0 * np.pi, 50)
     ra, dec = 0.3 * np.cos(theta), 0.2 * np.sin(theta)
 
     result = plot_sky_track((ra, dec))
-    assert len(result.artists["lines"]) == 1
-    assert result.ax.get_xlabel() == ""
+    assert "path/0" in result.parts and "path/1" not in result.parts
+    assert "RA offset" in result.ax.get_xlabel()
 
-    stacked = np.stack([np.stack([ra, dec]), np.stack([0.5 * ra, 0.5 * dec])])
+    stacked = np.stack([np.stack([ra, dec], -1), np.stack([0.5 * ra, 0.5 * dec], -1)])
     result = plot_sky_track(stacked)
-    assert len(result.artists["lines"]) == 2
+    assert "path/1" in result.parts
+    np.testing.assert_array_equal(result.parts["path/1"].get_xydata(), stacked[1])
 
     with pytest.raises(TypeError, match="t_jd"):
         plot_sky_track((ra, dec), T_JD)
@@ -102,10 +155,10 @@ def test_plot_sky_track_shape_errors_name_shapes():
     """A wrong-shaped array raises ValueError naming got and accepted shapes."""
     from orbix.viz import plot_sky_track
 
-    with pytest.raises(ValueError, match=r"\(2, T\)"):
+    with pytest.raises(ValueError, match=r"\(K, T, 2\)"):
         plot_sky_track(np.zeros((4, 5)))
-    with pytest.raises(ValueError, match=r"\(3, 5\)"):
-        plot_sky_track(np.zeros((3, 5)))
+    with pytest.raises(ValueError, match=r"\(3, 5, 4\)"):
+        plot_sky_track(np.zeros((3, 5, 4)))
 
 
 def test_plot_sky_track_missing_propagation_args_named():
@@ -116,15 +169,21 @@ def test_plot_sky_track_missing_propagation_args_named():
         plot_sky_track(_orbit(), T_JD)
 
 
-def test_plot_sky_track_overplot_keeps_ra_inverted():
-    """A second call on the same axes does not flip the RA axis back."""
+def test_plot_sky_track_overplot_keeps_ra_inverted_and_both_tracks():
+    """A second call on the same axes keeps RA left and widens to both views."""
     from orbix.viz import plot_sky_track
 
-    result = plot_sky_track(_orbit(), T_JD, **STELLAR)
-    left_before = result.ax.get_xlim()[0]
-    plot_sky_track(_orbit(3), T_JD, **STELLAR, ax=result.ax)
-    assert result.ax.xaxis_inverted()
-    assert result.ax.get_xlim()[0] == pytest.approx(left_before, rel=0.5)
+    first = plot_sky_track(_orbit(), T_JD, **STELLAR)
+    before = sorted(first.ax.get_xlim()), sorted(first.ax.get_ylim())
+    second = plot_sky_track(_orbit(3), T_JD, **STELLAR, ax=first.ax)
+    assert first.ax.xaxis_inverted()
+    after = sorted(first.ax.get_xlim()), sorted(first.ax.get_ylim())
+    for (lo0, hi0), (lo1, hi1) in zip(before, after, strict=True):
+        assert lo1 <= lo0 and hi1 >= hi0
+    for k in range(3):
+        xy = second.parts[f"path/{k}"].get_xydata()
+        assert np.all(xy[:, 0] >= after[0][0]) and np.all(xy[:, 0] <= after[0][1])
+        assert np.all(xy[:, 1] >= after[1][0]) and np.all(xy[:, 1] <= after[1][1])
 
 
 def test_plot_sky_track_geometry_stays_in_handed_slot():
@@ -230,23 +289,30 @@ def test_plot_orbit_marks_smoke_and_errors():
         plot_orbit(_orbit(), T_JD, Ms_kg=STELLAR["Ms_kg"], marks={"apoapsis"})
 
 
-def test_plot_sky_track_per_track_colors():
-    """A per-track colors list overrides style and must match K."""
+def test_plot_sky_track_sources_color_the_fan():
+    """Distinct source IDs take distinct cast colors; a repeated ID shares one."""
+    from eyepiece.style import SourceCast
+
     from orbix.viz import plot_sky_track
 
     theta = np.linspace(0.0, 2.0 * np.pi, 30)
     tracks = np.stack(
         [
-            np.stack([0.3 * np.cos(theta), 0.2 * np.sin(theta)]),
-            np.stack([0.2 * np.cos(theta), 0.3 * np.sin(theta)]),
+            np.stack([0.3 * np.cos(theta), 0.2 * np.sin(theta)], -1),
+            np.stack([0.2 * np.cos(theta), 0.3 * np.sin(theta)], -1),
+            np.stack([0.1 * np.cos(theta), 0.1 * np.sin(theta)], -1),
         ]
     )
-    result = plot_sky_track(tracks, colors=["#aa3311", "#1133aa"])
-    drawn = [line.get_color() for line in result.artists["lines"]]
-    assert drawn == ["#aa3311", "#1133aa"]
+    cast = SourceCast(("alias 1", "alias 2"))
+    result = plot_sky_track(
+        tracks, source_ids=("alias 2", "alias 1", "alias 2"), cast=cast
+    )
+    drawn = [result.parts[f"path/{k}"].get_color() for k in range(3)]
+    assert drawn[0] == drawn[2] != drawn[1]
+    assert drawn[1] == result.profile.colors[0]
 
-    with pytest.raises(ValueError, match="colors has 1"):
-        plot_sky_track(tracks, colors=["#aa3311"])
+    with pytest.raises(ValueError, match="source_ids has 1"):
+        plot_sky_track(tracks, source_ids=("a",))
 
 
 def test_plot_orbit_panes_take_the_axes_facecolor():
