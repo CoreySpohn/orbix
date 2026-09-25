@@ -178,9 +178,13 @@ def test_fractional_multi_day_steps_print_every_offset_exactly():
     texts = [find_element(sequence.frame(i), "clock").text for i in range(5)]
     assert texts == [f"t = +{v} d" for v in ("0.0", "1.5", "3.0", "4.5", "6.0")]
 
-    # A step no precision writes exactly keeps the fewest readable decimals.
+    # A step no precision writes exactly keeps the fewest decimals that
+    # stay within a quarter step: whole days for a 3-day step, tenths for a
+    # 1.5-day one.
     dense = prepare_sky_track(_circle(200), t_jd=np.linspace(0.0, 600.0, 200))
-    assert find_element(dense.frame(100), "clock").text == "t = +301.5 d"
+    assert find_element(dense.frame(100), "clock").text == "t = +302 d"
+    denser = prepare_sky_track(_circle(400), t_jd=np.linspace(0.0, 600.0, 400))
+    assert find_element(denser.frame(200), "clock").text == "t = +300.8 d"
 
 
 def test_clock_fmt_sets_the_label_and_is_checked_before_propagating():

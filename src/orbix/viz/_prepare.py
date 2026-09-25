@@ -68,8 +68,9 @@ _MAX_CLOCK_DECIMALS = 3
 # Offsets within this many days of a printed value count as printed exactly.
 _CLOCK_EXACT_D = 1e-6
 # Largest rounding error, as a fraction of the smallest step, accepted when
-# no clock precision prints every offset exactly.
-_CLOCK_STEP_FRACTION = 0.05
+# no clock precision prints every offset exactly. Under half a step keeps
+# adjacent labels distinct and in order; a quarter leaves margin.
+_CLOCK_STEP_FRACTION = 0.25
 
 
 def _element_id(prefix, k):
@@ -326,8 +327,9 @@ def _clock_format(offsets_d):
     Julian-day differences carry float noise near a microday, which the
     comparison tolerates. When no three-decimal number writes every offset
     (a grid of 12 samples over 400 days, say), the fewest decimals that
-    place every offset within a twentieth of the smallest step are used,
-    so adjacent labels stay distinct without printing noise digits.
+    place every offset within a quarter of the smallest step are used, so
+    adjacent labels stay distinct and ordered without printing noise
+    digits.
     """
     offsets = np.asarray(offsets_d, dtype=float)
     choices = range(_MAX_CLOCK_DECIMALS + 1)
@@ -400,8 +402,8 @@ def prepare_sky_track(
             and ``{unit}``, e.g. ``"t = {value:.1f} {unit}"``. None writes
             ``"t = +<offset> d"`` with the fewest decimals (at most three)
             that print every sample's offset exactly, or, when no such
-            precision exists, that keep every label within a twentieth of
-            the smallest step. Frames and a strip's panels share it.
+            precision exists, that keep every label within a quarter of the
+            smallest step. Frames and a strip's panels share it.
 
     Returns:
         An ``eyepiece.prepared.Sequence`` over a ``TrackView`` with element
