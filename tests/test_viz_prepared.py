@@ -691,3 +691,62 @@ def test_manim_places_heads_observations_and_iwa_in_data_coordinates(tmp_path):
         (head,) = result.parts["head/0"]
         result.update(sequence.frame(0))
         assert head.get_center()[0] < star.get_center()[0]
+
+
+def test_manim_error_bar_endpoints_match_data_and_matplotlib(tmp_path):
+    """Manim error bars end at xy -/+ err, RA-left, where Matplotlib draws them."""
+    manim = _require_manim()
+    import eyepiece.manim as em
+    from eyepiece import mpl
+
+    xy = np.array([[0.5, 0.25], [-0.4, 0.1], [0.05, -0.3]])
+    xerr = np.array([0.02, 0.05, 0.08])
+    yerr = np.array([0.03, 0.01, 0.06])
+    sequence = prepare_sky_track(
+        _circle(4), t_jd=np.arange(4.0), observations=(xy, xerr, yerr)
+    )
+    view = sequence.frame(1)
+    spec = view.axes
+    mpl_result = mpl.render(view)
+    with manim.tempconfig({"media_dir": str(tmp_path / "media")}):
+        result = em.render(view)
+        frame = result.parts["sky/frame"]
+        for name, axis, err in (("xerr", 0, xerr), ("yerr", 1, yerr)):
+            bars = list(result.parts[f"observations/{name}"])
+            assert len(bars) == len(xy)
+            starts = np.array([bar.points[0] for bar in bars])
+            ends = np.array([bar.points[-1] for bar in bars])
+            ends_data = np.stack(
+                [
+                    _scene_to_data(starts, frame, spec),
+                    _scene_to_data(ends, frame, spec),
+                ],
+                axis=1,
+            )
+            ends_data = np.sort(ends_data, axis=1)  # (P, 2 ends, 2), low end first
+            low, high = xy.copy(), xy.copy()
+            low[:, axis] -= err
+            high[:, axis] += err
+            order = np.argsort(np.stack([low[:, axis], high[:, axis]], 1), axis=1)
+            assert np.all(order[:, 0] == 0)
+            np.testing.assert_allclose(ends_data[:, 0], low, atol=1e-9)
+            np.testing.assert_allclose(ends_data[:, 1], high, atol=1e-9)
+
+            mpl_segments = np.sort(
+                np.asarray(mpl_result.parts[f"observations/{name}"].get_segments()),
+                axis=1,
+            )
+            np.testing.assert_allclose(ends_data, mpl_segments, atol=1e-9)
+
+        # positive RA is on the left: the +xerr end sits left of the -xerr end
+        for bar, x_low, x_high in zip(
+            result.parts["observations/xerr"], xy[:, 0] - xerr, xy[:, 0] + xerr
+        ):
+            scene_x = [bar.points[0][0], bar.points[-1][0]]
+            data_x = _scene_to_data(
+                np.array([bar.points[0], bar.points[-1]]), frame, spec
+            )[:, 0]
+            at_high = scene_x[int(np.argmax(data_x))]
+            at_low = scene_x[int(np.argmin(data_x))]
+            assert at_high < at_low
+            np.testing.assert_allclose(sorted(data_x), [x_low, x_high], atol=1e-9)

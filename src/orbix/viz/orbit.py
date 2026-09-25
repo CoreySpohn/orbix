@@ -175,6 +175,7 @@ def plot_sky_track(
     cast=None,
     profile=None,
     style=None,
+    colors=None,
     data=None,
     iwa=None,
     fan_kw=None,
@@ -217,6 +218,10 @@ def plot_sky_track(
         style: Kept for existing callers: a color, or a ``SourceStyles``
             entry, set on every track after rendering, overriding the
             cast color.
+        colors: Kept for existing callers: one color per track (length
+            K), set on track k after rendering, overriding ``style`` and
+            the cast colors -- for a fan whose tracks carry distinct
+            meaning, such as period-alias families.
         data: Kept for existing callers: ``(ra, dec, err)`` observed
             epochs, converted to ``observations`` with ``err`` on both
             axes. Exclusive with ``observations``.
@@ -250,20 +255,34 @@ def plot_sky_track(
         observations=observations,
         iwa_arcsec=iwa_arcsec,
     )
+    n_tracks = sum(1 for mark in view.marks if mark.id.startswith(PATH_PREFIX + "/"))
+    track_colors = _track_colors(style, colors, n_tracks)
     if ax is not None:
         view = _widened(view, ax)
     result = mpl.render(view, ax=ax, cast=cast, profile=profile)
 
-    tracks = [
-        part for key, part in result.parts.items() if key.startswith(PATH_PREFIX + "/")
-    ]
-    if style is not None:
-        color = _resolve_color(eyepiece(), style)
-        for line in tracks:
+    tracks = [result.parts[f"{PATH_PREFIX}/{k}"] for k in range(n_tracks)]
+    if track_colors is not None:
+        for line, color in zip(tracks, track_colors, strict=True):
             line.set_color(color)
     for line in tracks:
         line.set(**(fan_kw or {}))
     return result
+
+
+def _track_colors(style, colors, n_tracks):
+    """Per-track override colors from ``colors`` or ``style``, or None.
+
+    ``colors`` (one per track, length-checked before anything is drawn)
+    wins over ``style`` (one color for every track).
+    """
+    if colors is not None:
+        if len(colors) != n_tracks:
+            raise ValueError(f"colors has {len(colors)} entries for {n_tracks} tracks")
+        return list(colors)
+    if style is not None:
+        return [_resolve_color(eyepiece(), style)] * n_tracks
+    return None
 
 
 def _positions(orbit_or_xyz, t_jd, Ms_kg, trig_solver):

@@ -289,6 +289,29 @@ def test_plot_orbit_marks_smoke_and_errors():
         plot_orbit(_orbit(), T_JD, Ms_kg=STELLAR["Ms_kg"], marks={"apoapsis"})
 
 
+def test_plot_sky_track_per_track_colors():
+    """A per-track colors list recolors each path in order and must match K."""
+    from orbix.viz import plot_sky_track
+
+    theta = np.linspace(0.0, 2.0 * np.pi, 30)
+    tracks = np.stack(
+        [
+            np.stack([0.3 * np.cos(theta), 0.2 * np.sin(theta)], -1),
+            np.stack([0.2 * np.cos(theta), 0.3 * np.sin(theta)], -1),
+        ]
+    )
+    result = plot_sky_track(tracks, colors=["#aa3311", "#1133aa"])
+    drawn = [result.parts[f"path/{k}"].get_color() for k in range(2)]
+    assert drawn == ["#aa3311", "#1133aa"]
+
+    # colors win over style, as before
+    result = plot_sky_track(tracks, colors=["#aa3311", "#1133aa"], style="#22aabb")
+    assert result.parts["path/1"].get_color() == "#1133aa"
+
+    with pytest.raises(ValueError, match="colors has 1 entries for 2 tracks"):
+        plot_sky_track(tracks, colors=["#aa3311"])
+
+
 def test_plot_sky_track_sources_color_the_fan():
     """Distinct source IDs take distinct cast colors; a repeated ID shares one."""
     from eyepiece.style import SourceCast
