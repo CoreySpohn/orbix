@@ -392,6 +392,30 @@ def test_weights_and_repeated_source_identity():
     assert result.cast.names == ("b", "c")
 
 
+def test_heads_fade_with_their_tracks_when_weights_do_not_peak_at_one():
+    """Star and observations never set the Points scale; heads match paths."""
+    tracks = np.concatenate([_circle(4), _circle(4, radius=0.5)])
+    weights = np.array([0.5, 0.2])
+    observations = (np.array([[0.1, 0.2]]), np.array([0.05]), np.array([0.05]))
+    sequence = prepare_sky_track(
+        tracks, t_jd=np.arange(4.0), weights=weights, observations=observations
+    )
+    from eyepiece import mpl
+
+    result = mpl.render(sequence.frame(0))
+    paths = [result.parts[f"path/{k}"].get_alpha() for k in range(2)]
+    heads = [result.parts[f"head/{k}"].get_alpha() for k in range(2)]
+    np.testing.assert_allclose(paths, weight_opacity(weights))
+    np.testing.assert_allclose(heads, paths)
+    # The measurements and the star stay at the top of the mapping.
+    top = float(weight_opacity(weights).max())
+    assert find_element(sequence.template, "observations").weight == 0.5
+    assert find_element(sequence.template, "star").weight == 0.5
+    for part in (result.parts["observations"], result.parts["star"]):
+        alpha = part.get_alpha()
+        assert alpha is not None and alpha == pytest.approx(top)
+
+
 def test_default_source_is_one_shared_identity():
     """With no source IDs, every track is one source."""
     sequence = prepare_sky_track(

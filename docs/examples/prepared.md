@@ -289,7 +289,8 @@ behavior.
   as propagated orbits.
 - A lone track is drawn at opacity 0.80, the top of the shared weight
   mapping, rather than 0.75. Heads carry their track's weight and fade with
-  it.
+  it; the star and the observations carry the top track weight, so they
+  stay at full opacity.
 - An `"alpha"` in `fan_kw=` is set last, so it replaces the weight-derived
   opacity instead of scaling it.
 - `plot_sky_track` still accepts `data=(ra, dec, err)` and `iwa=` and

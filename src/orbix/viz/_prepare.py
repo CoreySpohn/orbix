@@ -176,7 +176,7 @@ def _per_track_weights(weights, n_tracks):
     return tuple(float(w) for w in values)
 
 
-def _observation_points(observations):
+def _observation_points(observations, weight):
     """Build the observations mark from ``(xy, xerr, yerr)``, or None."""
     if observations is None:
         return None
@@ -186,7 +186,7 @@ def _observation_points(observations):
             "(P, 2), (P,), (P,)"
         )
     xy, xerr, yerr = observations
-    return Points(OBSERVATIONS_ID, xy, xerr=xerr, yerr=yerr)
+    return Points(OBSERVATIONS_ID, xy, xerr=xerr, yerr=yerr, weight=weight)
 
 
 def _iwa_region(iwa_arcsec):
@@ -265,7 +265,10 @@ def _build_view(
     n_tracks = tracks.shape[0]
     sources = _per_track_sources(source_ids, n_tracks)
     track_weights = _per_track_weights(weights, n_tracks)
-    points = _observation_points(observations)
+    # the star and the observations sit at the top weight, so the Points
+    # normalization is the tracks' own and each head fades with its path
+    top_weight = max(track_weights)
+    points = _observation_points(observations, top_weight)
     iwa = _iwa_region(iwa_arcsec)
     x_limits, y_limits = _limits(tracks, points, iwa)
 
@@ -290,7 +293,7 @@ def _build_view(
             )
             for k in range(n_tracks)
         ]
-    marks.append(Points(STAR_ID, np.zeros((1, 2))))
+    marks.append(Points(STAR_ID, np.zeros((1, 2)), weight=top_weight))
     if heads:
         marks += [
             Points(
