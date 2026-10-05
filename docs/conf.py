@@ -31,7 +31,7 @@ intersphinx_mapping = {
     "jax": ("https://docs.jax.dev/en/latest/", None),
 }
 
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["_build", ".build", "Thumbs.db", ".DS_Store"]
 
 autoapi_dirs = ["../src"]
 autoapi_ignore = ["**/_version.py"]
