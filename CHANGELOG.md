@@ -11,6 +11,31 @@
 * The broken predict/pdet functions and the `discrete_e` factory were removed
   (they did not work correctly and had no working callers).
 
+## [2.0.0](https://github.com/CoreySpohn/orbix/compare/v1.2.0...v2.0.0) (2026-10-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* **viz:** prepare sky tracks for shared renderers
+
+### Features
+
+* **kepler:** add a table-free Markley solver with implicit derivatives ([886bec0](https://github.com/CoreySpohn/orbix/commit/886bec02b6dfda444cf78a84710e1aadc2a2f150))
+* **viz:** prepare sky tracks for shared renderers ([84fd1ef](https://github.com/CoreySpohn/orbix/commit/84fd1ef7dd7fdb51fd0751cef4afd7f75f80dabd))
+
+
+### Bug Fixes
+
+* **viz:** accept a quarter-step clock rounding when no precision is exact ([67a3822](https://github.com/CoreySpohn/orbix/commit/67a3822eee0ed7b8474768a7b3b91acf3d048861))
+* **viz:** keep per-track colors on sky tracks ([693e5da](https://github.com/CoreySpohn/orbix/commit/693e5da6be5b55372bd7ae8b7a4d0b63733ee3af))
+* **viz:** print exact clock offsets, take clock_fmt, and weight heads ([022f04a](https://github.com/CoreySpohn/orbix/commit/022f04ac45b6d121f95a42a309b250fd44f94674))
+* **viz:** weight the star and observations at the top track weight so heads fade with their paths ([b190d40](https://github.com/CoreySpohn/orbix/commit/b190d40e2ec876ca5fafd3975485c3268e294cd7))
+
+
+### Performance Improvements
+
+* **kepler:** select the reduced angle before the trig polynomial and gather RPP coefficients once ([02d71da](https://github.com/CoreySpohn/orbix/commit/02d71dae0984e3e36f58ae70d502ab7703257362))
+
 ## [1.2.0](https://github.com/CoreySpohn/orbix/compare/v1.1.0...v1.2.0) (2026-08-28)
 
 
