@@ -33,6 +33,13 @@ contract `trig_solver(M, e) -> (sinE, cosE)`; `KeplerianOrbit.propagate` uses
 it to convert orbital elements and times into position vectors, phase angle,
 and star-planet distance.
 
+For an alternative without interpolation tables, use
+`from orbix.kepler import markley_solve_trig` and pass `markley_solve_trig` as the
+orbit's `trig_solver`. This Markley-based solver supports scalar inputs,
+broadcasting, and both forward and reverse derivatives. Enable
+`jax.config.update("jax_enable_x64", True)` for double-precision accuracy.
+The RPP/orvara solver remains available in `orbix.kepler.core`.
+
 ## Scope
 
 orbix provides Keplerian orbit geometry and Kepler-equation solvers; scene
