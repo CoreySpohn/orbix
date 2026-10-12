@@ -373,15 +373,24 @@ def init_E_coeffs(M: jnp.ndarray, bounds: jnp.ndarray, coeffs: jnp.ndarray):
     # bound, collapsing the guess to 11*pi/12 (found 2026-07; covered by the
     # M = pi cases in tests/test_kepler_core.py).
     n_bins = coeffs.shape[0]
-    j_inds = jnp.clip(jnp.digitize(M, bounds) - 1, 0, n_bins - 1)
+    # Thirteen sorted bounds are small enough for a comparison reduction.
+    # digitize also checks their ordering and performs two binary searches;
+    # those loops are particularly costly when vmapped over eccentricities.
+    j_inds = jnp.clip(
+        jnp.searchsorted(bounds, M, side="right", method="compare_all") - 1,
+        0,
+        n_bins - 1,
+    )
     dx = M - bounds[j_inds]
-    return coeffs[j_inds, 0] + dx * (
-        coeffs[j_inds, 1]
+    # Gather each coefficient row once; six strided gathers are expensive
+    # for batches containing many independently varying eccentricities.
+    selected = coeffs[j_inds]
+    return selected[..., 0] + dx * (
+        selected[..., 1]
         + dx
         * (
-            coeffs[j_inds, 2]
-            + dx
-            * (coeffs[j_inds, 3] + dx * (coeffs[j_inds, 4] + dx * coeffs[j_inds, 5]))
+            selected[..., 2]
+            + dx * (selected[..., 3] + dx * (selected[..., 4] + dx * selected[..., 5]))
         )
     )
 
@@ -577,9 +586,15 @@ def Etrig(i, E):
 
 def fast_sinE_cosE(E):
     """Compute the sine and cosine of the eccentric anomaly using shortsin."""
-    # Vectorize the computation across all elements
-    Ei = jnp.select([E <= pi_d_4, E < threepi_d_4], [0, 1], default=2)
-    sinE, cosE = jax.vmap(Etrig, in_axes=(0, 0))(Ei, E)
+    # Select the reduced angle before evaluating the polynomial. A vmapped
+    # switch evaluates all three branches, tripling the polynomial/sqrt work.
+    low = E <= pi_d_4
+    middle = (E > pi_d_4) & (E < threepi_d_4)
+    x = jnp.where(middle, pi_d_2 - E, jnp.where(low, E, pi - E))
+    small = shortsin(x)
+    large = lax.sqrt(1.0 - small * small)
+    sinE = jnp.where(middle, large, small)
+    cosE = jnp.where(middle, small, jnp.where(low, large, -large))
     return sinE, cosE
 
 

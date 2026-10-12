@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from orbix.kepler.core import E_solve, diff_solve_trig, solve_trig
+from orbix.kepler.core import E_solve, diff_solve_trig, fast_sinE_cosE, solve_trig
 
 
 def _newton_E(M, e, iters=80):
@@ -66,3 +66,38 @@ def test_diff_solve_trig_matches_solve_trig_near_mpi(M, e):
     sinE, cosE = diff_solve_trig(jnp.array([M]), e)
     np.testing.assert_allclose(float(sinE[0]), float(s_ref[0]), atol=1e-12)
     np.testing.assert_allclose(float(cosE[0]), float(c_ref[0]), atol=1e-12)
+
+
+def test_fast_trig_across_quadrants():
+    """Reduced polynomial agrees with NumPy to 8e-16 across its domain (fp)."""
+    edges = np.array([0.0, np.pi / 4, np.pi / 2, 3 * np.pi / 4, np.pi])
+    angles = np.unique(
+        np.r_[
+            np.linspace(0, np.pi, 10001),
+            edges,
+            np.nextafter(edges[1:-1], 0),
+            np.nextafter(edges[1:-1], np.pi),
+        ]
+    )
+    sine, cosine = fast_sinE_cosE(jnp.array(angles))
+    np.testing.assert_allclose(sine, np.sin(angles), rtol=0, atol=8e-16)
+    np.testing.assert_allclose(cosine, np.cos(angles), rtol=0, atol=8e-16)
+
+
+@pytest.mark.parametrize("e", [0.0, 0.3, np.nextafter(0.78, 0), 0.78, 0.95])
+def test_polynomial_interval_boundaries(e):
+    """Recover known E at/around every table edge to 4e-14 rad (fp).
+
+    Generate M from the defining equation, independently of the solver's
+    table construction, and perturb both sides to catch interval selection.
+    """
+    nodes = np.linspace(0, np.pi, 13)
+    eccentric = np.unique(
+        np.r_[nodes, np.nextafter(nodes[1:], 0), np.nextafter(nodes[:-1], np.pi)]
+    )
+    means = eccentric - e * np.sin(eccentric)
+    actual = E_solve(jnp.array(means), e)
+    np.testing.assert_allclose(actual, eccentric, rtol=0, atol=4e-14)
+    sine, cosine = solve_trig(jnp.array(means), e)
+    np.testing.assert_allclose(sine, np.sin(eccentric), rtol=0, atol=4e-14)
+    np.testing.assert_allclose(cosine, np.cos(eccentric), rtol=0, atol=4e-14)
