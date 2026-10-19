@@ -1,4 +1,9 @@
-"""Methods to propagate the positions of planets."""
+"""Methods to propagate the positions of planets.
+
+With orbix's orbital-element matrices, vectors use the (north, east, away)
+frame defined in :mod:`orbix.orbit`; positive z points away from the observer.
+Positions are in AU and velocities in AU/day when mean motion is in rad/day.
+"""
 
 import jax.numpy as jnp
 
@@ -20,12 +25,14 @@ def system_r_v(A_mat_b, B_mat_b, e_vec_b, sinE_mat, cosE_mat, n_orb_vec_b):
         e_vec_b (jax.Array): Pre-broadcasted eccentricity. Shape (n, 1).
         sinE_mat (jax.Array): Sine(Eccentric Anomaly). Shape (n, m).
         cosE_mat (jax.Array): Cosine(Eccentric Anomaly). Shape (n, m).
-        n_orb_vec_b (jax.Array): Pre-broadcasted mean orbital motion. Shape (n, 1).
+        n_orb_vec_b (jax.Array): Mean motion in rad/day. Shape (n, 1).
 
     Returns:
         tuple[jax.Array, jax.Array]: A tuple containing:
-            - r (jax.Array): Position vectors. Shape (3, n, m).
-            - v (jax.Array): Velocity vectors. Shape (3, n, m).
+            - r (jax.Array): (north, east, away) positions in AU.
+              Shape (3, n, m).
+            - v (jax.Array): (north, east, away) velocities in AU/day.
+              Shape (3, n, m).
     """
     # A, B, e, n_orb are assumed to be pre-broadcasted outside the function.
     sinE_broadcast = sinE_mat[jnp.newaxis, :, :]  # Shape (1, n, m)
@@ -116,19 +123,20 @@ def single_r(A, B, e, sinE, cosE):
 
 
 def single_r_v(A, B, e, sinE, cosE, n_orb):
-    """Calculate position and velocity vectors for a single planet at a single time.
+    """Calculate position and velocity vectors for one planet over ntimes times.
 
     Args:
         A (jax.Array): A matrix (3)
         B (jax.Array): B matrix (3)
         e (float): eccentricity ()
-        sinE (float): sine of the eccentric anomaly (ntimes)
-        cosE (float): cosine of the eccentric anomaly (ntimes)
-        n_orb (float): mean orbital motion (ntimes)
+        sinE (jax.Array): sine of the eccentric anomaly (ntimes,)
+        cosE (jax.Array): cosine of the eccentric anomaly (ntimes,)
+        n_orb (float): mean orbital motion in rad/day
 
     Returns:
-        r (jax.Array): position vector (3, 1)
-        v (jax.Array): velocity vector (3, 1)
+        r (jax.Array): (north, east, away) positions in AU, shape (3, ntimes).
+        v (jax.Array): (north, east, away) velocities in AU/day,
+            shape (3, ntimes).
     """
     r = A[:, None] * (cosE[None, :] - e) + B[:, None] * sinE[None, :]
     v = (

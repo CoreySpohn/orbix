@@ -2,6 +2,16 @@
 
 ## Unreleased -- descope
 
+### Bug fixes
+
+* `position_arcsec` now returns (Delta alpha*, Delta Dec) = (east, north),
+  where Delta alpha* = Delta RA cos Dec. Earlier releases returned these
+  swapped, reflecting the sky about the diagonal; earlier sky outputs and
+  anything fitted against them followed that old convention. The phase-angle
+  documentation now states that z points away from the observer and the
+  returned angle is the standard star-planet-observer phase angle. The
+  phase-angle numbers are unchanged.
+
 ### Removed / moved (not a release-please entry; folded into the next release notes)
 
 * Orbit fitting (the `fitting` module and its `numpyro` extra) moved to photomancy.

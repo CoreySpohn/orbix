@@ -146,8 +146,8 @@ def test_propagate_raises_without_Ms_kg_keyword():
         orbit.propagate(trig_solver, t_jd, 1.988409870698051e30)
 
 
-def test_position_arcsec_shape_and_units():
-    """position_arcsec returns (RA_arcsec, Dec_arcsec) each (K, T)."""
+def test_position_arcsec_shape_units_and_north_periapsis():
+    """Pin (east, north), shape and scale; Green (1985), ch. 17."""
     from orbix.kepler.shortcuts.grid import get_grid_solver
     from orbix.orbit import KeplerianOrbit
 
@@ -166,6 +166,9 @@ def test_position_arcsec_shape_and_units():
     )
     assert ra.shape == (1, 5)
     assert dec.shape == (1, 5)
+    # Omega=w=M0=0: periapsis is due north, at a*(1-e)/distance.
+    np.testing.assert_allclose(ra[0, 0], 0.0, atol=1e-12)
+    np.testing.assert_allclose(dec[0, 0], 0.09833, atol=1e-12)
 
 
 def test_tree_at_e_update_recomputes_AB():
@@ -277,31 +280,32 @@ def test_mismatched_leading_axes_raise_at_construction():
         )
 
 
-def test_separation_arcsec_matches_projected_distance():
-    """separation_arcsec == sqrt(RA^2 + Dec^2) from position_arcsec."""
-    from orbix.kepler.shortcuts.grid import get_grid_solver
+def test_separation_and_position_at_circular_quadratures():
+    """Pin oriented quadratures and separation; Green (1985), ch. 17."""
+    from hwoutils.constants import Msun2kg
+
+    from orbix.kepler.markley import solve_trig
     from orbix.orbit import KeplerianOrbit
 
-    orbit = KeplerianOrbit(**_earthlike_orbit_params())
-    trig_solver = get_grid_solver(level="scalar", E=False, trig=True, jit=True)
-    t_jd = jnp.linspace(0.0, 365.0, 5)
-
-    Ms_kg = jnp.atleast_1d(1.988409870698051e30)
-    dist_pc = jnp.atleast_1d(10.0)
-
-    ra, dec = orbit.position_arcsec(
-        trig_solver,
-        t_jd,
-        Ms_kg=Ms_kg,
-        dist_pc=dist_pc,
+    orbit = KeplerianOrbit.from_period(
+        T_d=400.0,
+        e=0.0,
+        cos_i=0.5,
+        W_rad=0.0,
+        cos_w=1.0,
+        sin_w=0.0,
+        tp_d=0.0,
+        Ms_kg=Msun2kg,
     )
-    sep = orbit.separation_arcsec(
-        trig_solver,
-        t_jd,
-        Ms_kg=Ms_kg,
-        dist_pc=dist_pc,
-    )
-    np.testing.assert_allclose(sep, jnp.sqrt(ra**2 + dec**2), rtol=1e-10)
+    # Choose distance so that the angular semi-major axis is 0.1 arcsec.
+    stellar = dict(Ms_kg=Msun2kg, dist_pc=10.0 * orbit.a_AU)
+    t_jd = jnp.array([0.0, 100.0, 200.0, 300.0])
+    ra, dec = orbit.position_arcsec(solve_trig, t_jd, **stellar)
+    sep = orbit.separation_arcsec(solve_trig, t_jd, **stellar)
+    assert ra.shape == dec.shape == sep.shape == (1, 4)
+    np.testing.assert_allclose(ra[0], [0.0, 0.05, 0.0, -0.05], atol=1e-12)
+    np.testing.assert_allclose(dec[0], [0.1, 0.0, -0.1, 0.0], atol=1e-12)
+    np.testing.assert_allclose(sep[0], [0.1, 0.05, 0.1, 0.05], atol=1e-12)
 
 
 def test_default_trig_solver_matches_explicit_grid_solver():

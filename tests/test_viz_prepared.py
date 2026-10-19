@@ -29,7 +29,7 @@ from eyepiece.prepared import (
     find_element,
     weight_opacity,
 )
-from hwoutils.constants import Msun2kg, pc2AU, rad2arcsec
+from hwoutils.constants import G, Msun2kg, pc2AU, rad2arcsec
 
 from orbix.orbit import KeplerianOrbit
 from orbix.viz import prepare_sky_track, prepare_sky_view
@@ -544,12 +544,12 @@ def test_growing_and_sliding_trails_and_order_free_seeking():
 
 
 def test_orbit_preparation_propagates_once(monkeypatch):
-    """One propagation feeds every frame, strip, seek, and render."""
-    orbit = _eccentric_orbit(3)
+    """Prepare east/north once; circular solution from Green (1985), ch. 17."""
+    orbit = _circular_orbit(3)
     t_jd = jnp.linspace(0.0, 400.0, 30)
-    expected_ra, expected_dec = (
-        np.asarray(v) for v in orbit.position_arcsec(t_jd=t_jd, **STELLAR)
-    )
+    phase = np.linspace(0.0, 0.5, 3)[:, None] + np.sqrt(G * Msun2kg) * np.asarray(t_jd)
+    expected_ra = 0.1 * np.sin(phase)
+    expected_dec = 0.1 * np.cos(phase)
 
     calls = {"position_arcsec": 0, "propagate": 0}
     original_position = KeplerianOrbit.position_arcsec
@@ -571,8 +571,9 @@ def test_orbit_preparation_propagates_once(monkeypatch):
     for k in range(3):
         path = find_element(sequence.template, f"path/{k}")
         assert isinstance(path.xy, np.ndarray)
-        np.testing.assert_allclose(path.xy[:, 0], expected_ra[k], rtol=1e-12)
-        np.testing.assert_allclose(path.xy[:, 1], expected_dec[k], rtol=1e-12)
+        assert path.xy.shape == (30, 2)
+        np.testing.assert_allclose(path.xy[:, 0], expected_ra[k], atol=1e-6, rtol=0)
+        np.testing.assert_allclose(path.xy[:, 1], expected_dec[k], atol=1e-6, rtol=0)
 
     def refuse(self, *args, **kwargs):
         raise AssertionError("renderers must not propagate")
@@ -593,8 +594,8 @@ def test_orbit_preparation_propagates_once(monkeypatch):
         anim.draw(anim.fig, i)
 
 
-def test_dense_circular_orbit_matches_propagated_checkpoints():
-    """A dense circular orbit matches independent propagation."""
+def test_dense_circular_orbit_matches_analytic_checkpoints():
+    """Prepared east/north follows Green (1985), ch. 17 circular motion."""
     radius = _circle_radius_arcsec()
     period_d = 365.25
     t_jd = np.linspace(0.0, period_d, 400)
@@ -603,13 +604,10 @@ def test_dense_circular_orbit_matches_propagated_checkpoints():
     )
 
     for index in (0, 57, 199, 311, 399):
-        ra, dec = _circular_orbit().position_arcsec(
-            t_jd=jnp.array([t_jd[index]]), **STELLAR
-        )
+        phase = np.sqrt(G * Msun2kg) * t_jd[index]
+        expected = radius * np.array([np.sin(phase), np.cos(phase)])
         head = find_element(sequence.frame(index), "head/0")
-        np.testing.assert_allclose(
-            head.xy[0], [float(ra[0, 0]), float(dec[0, 0])], rtol=1e-10, atol=1e-14
-        )
+        np.testing.assert_allclose(head.xy[0], expected, rtol=0, atol=1e-6)
 
     # the radius is held to the default Kepler solver's accuracy, not exactly
     path = find_element(sequence.template, "path/0")
