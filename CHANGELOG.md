@@ -8,9 +8,10 @@
   of (north, east, away). Positions are in AU and velocities use the same
   order in AU/day. The same row order applies to the exported helpers
   `AB_matrices`, `AB_matrices_reduced`, `single_r`, `single_r_v`,
-  `system_r` and `system_r_v`. `position_arcsec` keeps its documented
-  (east, north) contract, but its numbers change because earlier releases
-  returned the two swapped (see Bug fixes). `state_vector_to_keplerian` now expects both
+  `system_r` and `system_r_v`. `position_arcsec` keeps its (ra, dec) return
+  order, but the two numbers swap relative to 2.x: the first now holds the
+  east offset and the second the north offset, where 2.x put the north offset
+  first (see Bug fixes). `state_vector_to_keplerian` now expects both
   position and velocity in (east, north, away) order. Swap the first two
   components of stored raw states before passing them to the new API.
   Orbital elements and the z sign are unchanged: dz/dt is the body's
