@@ -9,8 +9,13 @@
   swapped, reflecting the sky about the diagonal; earlier sky outputs and
   anything fitted against them followed that old convention. The phase-angle
   documentation now states that z points away from the observer and the
-  returned angle is the standard star-planet-observer phase angle. The
-  phase-angle numbers are unchanged.
+  returned angle is the standard star-planet-observer phase angle. The raw
+  `propagate` rows (north, east, away) and the phase-angle numbers are
+  unchanged. Published elements (standard convention) now give the correct
+  sky positions; elements fitted against earlier `position_arcsec` outputs
+  convert by i' = 180 deg - i, Omega' = (90 deg - Omega) mod 360, with a, e,
+  omega and the epoch terms unchanged. Rerun figures drawn from
+  `position_arcsec`.
 
 ### Removed / moved (not a release-please entry; folded into the next release notes)
 
