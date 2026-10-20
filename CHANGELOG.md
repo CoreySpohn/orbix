@@ -2,6 +2,19 @@
 
 ## Unreleased -- descope
 
+### BREAKING CHANGE
+
+* Raw `propagate` rows are now (east, north, away), right-handed, instead
+  of (north, east, away). Positions are in AU and velocities use the same
+  order in AU/day. `position_arcsec` still returns (east, north) offsets;
+  its order is unchanged. `state_vector_to_keplerian` now expects both
+  position and velocity in (east, north, away) order. Swap the first two
+  components of stored raw states before passing them to the new API.
+  Orbital elements and the z sign are unchanged: dz/dt is the body's
+  radial velocity relative to the star, positive receding. Phase angle
+  is denoted beta, with cos(beta) = z/r; alpha denotes angular separation.
+  The 3D orbit view now agrees with the sky panel when viewed from -z.
+
 ### Bug fixes
 
 * `position_arcsec` now returns (Delta alpha*, Delta Dec) = (east, north),
@@ -9,9 +22,9 @@
   swapped, reflecting the sky about the diagonal; earlier sky outputs and
   anything fitted against them followed that old convention. The phase-angle
   documentation now states that z points away from the observer and the
-  returned angle is the standard star-planet-observer phase angle. The raw
-  `propagate` rows (north, east, away) and the phase-angle numbers are
-  unchanged. Published elements (standard convention) now give the correct
+  returned angle is the standard star-planet-observer phase angle beta.
+  The phase-angle numbers are unchanged; the raw row-order change is
+  described above. Published elements (standard convention) now give the correct
   sky positions; elements fitted against earlier `position_arcsec` outputs
   convert by i' = 180 deg - i, Omega' = (90 deg - Omega) mod 360, with a, e,
   omega and the epoch terms unchanged. Rerun figures drawn from

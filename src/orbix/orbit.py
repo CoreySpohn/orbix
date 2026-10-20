@@ -6,14 +6,18 @@ and the fast-path helpers. This keeps the orbit self-describing and
 avoids duplicating stellar state; callers supply the stellar context
 per call.
 
-Raw propagation uses a star-centered (north, east, away) frame in AU:
-rows 0 and 1 are north and east displacements, corresponding to the angular
-offsets Delta Dec and Delta alpha* = Delta RA cos Dec. Row 2 is z, positive
-away from the observer. In the Thiele-Innes convention,
+Raw propagation uses a right-handed, star-centered (east, north, away)
+frame in AU: rows 0 and 1 are east and north displacements, corresponding
+to raoff = Delta alpha cos delta and decoff = Delta delta. Row 2 is z,
+positive away from the observer. Velocities share this frame in AU/day;
+dz/dt is the radial velocity of the body relative to the star, positive
+when receding. In the Thiele-Innes convention,
 north = A X + F Y and east = B X + G Y (Green 1985, Spherical Astronomy,
 ch. 17). Omega (``W_rad``) is measured from north through east; the
 ascending node is the sky-plane crossing moving away from the observer.
-Position angle increases with time for inclinations below 90 deg.
+Position angle increases with time for inclinations below 90 deg. Omega is
+the node PA, and omega is measured from that node in the direction of motion.
+The phase angle is beta, with cos(beta) = z/r; alpha denotes angular separation.
 """
 
 from __future__ import annotations
@@ -85,10 +89,10 @@ class AbstractOrbit(eqx.Module):
             Ms_kg: Stellar mass in kg, shape ``(K,)`` or scalar.
 
         Returns:
-            r_AU: Position vectors in the module's (north, east, away)
+            r_AU: Position vectors in the module's (east, north, away)
                 frame, shape ``(K, 3, T)``, in AU.
             phase_angle_rad: Standard star-planet-observer phase angle
-                alpha, shape ``(K, T)``, with ``cos(alpha) = z / r``.
+                beta, shape ``(K, T)``, with ``cos(beta) = z / r``.
                 Zero is full phase; use directly in a Lambert phase function.
             dist_AU: Star-planet distance, shape ``(K, T)``.
         """
@@ -207,10 +211,10 @@ class KeplerianOrbit(AbstractOrbit):
 
         Returns:
             r_AU: (K, 3, T) position vectors in AU in the module's
-                (north, east, away) frame.
+                (east, north, away) frame.
             phase_angle_rad: (K, T) standard star-planet-observer phase
-                angle alpha = arctan2(rho, r_z), with
-                rho = sqrt(r_x**2 + r_y**2) and cos(alpha) = z / r.
+                angle beta = arctan2(rho, r_z), with
+                rho = sqrt(r_x**2 + r_y**2) and cos(beta) = z / r.
                 Zero is full phase; use directly in a Lambert phase function.
                 The calculation is gradient-safe at conjunction.
             dist_AU: (K, T) star-planet distance.
@@ -249,7 +253,7 @@ class KeplerianOrbit(AbstractOrbit):
         # d = a * (1 - e * cosE)
         dist_AU = self.a_AU[:, None] * (1.0 - self.e[:, None] * cosE)
 
-        # Standard star-planet-observer phase angle: cos(alpha) = z / r
+        # Standard star-planet-observer phase angle: cos(beta) = z / r
         # in the module's away-pointing z frame.
         # arctan2 avoids the arccos(clip(...)) NaN-gradient at conjunction.
         rho = jnp.sqrt(r_AU[:, 0] ** 2 + r_AU[:, 1] ** 2)
@@ -265,18 +269,19 @@ class KeplerianOrbit(AbstractOrbit):
         Ms_kg: Array,
         dist_pc: Array,
     ) -> tuple[Array, Array]:
-        """On-sky (Delta alpha*, Delta Dec) in arcsec, each shape ``(K, T)``.
+        """On-sky ``(raoff, decoff)`` in arcsec, each shape ``(K, T)``.
 
-        Return (east, north) offsets in the module's sky frame. The east
-        offset is Delta alpha* = Delta RA cos Dec, not the RA angle itself.
+        Return (east, north) offsets in the module's sky frame:
+        raoff = Delta alpha cos delta (east), decoff = Delta delta (north).
+        The east component includes cos delta; it is not the RA angle itself.
         This is a thin wrapper around ``propagate`` for projected position.
         """
         r_AU, _, _ = self.propagate(trig_solver, t_jd, Ms_kg=Ms_kg)
         dist_AU = jnp.atleast_1d(dist_pc) * pc2AU
         scale = rad2arcsec / dist_AU
-        ra_arcsec = r_AU[:, 1] * scale[:, None]
-        dec_arcsec = r_AU[:, 0] * scale[:, None]
-        return ra_arcsec, dec_arcsec
+        dra_arcsec = r_AU[:, 0] * scale[:, None]
+        ddec_arcsec = r_AU[:, 1] * scale[:, None]
+        return dra_arcsec, ddec_arcsec
 
     def separation_arcsec(
         self,

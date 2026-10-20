@@ -25,11 +25,14 @@ def test_grads_finite_for_circular_equatorial_orbit():
 def test_grads_finite_for_circular_inclined_orbit():
     """Gradients are finite at a circular but inclined (30 deg) orbit."""
     mu = 1.0
-    r = jnp.array([1.0, 0.0, 0.0])
+    # Swap the classical north/east components to preserve the 30 deg orbit.
+    r = jnp.array([0.0, 1.0, 0.0])
     v_mag = 1.0
     v = jnp.array(
-        [0.0, v_mag * jnp.cos(jnp.radians(30.0)), v_mag * jnp.sin(jnp.radians(30.0))]
+        [v_mag * jnp.cos(jnp.radians(30.0)), 0.0, v_mag * jnp.sin(jnp.radians(30.0))]
     )
+    inc = state_vector_to_keplerian(r, v, mu)[2]
+    assert jnp.isclose(inc, jnp.radians(30.0), atol=1e-12, rtol=0)
     g = jax.grad(_elements_sum, argnums=(0, 1))(r, v, mu)
     assert jnp.isfinite(g[0]).all() and jnp.isfinite(g[1]).all()
 
@@ -57,8 +60,10 @@ def test_values_unchanged_for_generic_orbit():
     # Expected values captured from the pre-fix function at this state
     # (r in m, v in m/s, mu in m^3/s^2) before the gradient-safety edits.
     mu = 3.986004418e14
-    r = jnp.array([7000.0e3, 1000.0e3, 2000.0e3])
-    v = jnp.array([-1000.0, 6500.0, 3000.0])
+    # Express the same physical state in public east/north/away order;
+    # the captured elements used classical north/east/away inputs.
+    r = jnp.array([1000.0e3, 7000.0e3, 2000.0e3])
+    v = jnp.array([6500.0, -1000.0, 3000.0])
     a, e, inc, W, w, M = state_vector_to_keplerian(r, v, mu)
 
     expected_a = 7088082.517471771

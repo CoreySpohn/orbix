@@ -115,8 +115,9 @@ def _sky_xy(orbit_or_radec, t_jd, Ms_kg, dist_pc, trig_solver):
     """Normalize the input to host coordinates of shape ``(K, T, 2)`` arcsec.
 
     An orbit is propagated with one ``position_arcsec`` call over the
-    whole grid; RA and Dec are stacked on the device and transferred to the
-    host once. A bare ``(K, T, 2)`` array is borrowed as given (no copy, no
+    whole grid; east (Delta alpha cos delta) and north (Delta delta) offsets
+    are stacked on the device and transferred to the host once. A bare
+    ``(K, T, 2)`` array is borrowed as given (no copy, no
     dtype promotion); an ``(ra, dec)`` pair is stacked into new storage.
     """
     if isinstance(orbit_or_radec, AbstractOrbit):

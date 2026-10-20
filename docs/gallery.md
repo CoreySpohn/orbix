@@ -163,6 +163,12 @@ through the same door: `viz.plot_sky_track((ra, dec))`.
 
 ## `plot_orbit`
 
+Orbit vectors use the right-handed (east, north, away) frame in AU.
+The 3D axes show these components directly. An orthographic camera set
+with `ax.view_init(elev=-90, azim=90, roll=0)` looks from the observer
+at -z and shows east left and north up, matching the sky panel.
+Velocities share the frame in AU/day; positive dz/dt means receding.
+
 The star-centric orbits in three dimensions, in AU, through `eyepiece.trail`,
 shown next to the same system on the sky so the two doors can be read against
 each other. `SourceStyles` is what ties them together: each planet keeps its

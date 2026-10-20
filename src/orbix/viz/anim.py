@@ -9,6 +9,10 @@ so an animated figure's ghost matches its still counterpart's path), the
 animated artists are created empty, and each frame is a ``set_data`` --
 nothing is cleared and no artist is created inside the frame loop.
 
+Orbit tracks use right-handed (east, north, away) coordinates in AU.
+The camera and depth cues operate in that same frame; an observer at -z
+sees east left and north up with elev=-90, azim=90, roll=0.
+
 The ``history`` vocabulary carries over from the key-strategy idea in
 earlier orbit-animation code: ``"all"`` accumulates the trail from the
 first epoch, an int keeps a trailing window of that many frames, and

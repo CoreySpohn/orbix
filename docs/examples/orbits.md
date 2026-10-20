@@ -51,7 +51,9 @@ styles = ep.SourceStyles(["planet b", "planet c", "planet d"])
 `plot_sky_track` propagates an orbit and draws its sky-plane track in
 arcseconds: RA offset on the x axis (increasing to the left, per the
 astronomical convention), Dec offset on the y axis, the star at the
-origin, and an equal aspect so the ellipse is not distorted. The sky-plane
+origin, and an equal aspect so the ellipse is not distorted. These are
+raoff = Delta alpha cos delta (east) and decoff = Delta delta (north),
+in that order. The sky-plane
 functions share one preparation step that propagates the orbit once; the
 {doc}`prepared` page uses it directly for a still, a strip, and a movie from
 one set of tracks.
@@ -169,6 +171,12 @@ loaded from a file draw through the same door:
 `viz.plot_sky_track((ra, dec))`.
 
 ## The orbit in three dimensions
+
+Orbit vectors use the right-handed (east, north, away) frame in AU.
+The 3D axes show these components directly. An orthographic camera set
+with `ax.view_init(elev=-90, azim=90, roll=0)` looks from the observer
+at -z and shows east left and north up, matching the sky panel.
+Velocities share the frame in AU/day; positive dz/dt means receding.
 
 `plot_orbit` draws the star-centric orbit in AU through `eyepiece.trail`.
 With no `style` it uses the star-chart look: markers in the mode's text

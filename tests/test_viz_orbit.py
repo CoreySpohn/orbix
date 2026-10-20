@@ -253,6 +253,46 @@ def test_plot_orbit_mark_geometry_is_exact():
     np.testing.assert_allclose(ascending[:, 2], 0.0, atol=1e-12)
     np.testing.assert_allclose(descending[:, 2], 0.0, atol=1e-12)
     assert not np.allclose(ascending, descending)
+    # Node PA is measured north through east in the new east-first raw frame.
+    direction = ascending[:, :2] / np.linalg.norm(ascending[:, :2], axis=1)[:, None]
+    np.testing.assert_allclose(
+        direction,
+        np.stack([np.sin(orbit.W_rad), np.cos(orbit.W_rad)], axis=1),
+        atol=1e-12,
+        rtol=0,
+    )
+
+
+def test_observer_3d_view_matches_sky_panel():
+    """Looking from -z must show east left and north up, without a mirror."""
+    from mpl_toolkits.mplot3d import proj3d
+
+    from orbix.viz import plot_orbit, plot_sky_track
+
+    orbit = _orbit()
+    fig = plt.figure()
+    ax = fig.add_subplot(projection="3d", proj_type="ortho")
+    ax.view_init(elev=-90, azim=90, roll=0)
+    spatial = plot_orbit(orbit, T_JD, Ms_kg=STELLAR["Ms_kg"], ax=ax, depth="none")
+    sky = plot_sky_track(orbit, T_JD, **STELLAR)
+    xyz = spatial.artists["lines"][0].get_data_3d()
+    projected = np.array(proj3d.proj_transform(*xyz, ax.get_proj()))[:2].T
+    origin = np.array(proj3d.proj_transform(0, 0, 0, ax.get_proj()))[:2]
+    projected -= origin
+    xy = sky.parts["path/0"].get_xydata()
+    assert sky.ax.xaxis_inverted()
+    assert not sky.ax.yaxis_inverted()
+    # Compare directions from the star; the two panels have different units.
+    expected = xy * [-1, 1]
+    np.testing.assert_allclose(
+        projected / np.linalg.norm(projected, axis=1)[:, None],
+        expected / np.linalg.norm(expected, axis=1)[:, None],
+        atol=1e-12,
+        rtol=0,
+    )
+    assert "east" in ax.get_xlabel().lower()
+    assert "north" in ax.get_ylabel().lower()
+    assert "away" in ax.get_zlabel().lower()
 
 
 def test_plot_orbit_ascending_node_rises():

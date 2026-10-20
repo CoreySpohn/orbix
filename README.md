@@ -39,6 +39,17 @@ contract `trig_solver(M, e) -> (sinE, cosE)`; `KeplerianOrbit.propagate` uses
 it to convert orbital elements and times into position vectors, phase angle,
 and star-planet distance.
 
+Raw orbit rows are **(east, north, away)** in AU, a right-handed frame.
+Velocities share this order in AU/day; dz/dt is the body's radial velocity
+relative to the star, positive receding. `state_vector_to_keplerian` takes
+position and velocity in that frame. `position_arcsec` returns `(raoff,
+decoff)` = (Delta alpha cos delta, Delta delta), east and north offsets in
+arcsec. Omega is the ascending (receding) node's PA measured north through
+east; i < 90 deg gives increasing PA, and omega is measured from that node
+in the direction of motion. Phase angle is beta, with cos(beta) = z/r;
+alpha denotes angular separation. See the documentation's sky-coordinate
+convention for details.
+
 For an alternative without interpolation tables, use
 `from orbix.kepler import markley_solve_trig` and pass `markley_solve_trig` as the
 orbit's `trig_solver`. This Markley-based solver supports scalar inputs,

@@ -155,6 +155,11 @@ def mean_anomaly_tp(t, n, tp):
 def AB_matrices(a, e, i, W, w):
     """Compute the A and B matrices for a given set of orbital elements.
 
+    Rows are (east, north, away), a right-handed star-centered frame.
+    With ``a`` in AU, these matrices give positions in AU and velocities
+    in AU/day when mean motion is in rad/day. Positive dz/dt is the body's
+    radial velocity relative to the star, positive when receding.
+
     In keplertools Dmitry defines these as:
     "inertial frame components of perifocal frame unit vectors scaled
     by orbit semi-major and semi-minor axes."
@@ -189,6 +194,13 @@ def AB_matrices(a, e, i, W, w):
 def AB_matrices_reduced(a, sqrt_one_minus_e2, sini, cosi, sinW, cosW, sinw, cosw):
     """Compute the A and B matrices from the trig values of the orbital elements.
 
+    Rows are (east, north, away), right-handed, for both position and
+    velocity propagation. ``a`` in AU gives matrices in AU; mean motion
+    in rad/day gives velocities in AU/day, with dz/dt positive receding.
+    Omega is the ascending (receding) node's PA, measured north through east.
+    Inclinations below 90 deg give increasing PA; omega is measured from
+    the ascending node in the direction of motion.
+
     Args:
         a: Semi-major axis
         sqrt_one_minus_e2: Square root of (1 - eccentricity^2)
@@ -209,8 +221,8 @@ def AB_matrices_reduced(a, sqrt_one_minus_e2, sini, cosi, sinW, cosW, sinw, cosw
     # Compute the A and B matrices as 3x1 JAX arrays
     A = a * jnp.asarray(
         [
-            cosW * cosw - sinW * sinwcosi,
             sinW * cosw + cosW * sinwcosi,
+            cosW * cosw - sinW * sinwcosi,
             sinw * sini,
         ]
     )
@@ -219,8 +231,8 @@ def AB_matrices_reduced(a, sqrt_one_minus_e2, sini, cosi, sinW, cosW, sinw, cosw
         * sqrt_one_minus_e2
         * jnp.asarray(
             [
-                -cosW * sinw - sinW * coswcosi,
                 -sinW * sinw + cosW * coswcosi,
+                -cosW * sinw - sinW * coswcosi,
                 cosw * sini,
             ]
         )
@@ -231,6 +243,9 @@ def AB_matrices_reduced(a, sqrt_one_minus_e2, sini, cosi, sinW, cosW, sinw, cosw
 
 def thiele_innes_constants(W, i, w):
     """Compute the Thiele-Innes constants from the orbital angles.
+
+    Keep the classical letters: A and F describe north, B and G east.
+    These scalar names are independent of the east-first public vector order.
 
     Args:
         W: Longitude of the ascending node
@@ -252,6 +267,9 @@ def thiele_innes_constants(W, i, w):
 
 def thiele_innes_constants_reduced(sinW, cosW, sinw, cosw, sinwcosi, coswcosi):
     """Compute the Thiele-Innes constants from the orbital angles.
+
+    Keep the classical letters: A and F describe north, B and G east.
+    These scalar names are independent of the east-first public vector order.
 
     Args:
         sinW: Sine of the longitude of the ascending node
@@ -295,18 +313,25 @@ def _safe_norm(x):
 def state_vector_to_keplerian(r, v, mu):
     """Convert state vectors (r, v) to Keplerian elements using JAX.
 
+    Both vectors use the right-handed (east, north, away) frame. Positive
+    dz/dt is the body's radial velocity relative to the star (receding).
+    Omega is the PA of the ascending (receding) node, north through east;
+    i < 90 deg gives increasing PA, and omega is measured from that node
+    in the direction of motion.
+
     Robust implementation handling edge cases (circular, equatorial,
     and non-bound orbits) using ``jnp.where`` for JIT compatibility.
 
     Unit-agnostic: ``r``, ``v``, and ``mu`` must be expressed in one
     consistent unit system (e.g. meters / m/s / m^3 s^-2, or the AU / day
     units used elsewhere in this library); the function does not enforce
-    or convert any particular convention, and ``a`` is returned in the
+    or convert any particular unit system, and ``a`` is returned in the
     same length unit as ``r``.
 
     Args:
-        r: Stellar-centric position vector ``(3,)``.
-        v: Stellar-centric velocity vector ``(3,)``.
+        r: Star-centered (east, north, away) position vector ``(3,)``,
+            typically AU.
+        v: Velocity in the same frame, ``(3,)``, typically AU/day.
         mu: Gravitational parameter ``G * M_total``.
 
     Returns:
@@ -315,6 +340,11 @@ def state_vector_to_keplerian(r, v, mu):
             ascending node [rad], argument of periapsis [rad], mean
             anomaly [rad].
     """
+    # The existing element formulas use classical (north, east, away)
+    # components, including the cross products and atan2 for the node PA.
+    classical_order = jnp.array([1, 0, 2])
+    r = jnp.asarray(r)[classical_order]
+    v = jnp.asarray(v)[classical_order]
     r_mag = jnp.linalg.norm(r)
     v_mag = jnp.linalg.norm(v)
 

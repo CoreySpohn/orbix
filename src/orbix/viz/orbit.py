@@ -288,6 +288,9 @@ def _track_colors(style, colors, n_tracks):
 def _positions(orbit_or_xyz, t_jd, Ms_kg, trig_solver):
     """Normalize the input to positions of shape ``(K, T, 3)``.
 
+    Orbit rows already use right-handed (east, north, away); only the
+    component axis moves. Bare xyz tracks retain the caller's frame.
+
     Returns:
         ``(positions, orbit_or_none)`` -- the orbit comes back so exact
         mark geometry can be computed from its elements rather than
@@ -375,6 +378,11 @@ def plot_orbit(
     trail_kw=None,
 ):
     """Draw one or more orbits in 3D, star-centric AU, via ``eyepiece.trail``.
+
+    Orbit vectors use right-handed (east, north, away) axes. For the
+    observer's east-left, north-up view, set an orthographic camera with
+    ``ax.view_init(elev=-90, azim=90, roll=0)`` before plotting. This looks
+    from -z and agrees with the sky panel without reflecting any components.
 
     The trajectory rendering -- connected path, depth-cued marker sizes,
     camera-aware layering -- is ``trail``'s; orbix adds the propagation,
@@ -490,8 +498,9 @@ def plot_orbit(
     for pane_axis in (ax.xaxis, ax.yaxis, ax.zaxis):
         pane_axis.set_pane_color(pane_color)
     if orbit is not None:
-        ep.label_au(ax)
-        ax.set_zlabel(r"$z$ [AU]")
+        ax.set_xlabel("East [AU]")
+        ax.set_ylabel("North [AU]")
+        ax.set_zlabel("Away [AU]")
 
     if marks:
         periapsis, ascending, descending = _mark_geometry(orbit)

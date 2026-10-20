@@ -1,8 +1,11 @@
 """Methods to propagate the positions of planets.
 
-With orbix's orbital-element matrices, vectors use the (north, east, away)
-frame defined in :mod:`orbix.orbit`; positive z points away from the observer.
-Positions are in AU and velocities in AU/day when mean motion is in rad/day.
+With orbix's orbital-element matrices, vectors use the (east, north, away)
+right-handed frame defined in :mod:`orbix.orbit`; positive z points away
+from the observer.
+Positions are in AU and velocities share the frame in AU/day when mean motion
+is in rad/day. dz/dt is the radial velocity of the body relative to the star,
+positive when receding.
 """
 
 import jax.numpy as jnp
@@ -29,9 +32,9 @@ def system_r_v(A_mat_b, B_mat_b, e_vec_b, sinE_mat, cosE_mat, n_orb_vec_b):
 
     Returns:
         tuple[jax.Array, jax.Array]: A tuple containing:
-            - r (jax.Array): (north, east, away) positions in AU.
+            - r (jax.Array): (east, north, away) positions in AU.
               Shape (3, n, m).
-            - v (jax.Array): (north, east, away) velocities in AU/day.
+            - v (jax.Array): (east, north, away) velocities in AU/day.
               Shape (3, n, m).
     """
     # A, B, e, n_orb are assumed to be pre-broadcasted outside the function.
@@ -88,7 +91,7 @@ def system_r(A_mat_b, B_mat_b, e_vec_b, sinE_mat, cosE_mat):
         cosE_mat (jax.Array): Cosine(Eccentric Anomaly). Shape (n, m).
 
     Returns:
-        r (jax.Array): Position vectors. Shape (3, n, m).
+        r (jax.Array): (east, north, away) positions in AU. Shape (3, n, m).
     """
     # A, B, e, n_orb are assumed to be pre-broadcasted outside the function.
     sinE_broadcast = sinE_mat[jnp.newaxis, :, :]  # Shape (1, n, m)
@@ -116,7 +119,7 @@ def single_r(A, B, e, sinE, cosE):
         cosE (jax.Array): cosine of the eccentric anomaly. Shape (ntimes,).
 
     Returns:
-        r (jax.Array): position vectors. Shape (3, ntimes).
+        r (jax.Array): (east, north, away) positions in AU. Shape (3, ntimes).
     """
     # Need to broadcast A, B to (3, 1) and sin/cos to (1, ntimes)
     return A[:, None] * (cosE[None, :] - e) + B[:, None] * sinE[None, :]
@@ -134,8 +137,8 @@ def single_r_v(A, B, e, sinE, cosE, n_orb):
         n_orb (float): mean orbital motion in rad/day
 
     Returns:
-        r (jax.Array): (north, east, away) positions in AU, shape (3, ntimes).
-        v (jax.Array): (north, east, away) velocities in AU/day,
+        r (jax.Array): (east, north, away) positions in AU, shape (3, ntimes).
+        v (jax.Array): (east, north, away) velocities in AU/day,
             shape (3, ntimes).
     """
     r = A[:, None] * (cosE[None, :] - e) + B[:, None] * sinE[None, :]

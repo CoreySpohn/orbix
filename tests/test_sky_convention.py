@@ -6,6 +6,8 @@ import numpy as np
 import pytest
 from hwoutils.constants import G, Msun2kg
 
+from orbix.equations.orbit import AB_matrices, state_vector_to_keplerian
+from orbix.equations.propagation import single_r_v, system_r, system_r_v
 from orbix.kepler.markley import solve_trig
 from orbix.orbit import KeplerianOrbit
 
@@ -176,3 +178,141 @@ def test_alpha_cen_independent_thiele_innes(alpha_cen_orbit):
     assert ra.shape == dec.shape == (1, epoch.size)
     np.testing.assert_allclose(ra[0], expected_ra, atol=1e-9, rtol=0)
     np.testing.assert_allclose(dec[0], expected_dec, atol=1e-9, rtol=0)
+    r, _, _ = orbit.propagate(
+        solve_trig, jnp.asarray((epoch - 2000.0) * 365.25), Ms_kg=stellar["Ms_kg"]
+    )
+    # Public raw rows now follow the right-handed east, north, away frame,
+    # rather than the classical north-first Thiele-Innes letter ordering.
+    np.testing.assert_allclose(
+        r[0, 0] / stellar["dist_pc"], expected_ra, atol=1e-9, rtol=0
+    )
+    np.testing.assert_allclose(
+        r[0, 1] / stellar["dist_pc"], expected_dec, atol=1e-9, rtol=0
+    )
+
+
+def _propagated_state(orbit, time_d, mass_kg):
+    """Differentiate the public position with respect to time in days."""
+    return jax.jvp(
+        lambda t: orbit.propagate(solve_trig, t, Ms_kg=mass_kg)[0][0, :, 0],
+        (jnp.asarray(time_d),),
+        (jnp.asarray(1.0),),
+    )
+
+
+def test_increasing_pa_has_angular_momentum_toward_observer():
+    """Perryman (2018), Fig. 2.2: east, north, away is right-handed."""
+    orbit = KeplerianOrbit(
+        a_AU=1.0,
+        e=0.2,
+        i_rad=1e-3,
+        W_rad=0.4,
+        w_rad=0.3,
+        M0_rad=0.2,
+        t0_d=0.0,
+    )
+    dra, ddec = orbit.position_arcsec(
+        solve_trig, jnp.array([0.0, 1.0]), Ms_kg=Msun2kg, dist_pc=10.0
+    )
+    pa = np.unwrap(np.arctan2(dra[0], ddec[0]))
+    assert pa[1] > pa[0]
+    r, v = _propagated_state(orbit, 0.0, Msun2kg)
+    assert np.cross(r, v)[2] < 0.0, "Increasing PA must give h_z < 0 (toward observer)"
+
+
+@pytest.mark.parametrize("inc_deg", [30.0, 150.0])
+@pytest.mark.parametrize("node_deg", [10.0, 200.0])
+def test_public_state_round_trip(inc_deg, node_deg):
+    """Recover visual-binary elements without hiding a shared frame error."""
+    expected = np.array(
+        [2.3, 0.31, np.deg2rad(inc_deg), np.deg2rad(node_deg), 0.7, 0.4]
+    )
+    orbit = KeplerianOrbit(
+        a_AU=expected[0],
+        e=expected[1],
+        i_rad=expected[2],
+        W_rad=expected[3],
+        w_rad=expected[4],
+        M0_rad=expected[5],
+        t0_d=0.0,
+    )
+    r, v = _propagated_state(orbit, 0.0, Msun2kg)
+    actual = jax.jit(state_vector_to_keplerian)(r, v, G * Msun2kg)
+    # Markley's float64 solve is near machine precision; 1e-11 allows
+    # roundoff in the inverse trig/energy operations, far below grid error.
+    np.testing.assert_allclose(actual, expected, atol=1e-11, rtol=0)
+    jac = jax.jit(jax.jacfwd(state_vector_to_keplerian, argnums=(0, 1)))(
+        r, v, G * Msun2kg
+    )
+    assert all(np.isfinite(leaf).all() for leaf in jax.tree.leaves(jac))
+    dra, ddec = orbit.position_arcsec(
+        solve_trig, jnp.array([0.0]), Ms_kg=Msun2kg, dist_pc=1.0
+    )
+    # A round trip alone also passes when both ends use the old wrong frame.
+    np.testing.assert_allclose(r[:2], [dra[0, 0], ddec[0, 0]], atol=1e-11, rtol=0)
+
+
+def _numpy_k16_state(eccentric_anomaly):
+    """Independent classical Thiele-Innes state in public (east, north, away)."""
+    a = K16_A_ARCSEC / K16_PARALLAX_ARCSEC
+    n = 2.0 * np.pi / (K16_PERIOD_YR * 365.25)
+    cw, sw = np.cos(K16_W_RAD), np.sin(K16_W_RAD)
+    cO, sO = np.cos(K16_OMEGA_RAD), np.sin(K16_OMEGA_RAD)
+    ci, si = np.cos(K16_I_RAD), np.sin(K16_I_RAD)
+    # Green (1985), ch. 17: A,F north; B,G east; C,H away.
+    A = a * (cO * cw - sO * sw * ci)
+    B = a * (sO * cw + cO * sw * ci)
+    F = a * (-cO * sw - sO * cw * ci)
+    G_ti = a * (-sO * sw + cO * cw * ci)
+    C, H = a * sw * si, a * cw * si
+    sinE, cosE = np.sin(eccentric_anomaly), np.cos(eccentric_anomaly)
+    X, Y = cosE - K16_E, np.sqrt(1.0 - K16_E**2) * sinE
+    dE_dt = n / (1.0 - K16_E * cosE)
+    dX_dt = -sinE * dE_dt
+    dY_dt = np.sqrt(1.0 - K16_E**2) * cosE * dE_dt
+    x_north, y_east, z = A * X + F * Y, B * X + G_ti * Y, C * X + H * Y
+    v_north = A * dX_dt + F * dY_dt
+    v_east = B * dX_dt + G_ti * dY_dt
+    v_away = C * dX_dt + H * dY_dt
+    return np.array([y_east, x_north, z]), np.array([v_east, v_north, v_away])
+
+
+def test_independent_right_handed_k16_state():
+    """Kervella et al. (2016), Table 1: recover the published orientation."""
+    E = 1.1
+    r, v = _numpy_k16_state(E)
+    a = K16_A_ARCSEC / K16_PARALLAX_ARCSEC
+    mu = (2.0 * np.pi / (K16_PERIOD_YR * 365.25)) ** 2 * a**3
+    actual = jax.jit(state_vector_to_keplerian)(jnp.asarray(r), jnp.asarray(v), mu)
+    expected = [a, K16_E, K16_I_RAD, K16_OMEGA_RAD, K16_W_RAD, E - K16_E * np.sin(E)]
+    np.testing.assert_allclose(actual, expected, atol=1e-11, rtol=0)
+
+
+@pytest.mark.parametrize("path", ["single_r_v", "system_r_v", "system_r"])
+def test_propagation_helpers_use_public_frame(path):
+    """All matrix propagation paths preserve east/north for positions and velocities."""
+    E = np.array([0.2, 1.1, 3.4])
+    expected_r, expected_v = _numpy_k16_state(E)
+    a = K16_A_ARCSEC / K16_PARALLAX_ARCSEC
+    n = 2.0 * np.pi / (K16_PERIOD_YR * 365.25)
+    A, B = AB_matrices(a, K16_E, K16_I_RAD, K16_OMEGA_RAD, K16_W_RAD)
+    sinE, cosE = jnp.sin(E), jnp.cos(E)
+    if path == "single_r_v":
+        r, v = single_r_v(A, B, K16_E, sinE, cosE, n)
+    else:
+        args = (
+            A[:, None, None],
+            B[:, None, None],
+            jnp.array([[K16_E]]),
+            sinE[None, :],
+            cosE[None, :],
+        )
+        if path == "system_r":
+            r = system_r(*args)[:, 0]
+            v = None
+        else:
+            r, v = system_r_v(*args, jnp.array([[n]]))
+            r, v = r[:, 0], v[:, 0]
+    if v is not None:
+        np.testing.assert_allclose(v, expected_v, atol=1e-14, rtol=0)
+    np.testing.assert_allclose(r, expected_r, atol=1e-11, rtol=0)
