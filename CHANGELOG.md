@@ -6,8 +6,11 @@
 
 * Raw `propagate` rows are now (east, north, away), right-handed, instead
   of (north, east, away). Positions are in AU and velocities use the same
-  order in AU/day. `position_arcsec` still returns (east, north) offsets;
-  its order is unchanged. `state_vector_to_keplerian` now expects both
+  order in AU/day. The same row order applies to the exported helpers
+  `AB_matrices`, `AB_matrices_reduced`, `single_r`, `single_r_v`,
+  `system_r` and `system_r_v`. `position_arcsec` keeps its documented
+  (east, north) contract, but its numbers change because earlier releases
+  returned the two swapped (see Bug fixes). `state_vector_to_keplerian` now expects both
   position and velocity in (east, north, away) order. Swap the first two
   components of stored raw states before passing them to the new API.
   Orbital elements and the z sign are unchanged: dz/dt is the body's
