@@ -43,6 +43,20 @@
 * The broken predict/pdet functions and the `discrete_e` factory were removed
   (they did not work correctly and had no working callers).
 
+## [3.0.0](https://github.com/CoreySpohn/orbix/compare/v2.0.0...v3.0.0) (2026-10-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* **orbit:** position_arcsec keeps its (ra, dec) return order, but the numbers swap relative to 2.x. The first value is now the east offset and the second the north offset; 2.x returned the north offset first. Anything fitted to or plotted from 2.x position_arcsec output must be converted with i' = 180 deg - i and Omega' = (90 deg - Omega) mod 360, or refit.
+* **orbit:** raw propagate positions and velocities are now (east, north, away); they were (north, east, away). state_vector_to_keplerian expects (east, north, away) input. position_arcsec order and orbital elements are unchanged.
+
+### Bug Fixes
+
+* **orbit:** return position_arcsec as (east, north) and document the north-east-away frame ([bdcde92](https://github.com/CoreySpohn/orbix/commit/bdcde92390a7ddbc1898e14af90ba21ca91c15fd))
+* **orbit:** return propagate rows in the right-handed (east, north, away) frame ([be5326e](https://github.com/CoreySpohn/orbix/commit/be5326e44213c5e4035ff9eb2c6ecb9ce696c657))
+* **orbit:** state that position_arcsec keeps its (ra, dec) order while the numbers swap relative to 2.x ([8a99b58](https://github.com/CoreySpohn/orbix/commit/8a99b58f243225ad967499ad30e63adc5c46478a))
+
 ## [2.0.0](https://github.com/CoreySpohn/orbix/compare/v1.2.0...v2.0.0) (2026-10-12)
 
 
