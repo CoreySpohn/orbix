@@ -109,11 +109,12 @@ def test_animate_orbit_3d_with_marks_and_batch():
     assert anim.n_frames == len(T_JD)
 
 
-def test_animate_orbit_time_label_advances():
+@pytest.mark.parametrize("kind", ["sky", "3d"])
+def test_animate_orbit_time_label_advances(kind):
     """The elapsed-time label tracks the epoch being drawn."""
     from orbix.viz import animate_orbit
 
-    anim = animate_orbit(_orbit(), T_JD, Ms_kg=MSUN_KG, dist_pc=10.0)
+    anim = animate_orbit(_orbit(), T_JD, Ms_kg=MSUN_KG, dist_pc=10.0, kind=kind)
     ax = anim.fig.axes[0]
     anim.draw(anim.fig, 0)
     label = [t for t in ax.texts if t.get_text().startswith("t = ")][0]
@@ -132,6 +133,13 @@ def test_animate_orbit_bare_tracks_door():
     anim = animate_orbit((ra, dec), np.linspace(0.0, 140.0, 15))
     assert anim.n_frames == 15
     anim.draw(anim.fig, 1)
+
+    xyz = np.column_stack([ra, dec, np.zeros_like(ra)])
+    unlabeled = animate_orbit(xyz, kind="3d")
+    unlabeled.draw(unlabeled.fig, 1)
+    assert not any(
+        text.get_text().startswith("t = ") for text in unlabeled.fig.axes[0].texts
+    )
 
     with pytest.raises(TypeError, match="t_jd"):
         animate_orbit((ra, dec))

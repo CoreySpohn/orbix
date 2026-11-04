@@ -445,6 +445,7 @@ def animate_orbit(
             # not "gone behind the star"
             heads[k].set_markersize(head_ms[k] * depth_size(head_scales[k, i]))
         if label is not None:
+            assert times is not None
             label.set_text(f"t = +{times[i] - times[0]:.0f} d")
 
     return ep.animate(base.fig, draw, n_frames, fps=fps)
