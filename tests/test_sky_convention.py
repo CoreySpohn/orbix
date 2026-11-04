@@ -4,10 +4,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from hwoutils.constants import G, Msun2kg
+from hwoutils.constants import G, Msun2kg, two_pi
+from hypothesis import assume, example, given
+from hypothesis import strategies as st
 
-from orbix.equations.orbit import AB_matrices, state_vector_to_keplerian
-from orbix.equations.propagation import single_r_v, system_r, system_r_v
+from orbix.equations.orbit import AB_matrices, mean_motion, state_vector_to_keplerian
+from orbix.equations.propagation import single_r, single_r_v, system_r, system_r_v
 from orbix.kepler.markley import solve_trig
 from orbix.orbit import KeplerianOrbit
 
@@ -220,36 +222,155 @@ def test_increasing_pa_has_angular_momentum_toward_observer():
     assert np.cross(r, v)[2] < 0.0, "Increasing PA must give h_z < 0 (toward observer)"
 
 
-@pytest.mark.parametrize("inc_deg", [30.0, 150.0])
-@pytest.mark.parametrize("node_deg", [10.0, 200.0])
-def test_public_state_round_trip(inc_deg, node_deg):
-    """Recover visual-binary elements without hiding a shared frame error."""
-    expected = np.array(
-        [2.3, 0.31, np.deg2rad(inc_deg), np.deg2rad(node_deg), 0.7, 0.4]
-    )
+def _bounded(low, high):
+    return st.floats(low, high, allow_nan=False, allow_infinity=False)
+
+
+@jax.jit
+def _round_trip_state(elements, mass):
+    a, e, inc, node, peri, mean = elements
     orbit = KeplerianOrbit(
-        a_AU=expected[0],
-        e=expected[1],
-        i_rad=expected[2],
-        W_rad=expected[3],
-        w_rad=expected[4],
-        M0_rad=expected[5],
-        t0_d=0.0,
+        a_AU=a, e=e, i_rad=inc, W_rad=node, w_rad=peri, M0_rad=mean, t0_d=0.0
     )
-    r, v = _propagated_state(orbit, 0.0, Msun2kg)
-    actual = jax.jit(state_vector_to_keplerian)(r, v, G * Msun2kg)
-    # Markley's float64 solve is near machine precision; 1e-11 allows
-    # roundoff in the inverse trig/energy operations, far below grid error.
-    np.testing.assert_allclose(actual, expected, atol=1e-11, rtol=0)
-    jac = jax.jit(jax.jacfwd(state_vector_to_keplerian, argnums=(0, 1)))(
-        r, v, G * Msun2kg
+    r, v = _propagated_state(orbit, 0.0, mass)
+    actual = jnp.array(state_vector_to_keplerian(r, v, G * mass))
+    jac = jax.jacfwd(state_vector_to_keplerian, argnums=(0, 1))(r, v, G * mass)
+    dra, ddec = orbit.position_arcsec(
+        solve_trig, jnp.array([0.0]), Ms_kg=mass, dist_pc=1.0
+    )
+    sine, cosine = solve_trig(jnp.atleast_1d(mean), e)
+    A, B = AB_matrices(a, e, inc, node, peri)
+    n = mean_motion(a, G * mass)
+    sr, sv = single_r_v(A, B, e, sine, cosine, n)
+    args = (
+        A[:, None, None],
+        B[:, None, None],
+        e.reshape(1, 1),
+        sine.reshape(1, 1),
+        cosine.reshape(1, 1),
+    )
+    br, bv = system_r_v(*args, n.reshape(1, 1))
+    return (
+        actual,
+        jac,
+        r,
+        v,
+        jnp.array([dra[0, 0], ddec[0, 0]]),
+        sr[:, 0],
+        sv[:, 0],
+        br[:, 0, 0],
+        bv[:, 0, 0],
+        system_r(*args)[:, 0, 0],
+        single_r(A, B, e, sine, cosine)[:, 0],
+    )
+
+
+@given(
+    a=_bounded(0.1, 30.0),
+    e=_bounded(0.01, 0.99),
+    inc=_bounded(0.05, np.pi - 0.05),
+    node=_bounded(-two_pi, two_pi),
+    peri=_bounded(-two_pi, two_pi),
+    mean=_bounded(-two_pi, two_pi),
+    mass=_bounded(0.1, 3.0),
+)
+def test_public_state_round_trip(a, e, inc, node, peri, mean, mass):
+    """Fails if elements/state inversion or any propagation path corrupts the sky frame.
+
+    Bounded strategies exclude circular e < 0.01 and inclinations within
+    0.05 rad of 0 or pi, where elements are singular. assume also excludes
+    arccos-clipped periapsis/true-anomaly axes; explicit strict xfails pin
+    that separate, nonsingular defect. Angles are compared modulo 2*pi.
+    """
+    sine, cosine = map(float, solve_trig(jnp.asarray(mean), jnp.asarray(e)))
+    sin_nu = np.sqrt(1 - e**2) * sine / (1 - e * cosine)
+    assume(abs(np.sin(peri)) > 0.001 and abs(sin_nu) > 0.001)
+    expected = np.array([a, e, inc, node, peri, mean])
+    actual, jac, r, v, sky, sr, sv, br, bv, only_r, single_only_r = _round_trip_state(
+        jnp.asarray(expected), jnp.asarray(mass * Msun2kg)
+    )
+    np.testing.assert_allclose(actual[:3], expected[:3], atol=1e-11, rtol=1e-11)
+    diff = np.asarray(actual[3:]) - expected[3:]
+    np.testing.assert_allclose(
+        np.arctan2(np.sin(diff), np.cos(diff)), 0, atol=1e-10, rtol=0
     )
     assert all(np.isfinite(leaf).all() for leaf in jax.tree.leaves(jac))
-    dra, ddec = orbit.position_arcsec(
-        solve_trig, jnp.array([0.0]), Ms_kg=Msun2kg, dist_pc=1.0
+    np.testing.assert_allclose(r[:2], sky, atol=1e-11, rtol=0)
+    for position in (sr, br, only_r, single_only_r):
+        np.testing.assert_allclose(position, r, atol=1e-11, rtol=1e-12)
+    for velocity in (sv, bv):
+        np.testing.assert_allclose(velocity, v, atol=1e-14, rtol=1e-12)
+    # Independent frame anchor: ascending node PA is north through east,
+    # crossing toward positive away. A shared axis swap cannot pass this.
+    A, B = AB_matrices(a, e, inc, node, 0.0)
+    np.testing.assert_allclose(
+        np.asarray(A) / a, [np.sin(node), np.cos(node), 0], atol=1e-14, rtol=0
     )
-    # A round trip alone also passes when both ends use the old wrong frame.
-    np.testing.assert_allclose(r[:2], [dra[0, 0], ddec[0, 0]], atol=1e-11, rtol=0)
+    assert B[2] > 0
+    np.testing.assert_allclose(
+        np.cross(np.asarray(A), np.asarray(B))[2],
+        -(a**2) * np.sqrt(1 - e**2) * np.cos(inc),
+        atol=1e-11,
+        rtol=1e-12,
+    )
+
+
+@jax.jit
+def _anomaly_round_trip(mean, e):
+    """Recover anomalies through the inverse's embedded true-to-mean conversion."""
+    sine, cosine = solve_trig(mean, e)
+    nu = jnp.arctan2(jnp.sqrt(1 - e**2) * sine, cosine - e)
+    # Independent state from polar radius and radial/transverse velocities.
+    p = 1 - e**2
+    radius = p / (1 + e * jnp.cos(nu))
+    radial = e * jnp.sin(nu) / jnp.sqrt(p)
+    transverse = (1 + e * jnp.cos(nu)) / jnp.sqrt(p)
+    u = jnp.array([jnp.cos(nu), 0.0, jnp.sin(nu)])
+    tangent = jnp.array([-jnp.sin(nu), 0.0, jnp.cos(nu)])
+    recovered = state_vector_to_keplerian(
+        radius * u, radial * u + transverse * tangent, 1.0
+    )[-1]
+    recovered_sine, recovered_cosine = solve_trig(recovered, e)
+    recovered_nu = jnp.arctan2(
+        jnp.sqrt(1 - e**2) * recovered_sine, recovered_cosine - e
+    )
+    return sine, cosine, nu, recovered, recovered_sine, recovered_cosine, recovered_nu
+
+
+@example(e=0.0, mean=1.0)
+@given(e=_bounded(0.0, 0.99), mean=_bounded(-two_pi, two_pi))
+def test_anomaly_round_trip(e, mean):
+    """Fails if mean/eccentric/true anomaly conversions lose phase or a quadrant.
+
+    Orbix embeds true-to-mean in state_vector_to_keplerian rather than a
+    standalone conversion API. Skip true-anomaly axes clipped by that inverse
+    (strict xfail below); circular orbits use its argument-of-latitude branch.
+    """
+    result = _anomaly_round_trip(jnp.asarray(mean), jnp.asarray(e))
+    sine, cosine, nu, recovered, rs, rc, rnu = map(float, result)
+    assume(abs(np.sin(nu)) > 0.001)
+    # Recovering the periapsis direction divides state roundoff by e.
+    # Below the inverse's 1e-9 circular threshold, phase conventions also
+    # differ by O(e); this bound covers both effects without dropping e=0.
+    tolerance = 5e-11 + 16 * np.finfo(float).eps / max(e, 1e-9)
+    difference = recovered - mean
+    assert abs(np.arctan2(np.sin(difference), np.cos(difference))) < tolerance
+    np.testing.assert_allclose([rs, rc], [sine, cosine], atol=tolerance, rtol=0)
+    difference = rnu - nu
+    assert abs(np.arctan2(np.sin(difference), np.cos(difference))) < tolerance
+
+
+@pytest.mark.parametrize("peri, mean, index", [(0.0, 0.4, 4), (0.7, 0.0, 5)])
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="Inverse clips nonsingular periapsis/true-anomaly cosines to 1 - 1e-7",
+)
+def test_state_round_trip_on_anomaly_axes(peri, mean, index):
+    """Fails if arccos safety clipping biases valid periapsis or mean anomaly."""
+    expected = jnp.array([2.3, 0.31, 0.7, 0.4, peri, mean])
+    actual = _round_trip_state(expected, jnp.asarray(Msun2kg))[0]
+    np.testing.assert_allclose(actual[index], expected[index], atol=1e-11, rtol=0)
 
 
 def _numpy_k16_state(eccentric_anomaly):
@@ -286,33 +407,3 @@ def test_independent_right_handed_k16_state():
     actual = jax.jit(state_vector_to_keplerian)(jnp.asarray(r), jnp.asarray(v), mu)
     expected = [a, K16_E, K16_I_RAD, K16_OMEGA_RAD, K16_W_RAD, E - K16_E * np.sin(E)]
     np.testing.assert_allclose(actual, expected, atol=1e-11, rtol=0)
-
-
-@pytest.mark.parametrize("path", ["single_r_v", "system_r_v", "system_r"])
-def test_propagation_helpers_use_public_frame(path):
-    """All matrix propagation paths preserve east/north for positions and velocities."""
-    E = np.array([0.2, 1.1, 3.4])
-    expected_r, expected_v = _numpy_k16_state(E)
-    a = K16_A_ARCSEC / K16_PARALLAX_ARCSEC
-    n = 2.0 * np.pi / (K16_PERIOD_YR * 365.25)
-    A, B = AB_matrices(a, K16_E, K16_I_RAD, K16_OMEGA_RAD, K16_W_RAD)
-    sinE, cosE = jnp.sin(E), jnp.cos(E)
-    if path == "single_r_v":
-        r, v = single_r_v(A, B, K16_E, sinE, cosE, n)
-    else:
-        args = (
-            A[:, None, None],
-            B[:, None, None],
-            jnp.array([[K16_E]]),
-            sinE[None, :],
-            cosE[None, :],
-        )
-        if path == "system_r":
-            r = system_r(*args)[:, 0]
-            v = None
-        else:
-            r, v = system_r_v(*args, jnp.array([[n]]))
-            r, v = r[:, 0], v[:, 0]
-    if v is not None:
-        np.testing.assert_allclose(v, expected_v, atol=1e-14, rtol=0)
-    np.testing.assert_allclose(r, expected_r, atol=1e-11, rtol=0)

@@ -5,6 +5,10 @@ import jax.numpy as jnp
 import mpmath as mp
 import numpy as np
 import pytest
+from hwoutils.constants import two_pi
+from hypothesis import example, given
+from hypothesis import strategies as st
+from hypothesis.extra.numpy import arrays
 from jax.test_util import check_grads
 
 from orbix.kepler.markley import E_solve, E_solve_trig, solve_trig
@@ -63,32 +67,70 @@ def test_tiny_signed_mean_anomalies():
     np.testing.assert_allclose(negative[1], expected[2], rtol=5e-14, atol=0)
 
 
-def test_broadcasting_jit_and_vmap():
-    """Scalar, broadcast, and mapped calls preserve the equation (fp)."""
-    means = jnp.array([0.1, 1.0, 3.0, 5.0])
-    eccs = jnp.array([0.0, 0.4, 0.999])
-    eccentric = jax.jit(E_solve)(means, eccs[:, None])
-    np.testing.assert_allclose(
-        eccentric - eccs[:, None] * jnp.sin(eccentric),
-        jnp.broadcast_to(means, (3, 4)),
-        rtol=0,
-        atol=4e-15,
+_broadcast_solve = jax.jit(E_solve_trig)
+_mapped_solve = jax.jit(
+    jax.vmap(jax.vmap(E_solve, in_axes=(0, None)), in_axes=(None, 0))
+)
+_scalar_solve = jax.jit(E_solve)
+
+
+@example(
+    means=np.array([0.1, 1.0, 3.0, 5.0, 0.1, 1.0]), eccs=np.array([0.0, 0.4, 0.999])
+)
+@example(
+    means=np.array([-20.0, -4.0, 0.0, 0.1, 3.2, 20.0]), eccs=np.array([0.0, 0.4, 0.9])
+)
+@given(
+    means=arrays(
+        np.float64,
+        (6,),
+        elements=st.floats(-two_pi, two_pi, allow_nan=False, allow_infinity=False),
+    ),
+    eccs=arrays(
+        np.float64,
+        (3,),
+        elements=st.floats(0.0, 0.99, allow_nan=False, allow_infinity=False),
+    ),
+)
+def test_broadcast_wrapping_equation_and_trig(means, eccs):
+    """Fails if broadcast/vmap/scalar paths disagree or wrapping corrupts the root.
+
+    The 4e-15 residual and 2e-15 trig bounds retain the float64 regressions.
+    A sorted interior pair checks monotonicity and continuity via analytic
+    slope bounds; wrapped endpoints are lifted around their mean anomaly.
+    """
+    eccentric, sine, cosine = map(
+        np.asarray, _broadcast_solve(jnp.asarray(means), jnp.asarray(eccs[:, None]))
     )
-    mapped = jax.jit(jax.vmap(jax.vmap(E_solve, in_axes=(0, None)), in_axes=(None, 0)))
-    np.testing.assert_allclose(mapped(means, eccs), eccentric, rtol=0, atol=2e-15)
-    np.testing.assert_allclose(E_solve(1.0, 0.4), eccentric[1, 1], atol=2e-15)
-
-
-def test_wrapping_and_trig_consistency():
-    """Signed multi-period inputs preserve phase to the float64 floor (fp)."""
-    means = jnp.array([-20.0, -4.0, 0.0, 0.1, 3.2, 20.0])
-    eccentric, sine, cosine = jax.jit(E_solve_trig)(means, jnp.array(0.9))
+    # Endpoint rounding (including subnormal flushing) may return 0 or 2*pi.
+    assert np.all((eccentric >= -2e-15) & (eccentric <= two_pi + 2e-15))
+    residual = eccentric - eccs[:, None] * sine - means
     np.testing.assert_allclose(
-        eccentric - 0.9 * sine, np.mod(means, 2 * np.pi), rtol=0, atol=4e-15
+        np.arctan2(np.sin(residual), np.cos(residual)), 0, rtol=0, atol=4e-15
     )
     np.testing.assert_allclose(sine, np.sin(eccentric), rtol=0, atol=2e-15)
     np.testing.assert_allclose(cosine, np.cos(eccentric), rtol=0, atol=2e-15)
-    np.testing.assert_allclose(sine**2 + cosine**2, 1.0, rtol=0, atol=2e-15)
+    np.testing.assert_allclose(sine**2 + cosine**2, 1, rtol=0, atol=2e-15)
+    np.testing.assert_allclose(
+        _mapped_solve(jnp.asarray(means), jnp.asarray(eccs)),
+        eccentric,
+        rtol=0,
+        atol=2e-15,
+    )
+    np.testing.assert_allclose(
+        _scalar_solve(jnp.asarray(means[0]), jnp.asarray(eccs[0])),
+        eccentric[0, 0],
+        rtol=0,
+        atol=2e-15,
+    )
+    pair = np.array([means[0], means[0] + 1e-7])
+    result = np.asarray(_scalar_solve(jnp.asarray(pair), jnp.asarray(eccs[0])))
+    offset = result - pair
+    lifted = pair + np.arctan2(np.sin(offset), np.cos(offset))
+    delta = lifted[1] - lifted[0]
+    step = pair[1] - pair[0]
+    roundoff = 4e-15 / (1 - eccs[0])
+    assert step / (1 + eccs[0]) - roundoff <= delta <= step / (1 - eccs[0]) + roundoff
 
 
 @pytest.mark.parametrize("e", [0.0, 0.3, 0.95])

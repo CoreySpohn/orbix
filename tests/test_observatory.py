@@ -3,13 +3,20 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
+from hwoutils.constants import two_pi
+from hypothesis import example, given
+from hypothesis import strategies as st
+from hypothesis.extra.numpy import arrays
 
 from orbix.observatory import (
     ObservatoryL2Halo,
     is_observable,
 )
 from orbix.observatory.solar_system import (
+    _rot1,
+    _rot3,
     earth_position_ecliptic,
     eclip2equat,
     equat2eclip,
@@ -17,6 +24,26 @@ from orbix.observatory.solar_system import (
     planet_position_ecliptic,
     radec_to_ecliptic,
 )
+
+
+@jax.jit
+def _frame_round_trips(vectors, mjd, angles):
+    """Keep scalar/batch transform shapes and matrix shapes constant."""
+    forward = equat2eclip(vectors, mjd)
+    backward = eclip2equat(vectors, mjd)
+    return (
+        eclip2equat(forward, mjd),
+        equat2eclip(backward, mjd),
+        eclip2equat(equat2eclip(vectors[0], mjd), mjd),
+        equat2eclip(jnp.eye(3), mjd),
+        eclip2equat(jnp.eye(3), mjd),
+        _rot1(angles[0]),
+        _rot1(-angles[0]),
+        _rot3(angles[1]),
+        _rot3(-angles[1]),
+        forward,
+    )
+
 
 # ============================================================================
 # Solar system ephemerides
@@ -54,13 +81,45 @@ class TestSolarSystemEphemerides:
         dist = jnp.linalg.norm(r)
         assert 4.9 < float(dist) < 5.5
 
-    def test_equat_eclip_roundtrip(self):
-        """Equatorial <-> ecliptic conversion should roundtrip."""
-        r_orig = jnp.array([1.0, 0.5, 0.3])
-        mjd = 51544.5
-        r_eclip = equat2eclip(r_orig, mjd)
-        r_back = eclip2equat(r_eclip, mjd)
-        assert jnp.allclose(r_orig, r_back, atol=1e-10)
+    @example(
+        vectors=np.array([[1.0, 0.5, 0.3]] * 4),
+        mjd=51544.5,
+        angles=np.array([0.0, np.pi]),
+    )
+    @given(
+        vectors=arrays(
+            np.float64,
+            (4, 3),
+            elements=st.floats(-100.0, 100.0, allow_nan=False, allow_infinity=False),
+        ),
+        mjd=st.floats(15000.0, 90000.0, allow_nan=False, allow_infinity=False),
+        angles=arrays(
+            np.float64,
+            (2,),
+            elements=st.floats(-two_pi, two_pi, allow_nan=False, allow_infinity=False),
+        ),
+    )
+    def test_equat_eclip_roundtrip(self, vectors, mjd, angles):
+        """Fails if frame inverses, scalar/batch paths, or orthonormality drift."""
+        first, second, scalar, forward, backward, r1, ir1, r3, ir3, rotated = map(
+            np.asarray,
+            _frame_round_trips(
+                jnp.asarray(vectors), jnp.asarray(mjd), jnp.asarray(angles)
+            ),
+        )
+        np.testing.assert_allclose(first, vectors, rtol=0, atol=5e-14)
+        np.testing.assert_allclose(second, vectors, rtol=0, atol=5e-14)
+        np.testing.assert_allclose(scalar, vectors[0], rtol=0, atol=5e-14)
+        for matrix, inverse in ((forward, backward), (r1, ir1), (r3, ir3)):
+            np.testing.assert_allclose(matrix @ inverse, np.eye(3), atol=5e-16, rtol=0)
+            np.testing.assert_allclose(matrix.T @ matrix, np.eye(3), atol=5e-16, rtol=0)
+            np.testing.assert_allclose(np.linalg.det(matrix), 1, atol=5e-16, rtol=0)
+        np.testing.assert_allclose(
+            np.linalg.norm(rotated, axis=1),
+            np.linalg.norm(vectors, axis=1),
+            rtol=5e-16,
+            atol=5e-14,
+        )
 
     def test_jit_planet_position(self):
         """Planet position should be JIT-compilable."""

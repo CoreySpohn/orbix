@@ -4,6 +4,14 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.constants import G, Msun2kg, two_pi
+from hypothesis import given
+from hypothesis import strategies as st
+from hypothesis.extra.numpy import arrays
+
+from orbix.equations.orbit import mean_motion, period_a, period_n, period_to_sma
+from orbix.kepler.markley import solve_trig
+from orbix.orbit import KeplerianOrbit
 
 
 def test_abstract_orbit_cannot_instantiate():
@@ -113,24 +121,76 @@ def test_propagate_returns_three_arrays_with_expected_shapes():
     assert dist_AU.shape == (1, 10)
 
 
-def test_propagate_distance_matches_kepler_formula():
-    """dist_AU at true anomaly 0 (periapsis) is a*(1-e)."""
-    from orbix.kepler.shortcuts.grid import get_grid_solver
-    from orbix.orbit import KeplerianOrbit
+def _bounded(low, high):
+    return st.floats(low, high, allow_nan=False, allow_infinity=False)
 
-    params = _earthlike_orbit_params()
-    orbit = KeplerianOrbit(**params)
-    trig_solver = get_grid_solver(level="scalar", E=False, trig=True, jit=True)
 
-    # At t == t0_d and M0_rad == 0, planet is at periapsis
-    # where r = a*(1-e).
-    t_jd = params["t0_d"]
-    Ms_kg = jnp.atleast_1d(1.988409870698051e30)
+@jax.jit
+def _propagated_invariants(a, e, inc, node, peri, mass, fractions):
+    period = period_a(a, G * mass)
+    orbit = KeplerianOrbit(
+        a_AU=a, e=e, i_rad=inc, W_rad=node, w_rad=peri, M0_rad=0.0, t0_d=0.0
+    )
+    times = jnp.concatenate([jnp.array([0.0, 0.5, 1.0]), fractions]) * period
+    r, v = jax.jvp(
+        lambda t: orbit.propagate(solve_trig, t, Ms_kg=mass)[0][0],
+        (times,),
+        (jnp.ones_like(times),),
+    )
+    distance = orbit.propagate(solve_trig, times, Ms_kg=mass)[2][0]
+    return r.T, v.T, distance
 
-    _, _, dist_AU = orbit.propagate(trig_solver, t_jd, Ms_kg=Ms_kg)
 
-    expected = params["a_AU"] * (1 - params["e"])
-    np.testing.assert_allclose(dist_AU.squeeze(), expected.squeeze(), rtol=1e-5)
+@given(
+    a=_bounded(0.1, 30.0),
+    e=_bounded(0.0, 0.99),
+    inc=_bounded(0.0, np.pi),
+    node=_bounded(-two_pi, two_pi),
+    peri=_bounded(-two_pi, two_pi),
+    mass=_bounded(0.1, 3.0),
+    fractions=arrays(np.float64, (6,), elements=_bounded(-2.0, 2.0)),
+)
+def test_propagation_conserves_energy_and_angular_momentum(
+    a, e, inc, node, peri, mass, fractions
+):
+    """Fails if propagation changes energy/angular momentum, radius, or period.
+
+    Fixed nine-epoch shapes include periapsis, apoapsis, and a full period;
+    velocities come from differentiating the public position in AU/day.
+    Expected invariants use hwoutils G (AU^3/kg/day^2) and solar mass.
+    """
+    mu = G * mass * Msun2kg
+    r, v, distance = map(
+        np.asarray,
+        _propagated_invariants(
+            jnp.asarray(a),
+            jnp.asarray(e),
+            jnp.asarray(inc),
+            jnp.asarray(node),
+            jnp.asarray(peri),
+            jnp.asarray(mass * Msun2kg),
+            jnp.asarray(fractions),
+        ),
+    )
+    radii = np.linalg.norm(r, axis=1)
+    energy = np.sum(v**2, axis=1) / 2 - mu / radii
+    np.testing.assert_allclose(energy, -mu / (2 * a), rtol=2e-11, atol=0)
+    h = np.cross(r, v)
+    expected_h = np.sqrt(mu * a * (1 - e**2)) * np.array(
+        [np.sin(inc) * np.cos(node), -np.sin(inc) * np.sin(node), -np.cos(inc)]
+    )
+    np.testing.assert_allclose(
+        h,
+        np.broadcast_to(expected_h, h.shape),
+        rtol=2e-11,
+        atol=np.linalg.norm(expected_h) * 2e-13,
+    )
+    np.testing.assert_allclose(distance, radii, rtol=1e-12, atol=0)
+    np.testing.assert_allclose(
+        radii[:2], [a * (1 - e), a * (1 + e)], rtol=2e-12, atol=0
+    )
+    np.testing.assert_allclose(r[2], r[0], atol=a * 2e-12, rtol=0)
+    np.testing.assert_allclose(v[2], v[0], atol=np.sqrt(mu / a) * 2e-10, rtol=0)
 
 
 def test_propagate_raises_without_Ms_kg_keyword():
@@ -358,57 +418,70 @@ def test_propagate_times_passed_as_solver_raises():
         orbit.propagate(jnp.linspace(0.0, 10.0, 3), Ms_kg=jnp.atleast_1d(2.0e30))
 
 
-def test_from_period_matches_direct_construction():
-    """from_period reproduces a directly constructed orbit exactly.
-
-    Uses an eccentric, inclined, rotated orbit so no element collapses
-    to a fixture symmetry; tp maps to (M0=0, t0=tp) exactly.
-    """
-    from orbix.equations.orbit import period_to_sma
-    from orbix.orbit import KeplerianOrbit
-
-    Ms_kg = jnp.atleast_1d(1.988409870698051e30)
-    T_d = jnp.atleast_1d(431.7)
-    e = jnp.atleast_1d(0.31)
-    i_rad = jnp.atleast_1d(1.05)
-    W_rad = jnp.atleast_1d(2.3)
-    w_rad = jnp.atleast_1d(-0.7)
-    tp_d = jnp.atleast_1d(2460218.5)
-
+@jax.jit
+def _period_construction(period, e, inc, node, peri, epoch, mass):
     orbit = KeplerianOrbit.from_period(
-        T_d,
-        e,
-        jnp.cos(i_rad),
-        W_rad,
-        jnp.cos(w_rad),
-        jnp.sin(w_rad),
-        tp_d,
-        Ms_kg=Ms_kg,
+        period, e, jnp.cos(inc), node, jnp.cos(peri), jnp.sin(peri), epoch, Ms_kg=mass
     )
-
-    np.testing.assert_allclose(orbit.a_AU, period_to_sma(T_d, Ms_kg), rtol=1e-12)
-    np.testing.assert_allclose(orbit.i_rad, i_rad, rtol=1e-12)
-    np.testing.assert_allclose(orbit.W_rad, W_rad, rtol=1e-12)
-    np.testing.assert_allclose(orbit.w_rad, w_rad, rtol=1e-12)
-    np.testing.assert_array_equal(orbit.M0_rad, jnp.zeros(1))
-    np.testing.assert_array_equal(orbit.t0_d, tp_d)
-
     direct = KeplerianOrbit(
-        a_AU=period_to_sma(T_d, Ms_kg),
+        a_AU=period_to_sma(period, mass),
         e=e,
-        W_rad=W_rad,
-        i_rad=i_rad,
-        w_rad=w_rad,
-        M0_rad=jnp.zeros(1),
-        t0_d=tp_d,
+        i_rad=inc,
+        W_rad=node,
+        w_rad=peri,
+        M0_rad=0.0,
+        t0_d=epoch,
     )
-    t_jd = tp_d[0] + jnp.linspace(0.0, float(T_d[0]), 9)
-    r_a, _, d_a = orbit.propagate(t_jd=t_jd, Ms_kg=Ms_kg)
-    r_b, _, d_b = direct.propagate(t_jd=t_jd, Ms_kg=Ms_kg)
-    np.testing.assert_allclose(r_a, r_b, rtol=1e-12)
+    times = epoch + jnp.linspace(0.0, 1.0, 9) * period
+    r_a, _, d_a = orbit.propagate(solve_trig, times, Ms_kg=mass)
+    r_b, _, _ = direct.propagate(solve_trig, times, Ms_kg=mass)
+    a = orbit.a_AU[0]
+    return (
+        jnp.array(
+            [
+                a,
+                orbit.e[0],
+                orbit.i_rad[0],
+                orbit.W_rad[0],
+                orbit.w_rad[0],
+                orbit.M0_rad[0],
+                orbit.t0_d[0],
+            ]
+        ),
+        r_a,
+        r_b,
+        d_a,
+        period_a(a, G * mass),
+        period_n(mean_motion(a, G * mass)),
+    )
 
-    # At periapsis passage the Kepler distance is a * (1 - e).
-    np.testing.assert_allclose(d_a[:, 0], orbit.a_AU * (1.0 - e), rtol=1e-6)
+
+@given(
+    period=_bounded(10.0, 10000.0),
+    e=_bounded(0.0, 0.99),
+    inc=_bounded(0.05, np.pi - 0.05),
+    node=_bounded(-two_pi, two_pi),
+    peri=_bounded(-np.pi, np.pi),
+    epoch=_bounded(-1000.0, 1000.0),
+    mass=_bounded(0.1, 3.0),
+)
+def test_from_period_obeys_third_law_and_matches_direct_construction(
+    period, e, inc, node, peri, epoch, mass
+):
+    """Fails if period/mass units or from_period's angle/epoch mapping drift."""
+    elements, r_a, r_b, distances, from_a, from_n = _period_construction(
+        *map(jnp.asarray, (period, e, inc, node, peri, epoch, mass * Msun2kg))
+    )
+    a = float(elements[0])
+    np.testing.assert_allclose(
+        a**3, G * mass * Msun2kg * (period / two_pi) ** 2, rtol=3e-15
+    )
+    np.testing.assert_allclose([from_a, from_n], period, rtol=3e-15)
+    np.testing.assert_allclose(
+        elements[1:], [e, inc, node, peri, 0.0, epoch], atol=1e-12, rtol=0
+    )
+    np.testing.assert_allclose(r_a, r_b, atol=a * 1e-12, rtol=1e-12)
+    np.testing.assert_allclose(distances[0, 0], a * (1 - e), rtol=1e-12)
 
 
 def test_from_period_broadcasts_batched_samples():
