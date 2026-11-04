@@ -249,7 +249,9 @@ color from paper to talk. The code below is shown rather than run, because
 rendering Manim media needs system libraries a documentation builder does
 not have.
 
-```python
+This block needs Manim and its system rendering libraries.
+
+```python notest
 import manim
 import eyepiece.manim as em
 from matplotlib.colors import to_hex

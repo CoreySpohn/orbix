@@ -256,7 +256,7 @@
 
 ### Bug Fixes
 
-* Removing unecessary jits ([ce37254](https://github.com/CoreySpohn/orbix/commit/ce3725419a5b948e5b9a3ce670fbe9f1468d301e))
+* Removing unnecessary jits ([ce37254](https://github.com/CoreySpohn/orbix/commit/ce3725419a5b948e5b9a3ce670fbe9f1468d301e))
 
 ## 0.0.1 (2024-11-02)
 
