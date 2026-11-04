@@ -2,7 +2,7 @@
 
 These functions are essentially vectorized versions of the functions in
 `fixed_e.py`. They work by precomputing a 2D grid of E, sinE, cosE values and
-their derivatives (for linear interpolation). Then, for a given (M, e) pair, a
+their cell increments (for linear interpolation). Then, for a given (M, e) pair, a
 scalar function is created to do the interpolation using the precomputed grid.
 This scalar function is then jit-compiled and vectorized over time and planets.
 
@@ -107,15 +107,14 @@ def _E_grids(e_grid, M_grid):
     return E_grid, jnp.sin(E_grid), jnp.cos(E_grid)
 
 
-def _d_dind_grids(e_grid, E_grid, sinE_grid, cosE_grid, dM):
-    """Compute dE/dind, dsinE/dind, dcosE/dind grids."""
-    dE_dM_grid = 1 / (1 - e_grid.reshape(-1, 1) * jnp.cos(E_grid))
-    dE_dind_grid = dE_dM_grid * dM
-    # dsinE/dind = dsinE/dE * dE/dind
-    dsinE_dind = cosE_grid * dE_dind_grid
-    # dcosE/dind = dcosE/dE * dE/dind
-    dcosE_dind = -sinE_grid * dE_dind_grid
-    return dE_dind_grid, dsinE_dind, dcosE_dind
+def _cell_deltas(E_grid, sinE_grid, cosE_grid):
+    """Compute endpoint differences for continuous linear interpolation in M."""
+    E_next = jnp.roll(E_grid, -1, axis=1).at[:, -1].add(two_pi)
+    return (
+        E_next - E_grid,
+        jnp.roll(sinE_grid, -1, axis=1) - sinE_grid,
+        jnp.roll(cosE_grid, -1, axis=1) - cosE_grid,
+    )
 
 
 ################################################################################
@@ -148,7 +147,7 @@ def _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, n_M_int, n_e):
 def E_trig_lin(n_e=1024, n_M=4096):
     """Creates a scalar lookup closure for E, sinE, cosE via linear interp 2D grid.
 
-    This function precomputes the E, sin(E), cos(E) grids and their derivatives
+    This function precomputes the E, sin(E), cos(E) grids and their cell increments
     and closes over them. The returned function is a plain (un-jitted) scalar
     closure, `_lookup_scalar(M_scalar, e_scalar) -> (E, sinE, cosE)`; it is not
     vectorized or JIT-compiled itself. Callers wrap it with `jax.vmap`/`jax.jit`
@@ -168,9 +167,7 @@ def E_trig_lin(n_e=1024, n_M=4096):
     # Setup
     e_grid, M_grid, dM, inv_dM, n_M_int, de, inv_de = _setup(n_e, n_M)
     E_grid, sinE_grid, cosE_grid = _E_grids(e_grid, M_grid)
-    dE_dind_grid, dsinE_dind, dcosE_dind = _d_dind_grids(
-        e_grid, E_grid, sinE_grid, cosE_grid, dM
-    )
+    dE_dind_grid, dsinE_dind, dcosE_dind = _cell_deltas(E_grid, sinE_grid, cosE_grid)
 
     def _lookup_scalar(M_scalar, e_scalar):
         """Performs lookup and interpolation for a single M and e."""
@@ -189,7 +186,7 @@ def E_lin(n_e=1024, n_M=4096):
     # Setup
     e_grid, M_grid, dM, inv_dM, n_M_int, de, inv_de = _setup(n_e, n_M)
     E_grid, sinE_grid, cosE_grid = _E_grids(e_grid, M_grid)
-    dE_dind_grid, *_ = _d_dind_grids(e_grid, E_grid, sinE_grid, cosE_grid, dM)
+    dE_dind_grid, *_ = _cell_deltas(E_grid, sinE_grid, cosE_grid)
 
     def _lookup_scalar(M_scalar, e_scalar):
         """Performs lookup and interpolation for a single M and e."""
@@ -204,7 +201,7 @@ def trig_lin(n_e=1024, n_M=4096):
     # Setup
     e_grid, M_grid, dM, inv_dM, n_M_int, de, inv_de = _setup(n_e, n_M)
     E_grid, sinE_grid, cosE_grid = _E_grids(e_grid, M_grid)
-    _, dsinE_dind, dcosE_dind = _d_dind_grids(e_grid, E_grid, sinE_grid, cosE_grid, dM)
+    _, dsinE_dind, dcosE_dind = _cell_deltas(E_grid, sinE_grid, cosE_grid)
 
     def _lookup_scalar(M_scalar, e_scalar):
         """Performs lookup and interpolation for a single M and e."""

@@ -32,10 +32,10 @@ def _shortcuts(means, e):
 def test_shortcut_equation_and_wrapping(e, mean):
     """Fails if lookup rounds down, interpolation exceeds cell error, or seams blend.
 
-    Lookup quantizes M to half a cell; tangent interpolation has residual
+    Lookup quantizes M to half a cell; linear interpolation has residual
     <= e/2 * (dM/(1-e))**2 by Taylor's theorem. Hermite must stay within
-    one M cell. Tiny positive e is covered by the core overflow xfail.
-    Lookup is intentionally discrete; linear continuity has a strict xfail.
+    one M cell. Tiny positive e is covered by the core overflow regression.
+    Lookup is intentionally discrete; interpolation must remain continuous.
     """
     means = np.array([mean, mean + two_pi, mean - two_pi, two_pi - two_pi / 4096])
     lookup, linear, hermite = map(
@@ -74,14 +74,12 @@ def test_shortcut_equation_and_wrapping(e, mean):
     assert np.all(differences <= 2e-8 / (1 - e) + 2e-12)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="Tangent-linear fixed-e interpolation jumps backwards at cell boundaries",
-)
-def test_linear_monotone_at_cell_boundary():
+@pytest.mark.parametrize("kind", [1, 2], ids=["linear", "hermite"])
+@pytest.mark.parametrize("cell", [0, 100, 2047, 2048])
+def test_linear_monotone_at_cell_boundary(kind, cell):
     """Fails if the purported linear interpolant jumps backwards at an M node."""
-    node = 100 * two_pi / 2048
+    node = cell * two_pi / 2048
     means = jnp.array([node - 1e-10, node + 1e-10])
-    result = np.asarray(_shortcuts(means, jnp.asarray(0.5))[1])
+    result = np.asarray(_shortcuts(means, jnp.asarray(0.5))[kind])
+    result = means + np.arctan2(np.sin(result - means), np.cos(result - means))
     assert 0 <= result[1] - result[0] <= 2e-10 / (1 - 0.5) + 2e-12

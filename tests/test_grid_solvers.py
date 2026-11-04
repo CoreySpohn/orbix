@@ -41,8 +41,8 @@ def test_grid_equation_trig_and_wrapping(grid_solvers, kind, e, mean):
 
     Linear snaps e within half a row; bilinear spans one row and one M cell.
     Residual bounds reflect that resolution, including float32 table storage.
-    Bilinear must be continuous and monotone; linear's backward node jumps
-    have a strict xfail. Lookup approximation is not an exact Kepler solve.
+    Both kinds must be continuous and monotone in M.
+    Lookup approximation is not an exact Kepler solve.
     """
     node = np.floor(np.mod(mean, two_pi) * 2048 / two_pi) * two_pi / 2048
     means = np.array(
@@ -147,14 +147,14 @@ def test_get_grid_solver_rejects_no_output():
         get_grid_solver(E=False, trig=False)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="Tangent-linear grid interpolation jumps backwards at M cell boundaries",
-)
-def test_linear_grid_monotone_at_cell_boundary(grid_solvers):
+@pytest.mark.parametrize("cell", [0, 100, 2047, 2048])
+def test_linear_grid_monotone_at_cell_boundary(grid_solvers, cell):
     """Fails if the linear grid jumps backwards as mean anomaly increases."""
-    node = 100 * two_pi / 2048
+    node = cell * two_pi / 2048
     means = jnp.array([node - 1e-10, node + 1e-10] + [node] * 8)
-    result = np.asarray(grid_solvers["linear"](means, jnp.asarray(0.5))[1])
+    triple, result, trig_only = grid_solvers["linear"](means, jnp.asarray(0.5))
+    result = np.asarray(result)
+    result = means + np.arctan2(np.sin(result - means), np.cos(result - means))
     assert 0 <= result[1] - result[0] <= 2e-10 / (1 - 0.5) + 2e-12
+    for trig in (np.asarray(triple[1:]), np.asarray(trig_only)):
+        assert np.all(np.abs(trig[:, 1] - trig[:, 0]) <= 2e-10 / (1 - 0.5) + 2e-12)

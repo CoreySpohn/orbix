@@ -67,11 +67,11 @@ def E_linear_interp(e, n=2048):
     # Linearly spaced mean anomaly values
     M_vals = jnp.linspace(0, two_pi, n, endpoint=False)
     dM = M_vals[1] - M_vals[0]
-    # Use the E_solve function to get the real eccentric anomaly values
-    # and the derivative of E (with respect to the array indices)
+    # Join neighboring roots with secants, not node tangents, so cells agree
+    # at their shared endpoint. Unwrap the final endpoint across the seam.
     E_vals = E_solve(M_vals, e)
-    dE_dM = 1 / (1 - e * jnp.cos(E_vals))
-    dE_dind = dE_dM * dM
+    E_next = jnp.roll(E_vals, -1).at[-1].add(two_pi)
+    dE_dind = E_next - E_vals
 
     inv_dM = 1.0 / dM
     n_int = jnp.int32(n)
