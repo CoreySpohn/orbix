@@ -310,6 +310,22 @@ def _safe_norm(x):
     return jnp.where(is_zero, 0.0, jnp.linalg.norm(x_safe))
 
 
+def _oriented_angle(cosine, sine):
+    """Use atan2 near anomaly axes, retaining arccos arithmetic elsewhere.
+
+    Guard both inactive branches: arccos has an infinite derivative at +/-1,
+    and atan2 must never receive (0, 0) from an unused circular-orbit branch.
+    """
+    near_axis = jnp.abs(cosine) >= 1.0 - _ARC_EPS
+    safe_cosine = jnp.where(near_axis, 0.0, cosine)
+    angle = jnp.arccos(jnp.clip(safe_cosine, -1.0, 1.0))
+    angle = jnp.where(sine < 0, 2 * jnp.pi - angle, angle)
+    axis_angle = jnp.arctan2(
+        jnp.where(near_axis, sine, 0.0), jnp.where(near_axis, cosine, 1.0)
+    )
+    return jnp.where(near_axis, axis_angle, angle)
+
+
 def state_vector_to_keplerian(r, v, mu):
     """Convert state vectors (r, v) to Keplerian elements using JAX.
 
@@ -382,8 +398,8 @@ def state_vector_to_keplerian(r, v, mu):
         0.0,
         jnp.dot(n, e_vec) / (n_mag_safe * e_safe),
     )
-    w_inclined = jnp.arccos(jnp.clip(cos_w, -1.0 + _ARC_EPS, 1.0 - _ARC_EPS))
-    w_inclined = jnp.where(e_vec[2] < 0, 2 * jnp.pi - w_inclined, w_inclined)
+    sin_w = jnp.dot(jnp.cross(n, e_vec), h) / (n_mag_safe * e_safe * h_mag_safe)
+    w_inclined = _oriented_angle(cos_w, sin_w)
 
     e_xy_mag = jnp.sqrt(e_vec[0] ** 2 + e_vec[1] ** 2)
     is_e_xy_safe = e_xy_mag > _TOL_E
@@ -403,12 +419,8 @@ def state_vector_to_keplerian(r, v, mu):
         0.0,
         jnp.dot(e_vec, r) / (e_safe * r_mag),
     )
-    nu_elliptical = jnp.arccos(jnp.clip(cos_nu, -1.0 + _ARC_EPS, 1.0 - _ARC_EPS))
-    nu_elliptical = jnp.where(
-        jnp.dot(r, v) < 0,
-        2 * jnp.pi - nu_elliptical,
-        nu_elliptical,
-    )
+    sin_nu = jnp.dot(jnp.cross(e_vec, r), h) / (e_safe * r_mag * h_mag_safe)
+    nu_elliptical = _oriented_angle(cos_nu, sin_nu)
 
     cos_u = jnp.where(
         ~is_inclined,

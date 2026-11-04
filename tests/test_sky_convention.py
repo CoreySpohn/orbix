@@ -308,7 +308,7 @@ def test_public_state_round_trip(a, e, inc, node, peri, mean, mass):
     0.05 rad of 0 or pi, where elements are singular. Periapsis and mean
     angles avoid arccos-clipped axes by construction. For e <= 0.99, a
     0.05 rad mean-anomaly margin keeps abs(sin(nu)) > 0.001 even at apoapsis.
-    Explicit strict xfails pin the clipping defect. Compare angles modulo 2*pi.
+    Explicit regressions cover the axes. Compare angles modulo 2*pi.
     """
     sine, cosine = map(float, solve_trig(jnp.asarray(mean), jnp.asarray(e)))
     sin_nu = np.sqrt(1 - e**2) * sine / (1 - e * cosine)
@@ -372,7 +372,7 @@ def test_anomaly_round_trip(e, mean):
 
     Orbix embeds true-to-mean in state_vector_to_keplerian rather than a
     standalone conversion API. Construct means away from true-anomaly axes
-    clipped by that inverse (strict xfail below); circular orbits use its
+    covered by explicit regressions below; circular orbits use its
     argument-of-latitude branch.
     """
     result = _anomaly_round_trip(jnp.asarray(mean), jnp.asarray(e))
@@ -390,16 +390,33 @@ def test_anomaly_round_trip(e, mean):
 
 
 @pytest.mark.parametrize("peri, mean, index", [(0.0, 0.4, 4), (0.7, 0.0, 5)])
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="Inverse clips nonsingular periapsis/true-anomaly cosines to 1 - 1e-7",
-)
 def test_state_round_trip_on_anomaly_axes(peri, mean, index):
     """Fails if arccos safety clipping biases valid periapsis or mean anomaly."""
     expected = jnp.array([2.3, 0.31, 0.7, 0.4, peri, mean])
     actual = _round_trip_state(expected, jnp.asarray(Msun2kg))[0]
     np.testing.assert_allclose(actual[index], expected[index], atol=1e-11, rtol=0)
+
+
+@pytest.mark.parametrize(
+    "r, v",
+    [([0.0, 0.5, 0.0], [0.0, 0.0, np.sqrt(3)]), ([0.3, 0.5, 0.2], [0.2, -0.4, 0.9])],
+)
+def test_state_inversion_reverse_gradients_are_finite(r, v):
+    """Axis-safe anomaly extraction must not poison reverse-mode derivatives."""
+    gradient = jax.jit(
+        jax.grad(lambda r, v: sum(state_vector_to_keplerian(r, v, 1.0)), argnums=(0, 1))
+    )(jnp.asarray(r), jnp.asarray(v))
+    assert np.isfinite(np.asarray(gradient)).all()
+
+
+def test_periapsis_state_has_zero_anomalies():
+    """An exact node/periapsis state must retain both zero angles."""
+    actual = state_vector_to_keplerian(
+        jnp.array([0.0, 0.5, 0.0]), jnp.array([0.0, 0.0, np.sqrt(3)]), 1.0
+    )
+    np.testing.assert_allclose(
+        actual, [1.0, 0.5, np.pi / 2, 0, 0, 0], atol=1e-14, rtol=0
+    )
 
 
 def _numpy_k16_state(eccentric_anomaly):
