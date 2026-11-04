@@ -63,6 +63,13 @@ def test_grid_equation_trig_and_wrapping(grid_solvers, kind, e, mean):
     eccentric, sine, cosine = map(np.asarray, triple)
     np.testing.assert_allclose(E_only, eccentric, atol=2e-6, rtol=0)
     np.testing.assert_allclose(trig_only, [sine, cosine], atol=2e-6, rtol=0)
+    if e == 0.3 and mean == -0.001:
+        # Absolute wrapped roots catch a full-turn offset that residual and
+        # periodicity checks cannot; retain the original 1e-4 E-error guard.
+        truth = float(E_solve(jnp.asarray(np.mod(mean, two_pi)), jnp.asarray(e)))
+        for roots in (eccentric[:3], np.asarray(E_only)[:3]):
+            assert np.all((0 <= roots) & (roots < two_pi))
+            assert np.max(np.abs(roots - truth)) < 1e-4
     residual = eccentric - e * np.sin(eccentric) - means
     if kind == "linear":
         # Taylor remainder in M plus nearest-row error in e.
@@ -102,6 +109,18 @@ def test_grid_equation_trig_and_wrapping(grid_solvers, kind, e, mean):
         np.max(np.hypot(sine - np.sin(eccentric), cosine - np.cos(eccentric)))
         <= angular_cell**2 / 2 + phase_roundoff
     )
+    if e == 0.9985 and mean == 1.0:
+        # At M=1 the local solve is well-conditioned even in the top e row.
+        # Linear snaps e by < 0.5/512; bilinear interpolates across that row.
+        # Compare to float64 truth: global periapsis bounds are vacuous here.
+        truth = float(E_solve(jnp.float64(mean), jnp.float64(e)))
+        tolerance = 1e-3 if kind == "linear" else 1e-4
+        np.testing.assert_allclose(
+            [sine[0], cosine[0]],
+            [np.sin(truth), np.cos(truth)],
+            atol=tolerance,
+            rtol=0,
+        )
     if kind == "bilinear":
         for left, right in ((0, 3), (4, 5), (6, 7), (8, 9)):
             pair = means[[left, right]]
