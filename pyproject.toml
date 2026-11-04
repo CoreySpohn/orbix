@@ -48,19 +48,63 @@ docs = [
   "ipython",
   "matplotlib",
   "eyepiece>=0.4.0",
+  "hwostyle",
 ]
 # The viz tests import matplotlib and eyepiece, so the test extra has to carry
 # the viz extra: without it those modules fail to IMPORT on a clean runner and
 # the whole viz suite silently does not run.
-test = ["pytest", "mpmath>=1.3", "orbix[viz]"]
+test = [
+    "pytest",
+    "beartype",
+    "hypothesis",
+    "pytest-cov",
+    "pytest-xdist",
+    "pytest-testmon",
+    "pytest-markdown-docs",
+    "pytest-timeout",
+    "pytest-fail-slow",
+    "mpmath>=1.3",
+    "orbix[viz]",
+    # The slow renderer tests exercise eyepiece.manim.
+    "manim>=0.21,<0.22",
+    # Manim 0.21 uses the Image.fromarray mode argument removed in Pillow 13.
+    "pillow<13",
+    "EXOSIMS",
+    "astropy",
+    "packaging",
+]
 # eyepiece>=0.4.0 for trail's `depth=` argument, which plot_orbit forwards;
 # earlier eyepiece carries every other interface orbix.viz calls (sky_fan,
 # trail, label_au, SourceStyles, PlotResult, animate), checked by interface in
 # the test suite rather than by version string.
-viz = ["eyepiece>=0.4.0"]
+viz = ["eyepiece>=0.4.0", "matplotlib"]
 
 [tool.ruff.lint]
 select = ["D", "E", "F", "I"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.pytest.ini_options]
+markers = [
+    "medium: tests with a 30-second default time budget",
+    "slow: tests with a 300-second default time budget, run nightly",
+]
+
+[tool.testbudget]
+library = "orbix"
+mode = "report"
+unit_s = 5
+medium_s = 30
+slow_s = 300
+
+[tool.deptry]
+known_first_party = ["orbix"]
+# Documentation and test tools are not runtime package imports.
+optional_dependencies_dev_groups = ["docs", "test"]
+
+[tool.ty.environment]
+python-version = "3.11"
+
+[tool.ty.src]
+include = ["src/orbix"]
