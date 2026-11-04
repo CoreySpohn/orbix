@@ -86,6 +86,15 @@ select = ["D", "E", "F", "I"]
 convention = "google"
 
 [tool.pytest.ini_options]
+filterwarnings = [
+    "error",
+    # tol-colors 2.2 calls Colormap.set_bad, pending deprecation in Matplotlib 3.11.
+    'ignore:The set_bad function will be deprecated in a future version[.].*:PendingDeprecationWarning:tol_colors',
+    # Pydub 0.25.1 uses non-raw regex strings, warned on a fresh Python 3.12 import.
+    'ignore:invalid escape sequence:SyntaxWarning:.*pydub[./]utils',
+    # Manim imports Pydub, which still imports Python 3.12's deprecated audioop.
+    "ignore:'audioop' is deprecated and slated for removal in Python 3.13:DeprecationWarning:pydub\\.utils",
+]
 markers = [
     "medium: tests with a 30-second default time budget",
     "slow: tests with a 300-second default time budget, run nightly",
