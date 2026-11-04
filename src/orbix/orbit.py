@@ -89,12 +89,14 @@ class AbstractOrbit(eqx.Module):
             Ms_kg: Stellar mass in kg, shape ``(K,)`` or scalar.
 
         Returns:
-            r_AU: Position vectors in the module's (east, north, away)
-                frame, shape ``(K, 3, T)``, in AU.
-            phase_angle_rad: Standard star-planet-observer phase angle
-                beta, shape ``(K, T)``, with ``cos(beta) = z / r``.
-                Zero is full phase; use directly in a Lambert phase function.
-            dist_AU: Star-planet distance, shape ``(K, T)``.
+            tuple[Array, Array, Array]: Positions, phase angles, and distances:
+
+                - ``r_AU``: Position vectors in the module's (east, north, away)
+                  frame, shape ``(K, 3, T)``, in AU.
+                - ``phase_angle_rad``: Standard star-planet-observer phase angle
+                  beta, shape ``(K, T)``, with ``cos(beta) = z / r``.
+                  Zero is full phase; use directly in a Lambert phase function.
+                - ``dist_AU``: Star-planet distance, shape ``(K, T)``.
         """
 
 
@@ -210,14 +212,16 @@ class KeplerianOrbit(AbstractOrbit):
         """Propagate Keplerian orbit to times ``t_jd``.
 
         Returns:
-            r_AU: (K, 3, T) position vectors in AU in the module's
-                (east, north, away) frame.
-            phase_angle_rad: (K, T) standard star-planet-observer phase
-                angle beta = arctan2(rho, r_z), with
-                rho = sqrt(r_x**2 + r_y**2) and cos(beta) = z / r.
-                Zero is full phase; use directly in a Lambert phase function.
-                The calculation is gradient-safe at conjunction.
-            dist_AU: (K, T) star-planet distance.
+            tuple[Array, Array, Array]: Positions, phase angles, and distances:
+
+                - ``r_AU``: ``(K, 3, T)`` position vectors in AU in the module's
+                  (east, north, away) frame.
+                - ``phase_angle_rad``: ``(K, T)`` standard star-planet-observer
+                  phase angle ``beta = arctan2(rho, r_z)``, with
+                  ``rho = sqrt(r_x**2 + r_y**2)`` and ``cos(beta) = z / r``.
+                  Zero is full phase; use directly in a Lambert phase function.
+                  The calculation is gradient-safe at conjunction.
+                - ``dist_AU``: ``(K, T)`` star-planet distance.
         """
         if t_jd is None:
             raise TypeError("propagate() missing required argument: 't_jd'")

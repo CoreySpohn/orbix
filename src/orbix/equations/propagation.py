@@ -14,10 +14,12 @@ import jax.numpy as jnp
 def system_r_v(A_mat_b, B_mat_b, e_vec_b, sinE_mat, cosE_mat, n_orb_vec_b):
     """Calculate position and velocity vectors for n planets over m time steps.
 
-    Propagation is computed as:
-    r = A * (cosE - e) + B * sinE
-    v = n_orb / (1 - e * cosE) * (-A * sinE + B * cosE)
-    where A, B, e, n_orb are pre-broadcasted outside the function. The sinE
+    Propagation is computed as::
+
+        r = A * (cosE - e) + B * sinE
+        v = n_orb / (1 - e * cosE) * (-A * sinE + B * cosE)
+
+    Here, A, B, e, n_orb are pre-broadcasted outside the function. The sinE
     and cosE are managed inside the function for vectorization reasons.
 
     Some effort has been made to ensure there isn't division by zero.
@@ -32,6 +34,7 @@ def system_r_v(A_mat_b, B_mat_b, e_vec_b, sinE_mat, cosE_mat, n_orb_vec_b):
 
     Returns:
         tuple[jax.Array, jax.Array]: A tuple containing:
+
             - r (jax.Array): (east, north, away) positions in AU.
               Shape (3, n, m).
             - v (jax.Array): (east, north, away) velocities in AU/day.
@@ -76,9 +79,11 @@ def system_r_v(A_mat_b, B_mat_b, e_vec_b, sinE_mat, cosE_mat, n_orb_vec_b):
 def system_r(A_mat_b, B_mat_b, e_vec_b, sinE_mat, cosE_mat):
     """Calculate position vectors for n planets over m time steps.
 
-    Propagation is computed as:
-    r = A * (cosE - e) + B * sinE
-    where A, B, e, n_orb are pre-broadcasted outside the function. The sinE
+    Propagation is computed as::
+
+        r = A * (cosE - e) + B * sinE
+
+    Here, A, B, e, n_orb are pre-broadcasted outside the function. The sinE
     and cosE are managed inside the function for vectorization reasons.
 
     Some effort has been made to ensure there isn't division by zero.
@@ -137,9 +142,11 @@ def single_r_v(A, B, e, sinE, cosE, n_orb):
         n_orb (float): mean orbital motion in rad/day
 
     Returns:
-        r (jax.Array): (east, north, away) positions in AU, shape (3, ntimes).
-        v (jax.Array): (east, north, away) velocities in AU/day,
-            shape (3, ntimes).
+        tuple[jax.Array, jax.Array]: Position and velocity vectors:
+
+            - ``r``: (east, north, away) positions in AU, shape (3, ntimes).
+            - ``v``: (east, north, away) velocities in AU/day,
+              shape (3, ntimes).
     """
     r = A[:, None] * (cosE[None, :] - e) + B[:, None] * sinE[None, :]
     v = (

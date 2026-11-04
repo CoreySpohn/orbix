@@ -35,14 +35,13 @@ def get_grid_solver(
     """Helper function to get a grid-based solver and cache it.
 
     Args:
-        level:
-            How the solver should be batching things.
-                - "scalar" means the inputs will be a single (M, e) pair and
-                  the output will be a single E, sinE, cosE value.
-                - "planet" will vectorize over times first and then over
-                  orbits.
-                    - M: (n_orbits, n_times)
-                    - e: (n_orbits,)
+        level: How the solver should batch inputs:
+
+            - ``"scalar"`` takes a single ``(M, e)`` pair and returns scalar
+              values for the requested outputs (``E``, ``sinE``, ``cosE``).
+            - ``"planet"`` vectorizes over times first and then over orbits.
+              ``M`` has shape ``(n_orbits, n_times)`` and ``e`` has shape
+              ``(n_orbits,)``.
         jit:
             Whether to jit the solver.
         kind:

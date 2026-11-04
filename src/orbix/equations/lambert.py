@@ -189,11 +189,13 @@ def lambert_solve(
             carry the implicit-function gradients of the solution.
 
     Returns:
-        v1: Velocity at ``r1``, shape ``(3,)``.
-        v2: Velocity at ``r2``, shape ``(3,)``.
-        valid: Boolean; False when no elliptic solution exists for this
-            ``(N, long_way, high_branch)`` family (outputs are then
-            meaningless and must be masked by the caller).
+        tuple[Array, Array, Array]: Terminal velocities and validity flag:
+
+            - ``v1``: Velocity at ``r1``, shape ``(3,)``.
+            - ``v2``: Velocity at ``r2``, shape ``(3,)``.
+            - ``valid``: Boolean; False when no elliptic solution exists for
+              this ``(N, long_way, high_branch)`` family (outputs are then
+              meaningless and must be masked by the caller).
     """
     r1n, r2n, c, s, lam = _geometry(r1, r2, long_way)
 

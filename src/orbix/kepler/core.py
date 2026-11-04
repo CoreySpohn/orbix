@@ -13,18 +13,17 @@ returns the eccentric anomaly.
 sine and cosine (which are calculated in the course of `E_solve` anyways).
 
 The system works by defining separate functions for different ranges of
-eccentricities and then selecting between them with `jnp.select`:
-- e = 0 -> identity_solver
-    - Returns input mean anomaly as eccentric anomaly
-- 0 < e < 0.78 -> le_E
-    - Low Eccentricity
-- e > 0.78 -> he_E
-    - High Eccentricity
+eccentricities and then selecting between them with ``jnp.select``:
+
+- ``e = 0``: ``identity_solver`` returns the mean anomaly as eccentric anomaly.
+- ``0 < e < 0.78``: ``le_E`` handles low eccentricity.
+- ``e > 0.78``: ``he_E`` handles high eccentricity.
 
 Then there are equivalent functions for the trigonometric functions:
-- e = 0 -> identity_solver_trig
-- 0 < e < 0.78 -> le_E_trig
-- e > 0.78 -> he_E_trig
+
+- ``e = 0``: ``identity_solver_trig``.
+- ``0 < e < 0.78``: ``le_E_trig``.
+- ``e > 0.78``: ``he_E_trig``.
 
 Acknowledgements:
 Portions of this code are adapted from orvara
@@ -209,10 +208,10 @@ def cut_M(M: jnp.ndarray):
             Mean anomalies (rad). Shape: (n,).
 
     Returns:
-        Esigns (jnp.ndarray):
-            Sign of the eccentric anomaly. Shape: (n,).
-        _M (jnp.ndarray):
-            Modified mean anomalies. Shape: (n,).
+        tuple[jnp.ndarray, jnp.ndarray]: Signs and modified mean anomalies:
+
+            - ``Esigns``: Sign of the eccentric anomaly. Shape: (n,).
+            - ``_M``: Modified mean anomalies. Shape: (n,).
     """
     mask = M > pi
     Esigns = jnp.where(mask, -1, 1)
@@ -227,12 +226,12 @@ def getbounds(e: float):
         e (float): Eccentricity
 
     Returns:
-        tuple:
-            bounds (jnp.ndarray):
-                Array of bounds for the eccentric anomaly intervals. Shape: (13,)
-            coeffs (jnp.ndarray)
-                Lookup table containing coefficients for the Taylor series
-                expansion. Shape: (13, 6)
+        tuple[jnp.ndarray, jnp.ndarray]: Bounds and polynomial coefficients:
+
+            - ``bounds``: Bounds for the eccentric anomaly intervals.
+              Shape: (13,).
+            - ``coeffs``: Lookup table containing coefficients for the Taylor
+              series expansion. Shape: (13, 6).
     """
     # Compute scaled constants
     g2s_e = 0.2588190451025207623489 * e

@@ -35,6 +35,9 @@ exclude_patterns = ["_build", ".build", "Thumbs.db", ".DS_Store"]
 
 autoapi_dirs = ["../src"]
 autoapi_ignore = ["**/_version.py"]
+# hatch-vcs generates _version.py, which is excluded from the API docs above.
+# AutoAPI still tries to resolve its re-export from orbix.__init__.
+suppress_warnings = ["autoapi.python_import_resolution"]
 autodoc_typehints = "description"
 
 myst_enable_extensions = ["amsmath", "dollarmath"]
