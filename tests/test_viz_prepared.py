@@ -712,6 +712,7 @@ def _scene_to_data(points, frame, spec):
     return np.stack([x_low + u * (x_high - x_low), y_low + v * (y_high - y_low)], 1)
 
 
+@pytest.mark.slow
 def test_manim_places_heads_observations_and_iwa_in_data_coordinates(tmp_path):
     """Manim places heads, observations, star, and IWA in data space."""
     manim = _require_manim()
@@ -757,6 +758,7 @@ def test_manim_places_heads_observations_and_iwa_in_data_coordinates(tmp_path):
         assert head.get_center()[0] < star.get_center()[0]
 
 
+@pytest.mark.slow
 def test_manim_error_bar_endpoints_match_data_and_matplotlib(tmp_path):
     """Manim error bars end at xy -/+ err, RA-left, where Matplotlib draws them."""
     manim = _require_manim()
