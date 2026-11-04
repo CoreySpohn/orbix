@@ -164,3 +164,6 @@ cython_debug/
 input/
 output/
 *.png
+.claude/
+.jax_cache/
+.ruff_cache/
