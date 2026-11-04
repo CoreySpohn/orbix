@@ -80,7 +80,7 @@ test = [
 viz = ["eyepiece>=0.4.0", "matplotlib>=3.11"]
 
 [tool.ruff.lint]
-select = ["D", "E", "F", "I"]
+select = ["D", "E", "F", "I", "B", "UP", "RUF", "NPY"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
