@@ -238,6 +238,8 @@ def test_plot_orbit_bare_arrays_door():
     with pytest.raises(ValueError, match=r"\(T, 3\)"):
         plot_orbit(np.zeros((7, 4)))
 
+    assert not plot_orbit(np.empty((0, 3))).ax.lines
+
 
 def test_plot_orbit_mark_geometry_is_exact():
     """Periapsis sits at a(1-e) and both nodes sit in the sky plane."""

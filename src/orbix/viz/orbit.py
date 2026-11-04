@@ -457,6 +457,13 @@ def plot_orbit(
             "than bare xyz tracks"
         )
 
+    if positions.size == 0:
+        if ax is None:
+            import matplotlib.pyplot as plt
+
+            ax = plt.figure().add_subplot(projection="3d")
+        return ep.PlotResult(ax=ax, artists={})
+
     depth = "hidden" if depth is None else depth
     marker_color, path_kw = _orbit_look(style, ep, depth)
     lkw = {**path_kw, **(trail_kw or {})}
