@@ -50,7 +50,7 @@ def test_solver_equation_trig_and_continuity(e, mean, step):
     """Fails if any solver breaks Kepler's equation, trig, or monotone continuity.
 
     The 4e-14 rad float64 bound retains the polynomial-edge regression's
-    accuracy. Tiny positive e that overflows 1/e is pinned in a strict xfail.
+    accuracy. Tiny positive e is also pinned by an explicit regression.
     Lift wrapped E around M before checking slope bounds, including
     across the seam; 1/(1+e) <= dE/dM <= 1/(1-e).
     """
@@ -120,7 +120,7 @@ def test_fast_trig_across_quadrants(angles):
 def test_polynomial_interval_boundaries(e):
     """Fails if interval selection loses 4e-14 rad at either side of a table edge.
 
-    Tiny positive e is covered by the explicit overflow xfail.
+    Tiny positive e is covered by the explicit overflow regression.
     """
     nodes = np.linspace(0, np.pi, 13)
     eccentric = np.r_[
@@ -137,12 +137,21 @@ def test_polynomial_interval_boundaries(e):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="Core correction overflows powers of 1/e for tiny positive eccentricity",
+@pytest.mark.parametrize(
+    "e",
+    [0.0, 1e-200, 1e-100, np.nextafter(np.finfo(float).eps, 0), np.finfo(float).eps],
 )
-def test_tiny_positive_eccentricity_remains_finite():
+def test_tiny_positive_eccentricity_remains_finite(e):
     """Fails if a near-circular orbit becomes NaN through inverse-e overflow."""
-    result = core.E_solve_jit(jnp.array([1.3]), jnp.asarray(1e-200))
+    result = core.E_solve_jit(jnp.array([1.3]), jnp.asarray(e))
     np.testing.assert_allclose(result, [1.3], atol=4e-14, rtol=0)
+    roots, trig = _solutions(jnp.array([1.3]), jnp.asarray(e))
+    np.testing.assert_allclose(roots, 1.3, atol=4e-14, rtol=0)
+    np.testing.assert_allclose(trig[:, 0], np.sin(1.3), atol=4e-14, rtol=0)
+    np.testing.assert_allclose(trig[:, 1], np.cos(1.3), atol=4e-14, rtol=0)
+    gradient = jax.grad(
+        lambda ecc: sum(
+            jnp.sum(x) for x in core.E_solve_trig_jit(jnp.array([1.3]), ecc)
+        )
+    )(jnp.asarray(e))
+    assert np.isfinite(gradient)

@@ -452,6 +452,11 @@ def le_E(M: jnp.ndarray, e: float):
     Returns:
         - E (jnp.ndarray): Eccentric anomalies (rad). Shape: (n,).
     """
+    # |E - M| = |e sin(E)| <= e. Below machine epsilon the circular
+    # limit is accurate to < eps radians, and avoids overflowing 1/e powers.
+    # Sanitize the inactive branch too, so reverse-mode gradients stay finite.
+    circular = jnp.abs(e) < jnp.finfo(jnp.result_type(M, e)).eps
+    e = jnp.where(circular, 0.5, e)
     # Get bounds and coeffs
     bounds, coeffs = getbounds(e)
     # Cut M to be between 0 and pi
@@ -462,7 +467,7 @@ def le_E(M: jnp.ndarray, e: float):
     sinE, cosE = fast_sinE_cosE(init_E)
     dE = dE_2nd(_M, init_E, 1.0 / e, sinE, cosE)
     E = jnp.fmod(Esigns * (init_E + dE) + two_pi, two_pi)
-    return E
+    return jnp.where(circular, M, E)
 
 
 def le_E_trig(M: jnp.ndarray, e: float):
@@ -480,6 +485,9 @@ def le_E_trig(M: jnp.ndarray, e: float):
             - sinE (jnp.ndarray): Sine of eccentric anomalies (rad). Shape: (n,).
             - cosE (jnp.ndarray): Cosine of eccentric anomalies (rad). Shape: (n,).
     """
+    # Use the same sub-epsilon circular limit and safe inactive branch as le_E.
+    circular = jnp.abs(e) < jnp.finfo(jnp.result_type(M, e)).eps
+    e = jnp.where(circular, 0.5, e)
     # Get bounds and coeffs
     bounds, coeffs = getbounds(e)
     # Cut M to be between 0 and pi
@@ -494,7 +502,11 @@ def le_E_trig(M: jnp.ndarray, e: float):
     sinE_pre = sinE
     sinE = Esigns * (sinE_pre * (1.0 - 0.5 * dE * dE) + dE * cosE)
     cosE = cosE * (1.0 - 0.5 * dE * dE) - dE * sinE_pre
-    return E, sinE, cosE
+    return (
+        jnp.where(circular, M, E),
+        jnp.where(circular, jnp.sin(M), sinE),
+        jnp.where(circular, jnp.cos(M), cosE),
+    )
 
 
 def he_E(M: jnp.ndarray, e: float):
