@@ -265,8 +265,8 @@ class TestObservatoryGeometryInvariants:
         lats = jax.vmap(lambda m: obs.ecliptic_latitude_deg(m, ra_rad, dec_rad))(mjds)
         spread = float(lats.max() - lats.min())
         assert spread < 0.01, (
-            "ecl_lat for a fixed RA/Dec target moved {:.3f} deg over a "
-            "year; should be effectively constant.".format(spread)
+            f"ecl_lat for a fixed RA/Dec target moved {spread:.3f} deg over a "
+            "year; should be effectively constant."
         )
 
     def test_ecliptic_plane_target_sweeps_full_longitude(self, obs, mjds):

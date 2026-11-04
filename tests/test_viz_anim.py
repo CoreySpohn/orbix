@@ -117,7 +117,8 @@ def test_animate_orbit_time_label_advances(kind):
     anim = animate_orbit(_orbit(), T_JD, Ms_kg=MSUN_KG, dist_pc=10.0, kind=kind)
     ax = anim.fig.axes[0]
     anim.draw(anim.fig, 0)
-    label = [t for t in ax.texts if t.get_text().startswith("t = ")][0]
+    # Preserve the full artist scan and IndexError if the time label is absent.
+    label = [t for t in ax.texts if t.get_text().startswith("t = ")][0]  # noqa: RUF015
     assert label.get_text() == "t = +0 d"
     anim.draw(anim.fig, len(T_JD) - 1)
     assert label.get_text() == "t = +400 d"

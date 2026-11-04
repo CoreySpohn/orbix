@@ -524,7 +524,7 @@ def plot_orbit(
                     *descending.T, marker="v", s=30, color=marker_color, zorder=4
                 )
             )
-            for asc, desc in zip(ascending, descending):
+            for asc, desc in zip(ascending, descending, strict=False):
                 (node_line,) = ax.plot(
                     *np.stack([asc, desc]).T,
                     linestyle="--",

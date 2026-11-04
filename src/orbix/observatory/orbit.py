@@ -70,7 +70,7 @@ class ObservatoryL2Halo(eqx.Module):
         cls,
         equinox_mjd: float = 60575.25,
         halo_start_day: float = 0.0,
-    ) -> "ObservatoryL2Halo":
+    ) -> ObservatoryL2Halo:
         """Create from bundled L2 halo orbit data.
 
         Args:
@@ -100,7 +100,7 @@ class ObservatoryL2Halo(eqx.Module):
         npz_path: str,
         equinox_mjd: float = 60575.25,
         halo_start_day: float = 0.0,
-    ) -> "ObservatoryL2Halo":
+    ) -> ObservatoryL2Halo:
         """Create from a custom .npz file.
 
         Args:

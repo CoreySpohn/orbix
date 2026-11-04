@@ -27,7 +27,9 @@ def _solutions(means, e):
     )
     branch = jnp.where(e == 0, core.identity_solver(wrapped, e), branch)
     identity = core.identity_solver_trig(wrapped, e)
-    branch_trig = tuple(jnp.where(e == 0, x, y) for x, y in zip(identity, branch_trig))
+    branch_trig = tuple(
+        jnp.where(e == 0, x, y) for x, y in zip(identity, branch_trig, strict=False)
+    )
     return (
         jnp.stack([core.E_solve(means, e), core.E_solve_trig(means, e)[0], branch]),
         jnp.stack(

@@ -143,7 +143,7 @@ def test_grid_equation_trig_and_wrapping(grid_solvers, kind, e, mean):
 
 def test_get_grid_solver_rejects_no_output():
     """Fails if requesting no output stops raising a useful ValueError."""
-    with pytest.raises(ValueError, match="E|trig"):
+    with pytest.raises(ValueError, match=r"E|trig"):
         get_grid_solver(E=False, trig=False)
 
 

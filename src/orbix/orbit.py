@@ -145,7 +145,7 @@ class KeplerianOrbit(AbstractOrbit):
         tp_d: Array,
         *,
         Ms_kg: Array,
-    ) -> "KeplerianOrbit":
+    ) -> KeplerianOrbit:
         """Construct from the period parameterization used by orbit-fitting code.
 
         Fitting code samples ``(T, e, cos i, W, cos w, sin w, tp)`` rather

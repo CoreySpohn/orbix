@@ -137,4 +137,4 @@ def test_unknown_attribute_raises_attribute_error():
     import orbix.viz
 
     with pytest.raises(AttributeError, match="no attribute"):
-        orbix.viz.plot_nonexistent
+        _ = orbix.viz.plot_nonexistent

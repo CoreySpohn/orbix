@@ -17,7 +17,7 @@ worst near e = 1. Use "bilinear" when e accuracy matters.
 """
 
 import sys
-from functools import lru_cache, partial
+from functools import cache, partial
 
 import jax
 import jax.numpy as jnp
@@ -27,8 +27,8 @@ from jax import lax
 from orbix.kepler.core import E_solve_jit
 
 
-# lru_cache here lets us give the same solver to multiple planets
-@lru_cache(maxsize=None)
+# Caching here lets us give the same solver to multiple planets.
+@cache
 def get_grid_solver(
     level="scalar", jit=False, kind="bilinear", E=True, trig=True, n_e=512, n_M=2048
 ):
@@ -165,7 +165,7 @@ def E_trig_lin(n_e=1024, n_M=4096):
         and cosine for a single (M, e) pair.
     """
     # Setup
-    e_grid, M_grid, dM, inv_dM, n_M_int, de, inv_de = _setup(n_e, n_M)
+    e_grid, M_grid, _dM, inv_dM, n_M_int, _de, inv_de = _setup(n_e, n_M)
     E_grid, sinE_grid, cosE_grid = _E_grids(e_grid, M_grid)
     dE_dind_grid, dsinE_dind, dcosE_dind = _cell_deltas(E_grid, sinE_grid, cosE_grid)
 
@@ -184,7 +184,7 @@ def E_trig_lin(n_e=1024, n_M=4096):
 def E_lin(n_e=1024, n_M=4096):
     """Creates vectorized JIT func for E via linear interp 2D grid."""
     # Setup
-    e_grid, M_grid, dM, inv_dM, n_M_int, de, inv_de = _setup(n_e, n_M)
+    e_grid, M_grid, _dM, inv_dM, n_M_int, _de, inv_de = _setup(n_e, n_M)
     E_grid, sinE_grid, cosE_grid = _E_grids(e_grid, M_grid)
     dE_dind_grid, *_ = _cell_deltas(E_grid, sinE_grid, cosE_grid)
 
@@ -199,7 +199,7 @@ def E_lin(n_e=1024, n_M=4096):
 def trig_lin(n_e=1024, n_M=4096):
     """Creates vectorized JIT func for sinE, cosE via linear interp 2D grid."""
     # Setup
-    e_grid, M_grid, dM, inv_dM, n_M_int, de, inv_de = _setup(n_e, n_M)
+    e_grid, M_grid, _dM, inv_dM, n_M_int, _de, inv_de = _setup(n_e, n_M)
     E_grid, sinE_grid, cosE_grid = _E_grids(e_grid, M_grid)
     _, dsinE_dind, dcosE_dind = _cell_deltas(E_grid, sinE_grid, cosE_grid)
 

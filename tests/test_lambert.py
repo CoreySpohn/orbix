@@ -93,7 +93,7 @@ def test_n0_long_way_recovers_velocities():
 
 def test_multirev_one_branch_matches_truth():
     """For a 3.x-revolution transfer, exactly one N=3 branch is the true orbit."""
-    r1, v1, r2, v2, tof, long_way = _two_epoch_fixture(dM=1.6, n_rev=3)
+    r1, v1, r2, _v2, tof, long_way = _two_epoch_fixture(dM=1.6, n_rev=3)
     errs = []
     for high in (False, True):
         v1_l, _, valid = lambert_solve(r1, r2, tof, MU, 3, long_way, high)

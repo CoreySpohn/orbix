@@ -1,6 +1,6 @@
 """Equations of orbital mechanics."""
 
-__all__ = [
+__all__ = [  # noqa: RUF022 - Preserve the public export order grouped by topic.
     # Orbit functions
     "period_a",
     "period_n",

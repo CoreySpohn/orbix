@@ -190,7 +190,7 @@ def test_plot_sky_track_geometry_stays_in_handed_slot():
     """Drawing into axes[0] of a 1x2 grid leaves the slots equal width."""
     from orbix.viz import plot_sky_track
 
-    fig, axes = plt.subplots(1, 2, layout="constrained")
+    _fig, axes = plt.subplots(1, 2, layout="constrained")
     plot_sky_track(_orbit(), T_JD, **STELLAR, ax=axes[0])
     w0 = axes[0].get_position(original=True).width
     w1 = axes[1].get_position(original=True).width

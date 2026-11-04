@@ -806,7 +806,10 @@ def test_manim_error_bar_endpoints_match_data_and_matplotlib(tmp_path):
 
         # positive RA is on the left: the +xerr end sits left of the -xerr end
         for bar, x_low, x_high in zip(
-            result.parts["observations/xerr"], xy[:, 0] - xerr, xy[:, 0] + xerr
+            result.parts["observations/xerr"],
+            xy[:, 0] - xerr,
+            xy[:, 0] + xerr,
+            strict=False,
         ):
             scene_x = [bar.points[0][0], bar.points[-1][0]]
             data_x = _scene_to_data(
