@@ -47,7 +47,7 @@ docs = [
   "sphinx_autodoc_typehints>=2.1",
   "ipython>=8.24",
   "matplotlib>=3.11",
-  "eyepiece>=0.4.0",
+  "eyepiece>=0.15.0",
   "hwostyle>=1.7.0",
 ]
 # The viz tests import matplotlib and eyepiece, so the test extra has to carry
@@ -56,7 +56,7 @@ docs = [
 test = [
     "pytest>=7.3.2",
     "beartype>=0.18.5",
-    "hypothesis>=6.79.1",
+    "hypothesis>=6.100.0",
     "pytest-xdist>=2.5",
     "pytest-testmon>=2.0.7",
     "pytest-markdown-docs>=0.5.0",
@@ -72,11 +72,11 @@ test = [
     "astropy>=6.1",
     "packaging>=23.2",
 ]
-# eyepiece>=0.4.0 for trail's `depth=` argument, which plot_orbit forwards;
-# earlier eyepiece carries every other interface orbix.viz calls (sky_fan,
-# trail, label_au, SourceStyles, PlotResult, animate), checked by interface in
-# the test suite rather than by version string.
-viz = ["eyepiece>=0.4.0", "matplotlib>=3.11"]
+# eyepiece>=0.15.0: orbix.viz imports eyepiece.prepared (added in 0.5.0) and
+# trail's `depth=` argument, and eyepiece before 0.15.0 renders through the
+# hwostyle colormap that hwostyle 1.7 deprecates, which warnings-as-errors
+# turns into a failure at the declared hwostyle floor.
+viz = ["eyepiece>=0.15.0", "matplotlib>=3.11"]
 
 [tool.ruff.lint]
 select = ["D", "E", "F", "I", "B", "UP", "RUF", "NPY"]
