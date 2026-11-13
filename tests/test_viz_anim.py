@@ -142,9 +142,9 @@ def test_animate_orbit_bare_tracks_door():
         text.get_text().startswith("t = ") for text in unlabeled.fig.axes[0].texts
     )
 
-    with pytest.raises(TypeError, match="t_jd"):
+    with pytest.raises(TypeError, match="time_jd"):
         animate_orbit((ra, dec))
-    with pytest.raises(ValueError, match="t_jd has 4"):
+    with pytest.raises(ValueError, match="time_jd has 4"):
         animate_orbit((ra, dec), np.linspace(0.0, 1.0, 4))
 
 
@@ -173,7 +173,7 @@ def test_animate_orbit_sky_heads_follow_the_prepared_samples():
 
     orbit = _orbit(2)
     anim = animate_orbit(orbit, T_JD, Ms_kg=MSUN_KG, dist_pc=10.0, history=3)
-    sequence = prepare_sky_track(orbit, t_jd=T_JD, Ms_kg=MSUN_KG, dist_pc=10.0)
+    sequence = prepare_sky_track(orbit, time_jd=T_JD, Ms_kg=MSUN_KG, dist_pc=10.0)
     from eyepiece.prepared import find_element
 
     heads = anim.fig.axes[0].collections[-2:]  # head/0 and head/1 are drawn last
@@ -379,7 +379,7 @@ def test_auto_sweep_keeps_the_drawn_size_fixed():
         a_AU=1.3, e=0.31, W_rad=2.3, i_rad=1.05, w_rad=-0.7, M0_rad=0.4, t0_d=0.0
     )
     t = np.linspace(0.0, 541.4, 400)
-    xyz, _, _ = orbit.propagate(t_jd=t, Ms_kg=np.atleast_1d(MSUN_KG))
+    xyz, _, _ = orbit.propagate(time_jd=t, Ms_kg=np.atleast_1d(MSUN_KG))
     track = np.moveaxis(np.asarray(xyz), 1, 2)[0]
 
     camera = _auto_camera(track[None, ...], 60, roll_deg=0.0)
@@ -406,7 +406,7 @@ def test_auto_sweep_avoids_edge_on_and_face_on():
         a_AU=1.3, e=0.31, W_rad=2.3, i_rad=1.05, w_rad=-0.7, M0_rad=0.4, t0_d=0.0
     )
     t = np.linspace(0.0, 541.4, 400)
-    xyz, _, _ = orbit.propagate(t_jd=t, Ms_kg=np.atleast_1d(MSUN_KG))
+    xyz, _, _ = orbit.propagate(time_jd=t, Ms_kg=np.atleast_1d(MSUN_KG))
     track = np.moveaxis(np.asarray(xyz), 1, 2)[0]
 
     camera = _auto_camera(track[None, ...], 40, roll_deg=0.0)

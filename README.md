@@ -38,8 +38,8 @@ orbit = KeplerianOrbit(
     t0_d=0.0,
 )
 trig_solver = get_grid_solver(level="scalar", E=False, trig=True)
-t_jd = jnp.linspace(2451545.0, 2451545.0 + 365.25, 5)
-r_AU, phase_angle_rad, dist_AU = orbit.propagate(trig_solver, t_jd, Ms_kg=1.989e30)
+time_jd = jnp.linspace(2451545.0, 2451545.0 + 365.25, 5)
+r_AU, phase_angle_rad, dist_AU = orbit.propagate(trig_solver, time_jd, Ms_kg=1.989e30)
 print(r_AU.shape)  # (1, 3, 5): (K orbits, xyz, T times)
 ```
 

@@ -80,15 +80,17 @@ def _element_id(prefix, k):
 # --- inputs ------------------------------------------------------------------
 
 
-def _sample_times(t_jd):
+def _sample_times(time_jd):
     """Validate a time grid for a sequence: 1D, finite, strictly increasing."""
-    times = np.asarray(t_jd, dtype=float)
+    times = np.asarray(time_jd, dtype=float)
     if times.ndim != 1 or times.size == 0:
-        raise ValueError(f"t_jd must be a nonempty 1D array, got shape {times.shape}")
+        raise ValueError(
+            f"time_jd must be a nonempty 1D array, got shape {times.shape}"
+        )
     if not np.all(np.isfinite(times)):
-        raise ValueError("t_jd must be finite")
+        raise ValueError("time_jd must be finite")
     if times.size > 1 and not np.all(np.diff(times) > 0):
-        raise ValueError("t_jd must be strictly increasing")
+        raise ValueError("time_jd must be strictly increasing")
     return times
 
 
@@ -111,7 +113,7 @@ def _trail_window(history):
     )
 
 
-def _sky_xy(orbit_or_radec, t_jd, Ms_kg, dist_pc, trig_solver):
+def _sky_xy(orbit_or_radec, time_jd, Ms_kg, dist_pc, trig_solver):
     """Normalize the input to host coordinates of shape ``(K, T, 2)`` arcsec.
 
     An orbit is propagated with one ``position_arcsec`` call over the
@@ -123,7 +125,11 @@ def _sky_xy(orbit_or_radec, t_jd, Ms_kg, dist_pc, trig_solver):
     if isinstance(orbit_or_radec, AbstractOrbit):
         missing = [
             name
-            for name, value in (("t_jd", t_jd), ("Ms_kg", Ms_kg), ("dist_pc", dist_pc))
+            for name, value in (
+                ("time_jd", time_jd),
+                ("Ms_kg", Ms_kg),
+                ("dist_pc", dist_pc),
+            )
             if value is None
         ]
         if missing:
@@ -131,7 +137,7 @@ def _sky_xy(orbit_or_radec, t_jd, Ms_kg, dist_pc, trig_solver):
                 "preparing an orbit requires " + ", ".join(missing) + " to propagate it"
             )
         ra, dec = orbit_or_radec.position_arcsec(
-            trig_solver, t_jd, Ms_kg=Ms_kg, dist_pc=dist_pc
+            trig_solver, time_jd, Ms_kg=Ms_kg, dist_pc=dist_pc
         )
         return np.asarray(jnp.stack([ra, dec], axis=-1))
 
@@ -358,7 +364,7 @@ def _clock_format(offsets_d):
 def prepare_sky_track(
     orbit_or_radec,
     *,
-    t_jd,
+    time_jd,
     Ms_kg=None,
     dist_pc=None,
     trig_solver=None,
@@ -373,12 +379,12 @@ def prepare_sky_track(
 
     Args:
         orbit_or_radec: An ``AbstractOrbit`` (propagated here once over
-            ``t_jd``, requiring ``Ms_kg`` and ``dist_pc``), or bare tracks
+            ``time_jd``, requiring ``Ms_kg`` and ``dist_pc``), or bare tracks
             in arcsec: an array shaped ``(K, T, 2)`` of (RA, Dec) offsets,
             borrowed as given, or an ``(ra, dec)`` pair of ``(T,)`` or
             ``(K, T)`` arrays. A tuple or list of two is always read as an
             ``(ra, dec)`` pair. A row with a nonfinite coordinate is a gap.
-        t_jd: Sample times in Julian days, shape ``(T,)``, finite and
+        time_jd: Sample times in Julian days, shape ``(T,)``, finite and
             strictly increasing. They time the orbit's propagation and,
             for either door, the sequence samples.
         Ms_kg: Stellar mass in kg. Orbit door only.
@@ -424,13 +430,13 @@ def prepare_sky_track(
             malformed, naming the argument. Time, history, and clock-format
             errors are raised before the orbit is propagated.
     """
-    times_jd = _sample_times(t_jd)
+    times_jd = _sample_times(time_jd)
     trail, window = _trail_window(history)
     custom_clock = None if clock_fmt is None else Clock(CLOCK_ID, fmt=clock_fmt)
-    tracks = _sky_xy(orbit_or_radec, t_jd, Ms_kg, dist_pc, trig_solver)
+    tracks = _sky_xy(orbit_or_radec, time_jd, Ms_kg, dist_pc, trig_solver)
     if tracks.shape[1] != times_jd.size:
         raise ValueError(
-            f"t_jd has {times_jd.size} entries for a {tracks.shape[1]}-sample track"
+            f"time_jd has {times_jd.size} entries for a {tracks.shape[1]}-sample track"
         )
 
     offsets_d = times_jd - times_jd[0]
@@ -472,7 +478,7 @@ def prepare_sky_track(
 def prepare_sky_view(
     orbit_or_radec,
     *,
-    t_jd=None,
+    time_jd=None,
     Ms_kg=None,
     dist_pc=None,
     trig_solver=None,
@@ -488,7 +494,7 @@ def prepare_sky_view(
 
     Args:
         orbit_or_radec: As for ``prepare_sky_track``.
-        t_jd: Times in Julian days, shape ``(T,)``. Orbit door only: bare
+        time_jd: Times in Julian days, shape ``(T,)``. Orbit door only: bare
             tracks are drawn as given.
         Ms_kg: As for ``prepare_sky_track``.
         dist_pc: As for ``prepare_sky_track``.
@@ -504,15 +510,15 @@ def prepare_sky_view(
 
     Raises:
         TypeError: If the orbit door is missing a propagation argument, or
-            ``t_jd`` is given with bare tracks.
+            ``time_jd`` is given with bare tracks.
         ValueError: As for ``prepare_sky_track``.
     """
-    if t_jd is not None and not isinstance(orbit_or_radec, AbstractOrbit):
+    if time_jd is not None and not isinstance(orbit_or_radec, AbstractOrbit):
         raise TypeError(
-            "t_jd only applies when propagating an orbit; bare tracks are "
+            "time_jd only applies when propagating an orbit; bare tracks are "
             "drawn as given"
         )
-    tracks = _sky_xy(orbit_or_radec, t_jd, Ms_kg, dist_pc, trig_solver)
+    tracks = _sky_xy(orbit_or_radec, time_jd, Ms_kg, dist_pc, trig_solver)
     return _build_view(
         tracks,
         source_ids=source_ids,

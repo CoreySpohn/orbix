@@ -94,7 +94,7 @@ rng = np.random.default_rng(0)
 # Observed positions: the true orbit at three epochs, perturbed by the error.
 SIGMA_ARCSEC = 0.008
 t_obs = T0_D + np.array([70.0, 250.0, 430.0])
-ra, dec = orbit.position_arcsec(t_jd=t_obs, Ms_kg=Msun2kg, dist_pc=DIST_PC)
+ra, dec = orbit.position_arcsec(time_jd=t_obs, Ms_kg=Msun2kg, dist_pc=DIST_PC)
 xy_obs = np.column_stack([np.asarray(ra)[0], np.asarray(dec)[0]])
 xy_obs = xy_obs + SIGMA_ARCSEC * rng.standard_normal(xy_obs.shape)
 sigma = np.full(len(t_obs), SIGMA_ARCSEC)
@@ -115,12 +115,12 @@ fan = KeplerianOrbit.from_period(
 weights = rng.dirichlet(np.full(K, 3.0))
 
 # One orbital period in 180 steps of about three days.
-t_jd = np.linspace(T0_D, T0_D + PERIOD_D, 181)
+time_jd = np.linspace(T0_D, T0_D + PERIOD_D, 181)
 ```
 
 ## A still of the fan
 
-`prepare_sky_view` propagates every draw over `t_jd` and returns one
+`prepare_sky_view` propagates every draw over `time_jd` and returns one
 `TrackView`. Each draw is its own `Path` (`path/0` to `path/39`), so every
 draw stays addressable, while `source_ids="planet b"` names the one planet
 they all describe, so they share one color from the cast. The weights become
@@ -132,7 +132,7 @@ part of the view, not options.
 ```{code-cell} ipython3
 view = prepare_sky_view(
     fan,
-    t_jd=t_jd,
+    time_jd=time_jd,
     Ms_kg=Msun2kg,
     dist_pc=DIST_PC,
     source_ids="planet b",
@@ -161,7 +161,7 @@ keeps a sliding window of that many samples, here about ninety days.
 ```{code-cell} ipython3
 sequence = prepare_sky_track(
     fan,
-    t_jd=t_jd,
+    time_jd=time_jd,
     Ms_kg=Msun2kg,
     dist_pc=DIST_PC,
     source_ids="planet b",
@@ -302,5 +302,5 @@ behavior.
   err)`.
 - `animate_orbit(kind="sky")` refuses `style=`, `base_ms=`, and `marks=`,
   which apply to `kind="3d"` only; sky colors come from the cast. It needs
-  `t_jd=` for bare tracks too, because the sample times drive its clock and
+  `time_jd=` for bare tracks too, because the sample times drive its clock and
   its physical-time playback.

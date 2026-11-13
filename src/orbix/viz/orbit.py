@@ -162,7 +162,7 @@ def _widened(view, ax):
 
 def plot_sky_track(
     orbit_or_radec,
-    t_jd=None,
+    time_jd=None,
     *,
     Ms_kg=None,
     dist_pc=None,
@@ -192,10 +192,10 @@ def plot_sky_track(
 
     Args:
         orbit_or_radec: An ``AbstractOrbit`` (propagated here, requiring
-            ``t_jd``, ``Ms_kg``, ``dist_pc``), or bare arcsec tracks: an
+            ``time_jd``, ``Ms_kg``, ``dist_pc``), or bare arcsec tracks: an
             array shaped ``(K, T, 2)``, or an ``(ra, dec)`` pair of
             ``(T,)`` or ``(K, T)`` arrays.
-        t_jd: Times in Julian Days, shape ``(T,)``. Orbit door only.
+        time_jd: Times in Julian Days, shape ``(T,)``. Orbit door only.
         Ms_kg: Stellar mass in kg. Orbit door only.
         dist_pc: Distance to the star in parsecs. Orbit door only.
         trig_solver: Optional Kepler solver forwarded to the orbit; None
@@ -246,7 +246,7 @@ def plot_sky_track(
 
     view = prepare_sky_view(
         orbit_or_radec,
-        t_jd=t_jd,
+        time_jd=time_jd,
         Ms_kg=Ms_kg,
         dist_pc=dist_pc,
         trig_solver=trig_solver,
@@ -285,7 +285,7 @@ def _track_colors(style, colors, n_tracks):
     return None
 
 
-def _positions(orbit_or_xyz, t_jd, Ms_kg, trig_solver):
+def _positions(orbit_or_xyz, time_jd, Ms_kg, trig_solver):
     """Normalize the input to positions of shape ``(K, T, 3)``.
 
     Orbit rows already use right-handed (east, north, away); only the
@@ -298,18 +298,20 @@ def _positions(orbit_or_xyz, t_jd, Ms_kg, trig_solver):
     """
     if isinstance(orbit_or_xyz, AbstractOrbit):
         missing = [
-            name for name, val in (("t_jd", t_jd), ("Ms_kg", Ms_kg)) if val is None
+            name
+            for name, val in (("time_jd", time_jd), ("Ms_kg", Ms_kg))
+            if val is None
         ]
         if missing:
             raise TypeError(
                 "plotting an orbit requires " + ", ".join(missing) + " to propagate it"
             )
-        r_AU, _, _ = orbit_or_xyz.propagate(trig_solver, t_jd, Ms_kg=Ms_kg)
+        r_AU, _, _ = orbit_or_xyz.propagate(trig_solver, time_jd, Ms_kg=Ms_kg)
         return np.moveaxis(np.asarray(r_AU, float), 1, 2), orbit_or_xyz
 
-    if t_jd is not None:
+    if time_jd is not None:
         raise TypeError(
-            "t_jd only applies when propagating an orbit; bare xyz tracks "
+            "time_jd only applies when propagating an orbit; bare xyz tracks "
             "are drawn as given"
         )
     arr = np.asarray(orbit_or_xyz, float)
@@ -366,7 +368,7 @@ def _mark_geometry(orbit):
 
 def plot_orbit(
     orbit_or_xyz,
-    t_jd=None,
+    time_jd=None,
     *,
     Ms_kg=None,
     trig_solver=None,
@@ -396,10 +398,10 @@ def plot_orbit(
 
     Args:
         orbit_or_xyz: An ``AbstractOrbit`` (propagated here, requiring
-            ``t_jd`` and ``Ms_kg``), or bare positions shaped ``(T, 3)``
+            ``time_jd`` and ``Ms_kg``), or bare positions shaped ``(T, 3)``
             or ``(K, T, 3)``. Bare positions are in whatever units the
             caller made them, so no axis labels are set on that door.
-        t_jd: Times in Julian Days, shape ``(T,)``. Orbit door only.
+        time_jd: Times in Julian Days, shape ``(T,)``. Orbit door only.
         Ms_kg: Stellar mass in kg. Orbit door only.
         trig_solver: Optional Kepler solver forwarded to the orbit; None
             uses orbix's default.
@@ -446,7 +448,7 @@ def plot_orbit(
         after the per-track entries.
     """
     ep = eyepiece()
-    positions, orbit = _positions(orbit_or_xyz, t_jd, Ms_kg, trig_solver)
+    positions, orbit = _positions(orbit_or_xyz, time_jd, Ms_kg, trig_solver)
     marks = set(marks or ())
     unknown = marks - {"periapsis", "nodes"}
     if unknown:

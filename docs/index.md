@@ -17,7 +17,7 @@ orbit = KeplerianOrbit(
     a_AU=1.0, e=0.2, W_rad=0.5, i_rad=1.0, w_rad=0.3, M0_rad=0.0, t0_d=0.0
 )
 r_AU, phase_angle_rad, dist_AU = orbit.propagate(
-    t_jd=jnp.linspace(0.0, 365.0, 100), Ms_kg=1.99e30
+    time_jd=jnp.linspace(0.0, 365.0, 100), Ms_kg=1.99e30
 )
 ```
 

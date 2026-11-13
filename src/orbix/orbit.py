@@ -47,7 +47,7 @@ def _resolve_trig_solver(trig_solver):
     The default is the scalar bilinear grid solver (trig outputs only),
     which ``get_grid_solver`` lru-caches, so repeated resolution is free.
     Passing a non-callable is almost always a time array that was meant
-    for ``t_jd``, so that mistake is named at the call site.
+    for ``time_jd``, so that mistake is named at the call site.
     """
     if trig_solver is None:
         return get_grid_solver(level="scalar", E=False, trig=True, jit=True)
@@ -55,7 +55,7 @@ def _resolve_trig_solver(trig_solver):
         raise TypeError(
             "trig_solver must be callable with signature (M, e) -> (sinE, cosE); "
             f"got {type(trig_solver).__name__}. If you meant to pass times, "
-            "use the keyword: propagate(t_jd=..., Ms_kg=...)."
+            "use the keyword: propagate(time_jd=..., Ms_kg=...)."
         )
     return trig_solver
 
@@ -72,18 +72,18 @@ class AbstractOrbit(eqx.Module):
     def propagate(
         self,
         trig_solver=None,
-        t_jd: Array = None,
+        time_jd: Array = None,
         *,
         Ms_kg: Array,
     ) -> tuple[Array, Array, Array]:
-        """Propagate to times ``t_jd``.
+        """Propagate to times ``time_jd``.
 
         Args:
             trig_solver: Scalar solver for Kepler's equation,
                 signature ``(M, e) -> (sinE, cosE)``. None selects the
                 cached default grid solver.
-            t_jd: Times in Julian Days, shape ``(T,)``. Required; it is
-                keyword-friendly (``propagate(t_jd=..., Ms_kg=...)``) so
+            time_jd: Times in Julian Days, shape ``(T,)``. Required; it is
+                keyword-friendly (``propagate(time_jd=..., Ms_kg=...)``) so
                 callers relying on the default solver need not pass a
                 positional None.
             Ms_kg: Stellar mass in kg, shape ``(K,)`` or scalar.
@@ -205,11 +205,11 @@ class KeplerianOrbit(AbstractOrbit):
     def propagate(
         self,
         trig_solver=None,
-        t_jd: Array = None,
+        time_jd: Array = None,
         *,
         Ms_kg: Array,
     ) -> tuple[Array, Array, Array]:
-        """Propagate Keplerian orbit to times ``t_jd``.
+        """Propagate Keplerian orbit to times ``time_jd``.
 
         Returns:
             tuple[Array, Array, Array]: Positions, phase angles, and distances:
@@ -223,10 +223,10 @@ class KeplerianOrbit(AbstractOrbit):
                   The calculation is gradient-safe at conjunction.
                 - ``dist_AU``: ``(K, T)`` star-planet distance.
         """
-        if t_jd is None:
-            raise TypeError("propagate() missing required argument: 't_jd'")
+        if time_jd is None:
+            raise TypeError("propagate() missing required argument: 'time_jd'")
         trig_solver = _resolve_trig_solver(trig_solver)
-        t_jd = jnp.atleast_1d(t_jd)
+        time_jd = jnp.atleast_1d(time_jd)
 
         A_AU, B_AU = self._AB()
 
@@ -237,7 +237,7 @@ class KeplerianOrbit(AbstractOrbit):
         tp_d = self.t0_d - T_d * self.M0_rad / two_pi
 
         # Mean anomaly at each time, shape (K, T)
-        M = jax.vmap(mean_anomaly_tp, (None, 0, 0))(t_jd, n, tp_d)
+        M = jax.vmap(mean_anomaly_tp, (None, 0, 0))(time_jd, n, tp_d)
 
         # Kepler solve -> sinE, cosE each shape (K, T)
         solver_t = jax.vmap(trig_solver, in_axes=(0, None))
@@ -268,7 +268,7 @@ class KeplerianOrbit(AbstractOrbit):
     def position_arcsec(
         self,
         trig_solver=None,
-        t_jd: Array = None,
+        time_jd: Array = None,
         *,
         Ms_kg: Array,
         dist_pc: Array,
@@ -280,7 +280,7 @@ class KeplerianOrbit(AbstractOrbit):
         The east component includes cos delta; it is not the RA angle itself.
         This is a thin wrapper around ``propagate`` for projected position.
         """
-        r_AU, _, _ = self.propagate(trig_solver, t_jd, Ms_kg=Ms_kg)
+        r_AU, _, _ = self.propagate(trig_solver, time_jd, Ms_kg=Ms_kg)
         dist_AU = jnp.atleast_1d(dist_pc) * pc2AU
         scale = rad2arcsec / dist_AU
         dra_arcsec = r_AU[:, 0] * scale[:, None]
@@ -290,7 +290,7 @@ class KeplerianOrbit(AbstractOrbit):
     def separation_arcsec(
         self,
         trig_solver=None,
-        t_jd: Array = None,
+        time_jd: Array = None,
         *,
         Ms_kg: Array,
         dist_pc: Array,
@@ -298,7 +298,7 @@ class KeplerianOrbit(AbstractOrbit):
         """Projected angular separation in arcsec, shape ``(K, T)``."""
         ra, dec = self.position_arcsec(
             trig_solver,
-            t_jd,
+            time_jd,
             Ms_kg=Ms_kg,
             dist_pc=dist_pc,
         )

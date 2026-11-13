@@ -100,7 +100,7 @@ def test_sampling_does_not_invent_iwa_crossing():
     xy = np.array([[[1.0, 0.0], [-1.0, 0.0]]])
     sequence = prepare_sky_track(
         xy,
-        t_jd=np.array([0.0, 10.0]),
+        time_jd=np.array([0.0, 10.0]),
         source_ids=("b",),
         iwa_arcsec=0.5,
     )
@@ -115,8 +115,8 @@ def test_sampling_does_not_invent_iwa_crossing():
 def test_raw_track_is_borrowed_and_every_frame_holds_a_sample():
     """A bare (K, T, 2) track is borrowed, and frame i holds sample i."""
     tracks = _circle(8).astype(np.float32)
-    t_jd = 2460000.0 + np.arange(8.0) * 5.0
-    sequence = prepare_sky_track(tracks, t_jd=t_jd, source_ids="b")
+    time_jd = 2460000.0 + np.arange(8.0) * 5.0
+    sequence = prepare_sky_track(tracks, time_jd=time_jd, source_ids="b")
 
     assert isinstance(sequence, Sequence)
     assert sequence.time_unit == "d"
@@ -138,18 +138,18 @@ def test_raw_track_is_borrowed_and_every_frame_holds_a_sample():
 def test_ra_dec_pair_door_matches_the_stacked_door():
     """An (ra, dec) pair prepares the same paths as the stacked array."""
     tracks = np.concatenate([_circle(6), _circle(6, radius=0.5)])
-    t_jd = np.arange(6.0)
+    time_jd = np.arange(6.0)
     pair = prepare_sky_track(
-        (tracks[..., 0], tracks[..., 1]), t_jd=t_jd, source_ids="b"
+        (tracks[..., 0], tracks[..., 1]), time_jd=time_jd, source_ids="b"
     )
-    stacked = prepare_sky_track(tracks, t_jd=t_jd, source_ids="b")
+    stacked = prepare_sky_track(tracks, time_jd=time_jd, source_ids="b")
     for k in range(2):
         np.testing.assert_array_equal(
             find_element(pair.template, f"path/{k}").xy,
             find_element(stacked.template, f"path/{k}").xy,
         )
     single = prepare_sky_track(
-        (tracks[0, :, 0], tracks[0, :, 1]), t_jd=t_jd, source_ids="b"
+        (tracks[0, :, 0], tracks[0, :, 1]), time_jd=time_jd, source_ids="b"
     )
     with pytest.raises(KeyError):
         find_element(single.template, "path/1")
@@ -158,7 +158,7 @@ def test_ra_dec_pair_door_matches_the_stacked_door():
 def test_the_clock_reports_days_since_the_first_epoch():
     """The clock reads days since the first sample, as distinct labels."""
     sequence = prepare_sky_track(
-        _circle(12), t_jd=2460000.0 + np.linspace(0.0, 400.0, 12)
+        _circle(12), time_jd=2460000.0 + np.linspace(0.0, 400.0, 12)
     )
     assert find_element(sequence.frame(0), "clock").text == "t = +0 d"
     assert find_element(sequence.frame(11), "clock").text == "t = +400 d"
@@ -167,30 +167,30 @@ def test_the_clock_reports_days_since_the_first_epoch():
     with pytest.raises(KeyError):
         find_element(strip, "0/time")  # the clock is the only time label
 
-    finer = prepare_sky_track(_circle(3), t_jd=np.array([0.0, 0.25, 0.5]))
+    finer = prepare_sky_track(_circle(3), time_jd=np.array([0.0, 0.25, 0.5]))
     assert find_element(finer.frame(1), "clock").text == "t = +0.25 d"
 
 
 def test_fractional_multi_day_steps_print_every_offset_exactly():
     """A 1.5-day grid keeps its half days instead of rounding them away."""
-    t_jd = 2460000.3 + np.array([0.0, 1.5, 3.0, 4.5, 6.0])
-    sequence = prepare_sky_track(_circle(5), t_jd=t_jd)
+    time_jd = 2460000.3 + np.array([0.0, 1.5, 3.0, 4.5, 6.0])
+    sequence = prepare_sky_track(_circle(5), time_jd=time_jd)
     texts = [find_element(sequence.frame(i), "clock").text for i in range(5)]
     assert texts == [f"t = +{v} d" for v in ("0.0", "1.5", "3.0", "4.5", "6.0")]
 
     # A step no precision writes exactly keeps the fewest decimals that
     # stay within a quarter step: whole days for a 3-day step, tenths for a
     # 1.5-day one.
-    dense = prepare_sky_track(_circle(200), t_jd=np.linspace(0.0, 600.0, 200))
+    dense = prepare_sky_track(_circle(200), time_jd=np.linspace(0.0, 600.0, 200))
     assert find_element(dense.frame(100), "clock").text == "t = +302 d"
-    denser = prepare_sky_track(_circle(400), t_jd=np.linspace(0.0, 600.0, 400))
+    denser = prepare_sky_track(_circle(400), time_jd=np.linspace(0.0, 600.0, 400))
     assert find_element(denser.frame(200), "clock").text == "t = +300.8 d"
 
 
 def test_clock_fmt_sets_the_label_and_is_checked_before_propagating():
     """A caller's clock format labels frames and strips; a bad one fails first."""
     sequence = prepare_sky_track(
-        _circle(3), t_jd=np.array([0.0, 1.0, 2.5]), clock_fmt="{value:.2f} {unit}"
+        _circle(3), time_jd=np.array([0.0, 1.0, 2.5]), clock_fmt="{value:.2f} {unit}"
     )
     assert find_element(sequence.frame(2), "clock").text == "2.50 d"
     assert find_element(sequence.strip([2]), "0/clock").text == "2.50 d"
@@ -198,7 +198,7 @@ def test_clock_fmt_sets_the_label_and_is_checked_before_propagating():
     # a TypeError; the format error comes first.
     with pytest.raises(ValueError, match="fmt"):
         prepare_sky_track(
-            _circular_orbit(), t_jd=np.array([0.0, 1.0, 2.5]), clock_fmt="{when}"
+            _circular_orbit(), time_jd=np.array([0.0, 1.0, 2.5]), clock_fmt="{when}"
         )
 
 
@@ -211,7 +211,7 @@ def test_the_view_has_the_named_marks_in_one_ra_left_frame():
     )
     sequence = prepare_sky_track(
         np.concatenate([_circle(5), _circle(5, radius=0.8)]),
-        t_jd=np.arange(5.0),
+        time_jd=np.arange(5.0),
         source_ids="b",
         observations=obs,
         iwa_arcsec=0.1,
@@ -271,7 +271,7 @@ def test_observation_error_endpoints_are_data_coordinates():
     xerr = np.array([0.02, 0.05])
     yerr = np.array([0.03, 0.01])
     sequence = prepare_sky_track(
-        _circle(4), t_jd=np.arange(4.0), observations=(xy, xerr, yerr)
+        _circle(4), time_jd=np.arange(4.0), observations=(xy, xerr, yerr)
     )
     points = find_element(sequence.template, "observations")
     assert points.source_id is None
@@ -295,19 +295,19 @@ def test_observations_must_be_the_documented_triple():
     """Observations must be the (xy, xerr, yerr) triple."""
     with pytest.raises(ValueError, match="observations"):
         prepare_sky_track(
-            _circle(4), t_jd=np.arange(4.0), observations=(np.zeros((2, 2)),)
+            _circle(4), time_jd=np.arange(4.0), observations=(np.zeros((2, 2)),)
         )
     with pytest.raises(ValueError, match="observations"):
         prepare_sky_track(
             _circle(4),
-            t_jd=np.arange(4.0),
+            time_jd=np.arange(4.0),
             observations=(np.zeros((2, 2)), np.zeros(3), np.zeros(2)),
         )
 
 
 def test_iwa_region_radius_and_shading():
     """The IWA is a shaded reference disk of the given radius."""
-    sequence = prepare_sky_track(_circle(4), t_jd=np.arange(4.0), iwa_arcsec=0.3)
+    sequence = prepare_sky_track(_circle(4), time_jd=np.arange(4.0), iwa_arcsec=0.3)
     region = find_element(sequence.template, "iwa")
     assert region.outer_radius == pytest.approx(0.3)
     assert region.inner_radius == 0.0
@@ -322,13 +322,13 @@ def test_iwa_region_radius_and_shading():
     assert patch.get_facecolor()[3] > 0.0  # a TrackView region keeps its fill
 
     with pytest.raises(ValueError, match="iwa"):
-        prepare_sky_track(_circle(4), t_jd=np.arange(4.0), iwa_arcsec=-0.1)
+        prepare_sky_track(_circle(4), time_jd=np.arange(4.0), iwa_arcsec=-0.1)
 
 
 def test_positive_ra_offset_draws_left_of_the_star():
     """Positive RA draws left of the star, at equal x and y scale."""
     tracks = np.array([[[1.0, 0.0], [1.0, 0.5]]])
-    sequence = prepare_sky_track(tracks, t_jd=np.array([0.0, 1.0]))
+    sequence = prepare_sky_track(tracks, time_jd=np.array([0.0, 1.0]))
 
     from eyepiece import mpl
 
@@ -355,7 +355,7 @@ def test_weights_and_repeated_source_identity():
     )
     weights = np.array([1.0, 0.5, 0.0])
     sequence = prepare_sky_track(
-        tracks, t_jd=np.arange(4.0), source_ids=("b", "b", "c"), weights=weights
+        tracks, time_jd=np.arange(4.0), source_ids=("b", "b", "c"), weights=weights
     )
     view = sequence.frame(0)
     assert [find_element(view, f"path/{k}").source_id for k in range(3)] == [
@@ -398,7 +398,7 @@ def test_heads_fade_with_their_tracks_when_weights_do_not_peak_at_one():
     weights = np.array([0.5, 0.2])
     observations = (np.array([[0.1, 0.2]]), np.array([0.05]), np.array([0.05]))
     sequence = prepare_sky_track(
-        tracks, t_jd=np.arange(4.0), weights=weights, observations=observations
+        tracks, time_jd=np.arange(4.0), weights=weights, observations=observations
     )
     from eyepiece import mpl
 
@@ -419,7 +419,7 @@ def test_heads_fade_with_their_tracks_when_weights_do_not_peak_at_one():
 def test_default_source_is_one_shared_identity():
     """With no source IDs, every track is one source."""
     sequence = prepare_sky_track(
-        np.concatenate([_circle(4), _circle(4, radius=0.5)]), t_jd=np.arange(4.0)
+        np.concatenate([_circle(4), _circle(4, radius=0.5)]), time_jd=np.arange(4.0)
     )
     ids = {find_element(sequence.template, f"path/{k}").source_id for k in range(2)}
     assert len(ids) == 1 and None not in ids
@@ -429,11 +429,11 @@ def test_per_path_arguments_must_match_the_track_count():
     """Per-track arguments must have one entry per track."""
     tracks = np.concatenate([_circle(4), _circle(4, radius=0.5)])
     with pytest.raises(ValueError, match="source_ids has 3"):
-        prepare_sky_track(tracks, t_jd=np.arange(4.0), source_ids=("a", "b", "c"))
+        prepare_sky_track(tracks, time_jd=np.arange(4.0), source_ids=("a", "b", "c"))
     with pytest.raises(ValueError, match="weights has 1"):
-        prepare_sky_track(tracks, t_jd=np.arange(4.0), weights=[1.0])
+        prepare_sky_track(tracks, time_jd=np.arange(4.0), weights=[1.0])
     with pytest.raises(ValueError, match="weight"):
-        prepare_sky_track(tracks, t_jd=np.arange(4.0), weights=[1.0, -1.0])
+        prepare_sky_track(tracks, time_jd=np.arange(4.0), weights=[1.0, -1.0])
 
 
 # --- shapes and times ------------------------------------------------------------
@@ -446,23 +446,23 @@ def test_per_path_arguments_must_match_the_track_count():
 def test_unknown_track_shapes_raise_naming_the_shape(bad):
     """An unsupported track shape raises, naming the accepted shape."""
     with pytest.raises(ValueError, match=r"\(K, T, 2\)"):
-        prepare_sky_track(bad, t_jd=np.arange(4.0))
+        prepare_sky_track(bad, time_jd=np.arange(4.0))
     with pytest.raises(ValueError, match=r"\(K, T, 2\)"):
         prepare_sky_view(bad)
 
 
 def test_times_must_match_and_increase():
     """Times must match the track and be finite and increasing."""
-    with pytest.raises(ValueError, match="t_jd has 3"):
-        prepare_sky_track(_circle(4), t_jd=np.arange(3.0))
+    with pytest.raises(ValueError, match="time_jd has 3"):
+        prepare_sky_track(_circle(4), time_jd=np.arange(3.0))
     with pytest.raises(ValueError, match="increasing"):
-        prepare_sky_track(_circle(4), t_jd=np.array([0.0, 2.0, 1.0, 3.0]))
+        prepare_sky_track(_circle(4), time_jd=np.array([0.0, 2.0, 1.0, 3.0]))
     with pytest.raises(ValueError, match="finite"):
-        prepare_sky_track(_circle(4), t_jd=np.array([0.0, 1.0, np.nan, 3.0]))
+        prepare_sky_track(_circle(4), time_jd=np.array([0.0, 1.0, np.nan, 3.0]))
     with pytest.raises(ValueError, match="history"):
-        prepare_sky_track(_circle(4), t_jd=np.arange(4.0), history=0)
+        prepare_sky_track(_circle(4), time_jd=np.arange(4.0), history=0)
     with pytest.raises(ValueError, match="history"):
-        prepare_sky_track(_circle(4), t_jd=np.arange(4.0), history="window")
+        prepare_sky_track(_circle(4), time_jd=np.arange(4.0), history="window")
 
 
 def test_a_bad_time_grid_is_refused_before_propagating(monkeypatch):
@@ -476,17 +476,21 @@ def test_a_bad_time_grid_is_refused_before_propagating(monkeypatch):
 
     monkeypatch.setattr(KeplerianOrbit, "position_arcsec", counting)
     with pytest.raises(ValueError, match="increasing"):
-        prepare_sky_track(_circular_orbit(), t_jd=np.array([0.0, 2.0, 1.0]), **STELLAR)
+        prepare_sky_track(
+            _circular_orbit(), time_jd=np.array([0.0, 2.0, 1.0]), **STELLAR
+        )
     with pytest.raises(ValueError, match="history"):
-        prepare_sky_track(_circular_orbit(), t_jd=np.arange(3.0), history=-2, **STELLAR)
+        prepare_sky_track(
+            _circular_orbit(), time_jd=np.arange(3.0), history=-2, **STELLAR
+        )
     assert calls == []
 
 
 def test_the_orbit_door_names_what_is_missing():
     """The orbit door names each missing propagation argument."""
     with pytest.raises(TypeError, match="Ms_kg, dist_pc"):
-        prepare_sky_track(_circular_orbit(), t_jd=np.arange(3.0))
-    with pytest.raises(TypeError, match="t_jd"):
+        prepare_sky_track(_circular_orbit(), time_jd=np.arange(3.0))
+    with pytest.raises(TypeError, match="time_jd"):
         prepare_sky_view(_circular_orbit(), **STELLAR)
 
 
@@ -494,7 +498,7 @@ def test_nonfinite_rows_are_gaps_not_coordinates():
     """A nonfinite sample hides the head without losing its handle."""
     tracks = _circle(4)
     tracks[0, 2] = np.nan
-    sequence = prepare_sky_track(tracks, t_jd=np.arange(4.0))
+    sequence = prepare_sky_track(tracks, time_jd=np.arange(4.0))
 
     from eyepiece import mpl
 
@@ -507,7 +511,7 @@ def test_nonfinite_rows_are_gaps_not_coordinates():
     np.testing.assert_allclose(head.get_offsets()[0], tracks[0, 3])
 
     with pytest.raises(ValueError, match="finite"):
-        prepare_sky_track(np.full((1, 3, 2), np.nan), t_jd=np.arange(3.0))
+        prepare_sky_track(np.full((1, 3, 2), np.nan), time_jd=np.arange(3.0))
 
 
 # --- trails and seeking ---------------------------------------------------------
@@ -516,18 +520,18 @@ def test_nonfinite_rows_are_gaps_not_coordinates():
 def test_growing_and_sliding_trails_and_order_free_seeking():
     """Trails grow or slide by sample, and seeking is order free."""
     tracks = _circle(10)
-    t_jd = np.arange(10.0)
-    grown = prepare_sky_track(tracks, t_jd=t_jd, history="all")
-    sliding = prepare_sky_track(tracks, t_jd=t_jd, history=3)
-    bare = prepare_sky_track(tracks, t_jd=t_jd)
+    time_jd = np.arange(10.0)
+    grown = prepare_sky_track(tracks, time_jd=time_jd, history="all")
+    sliding = prepare_sky_track(tracks, time_jd=time_jd, history=3)
+    bare = prepare_sky_track(tracks, time_jd=time_jd)
 
     for i in (0, 7, 2, 9, 0):
-        assert find_element(grown.at(t_jd[i]).view, "trail/0").visible == (0, i + 1)
-        assert find_element(sliding.at(t_jd[i]).view, "trail/0").visible == (
+        assert find_element(grown.at(time_jd[i]).view, "trail/0").visible == (0, i + 1)
+        assert find_element(sliding.at(time_jd[i]).view, "trail/0").visible == (
             max(0, i - 2),
             i + 1,
         )
-        assert find_element(grown.at(t_jd[i]).view, "path/0").visible == (0, None)
+        assert find_element(grown.at(time_jd[i]).view, "path/0").visible == (0, None)
     assert (
         find_element(grown.frame(2), "trail/0").xy
         is find_element(grown.frame(7), "trail/0").xy
@@ -536,7 +540,7 @@ def test_growing_and_sliding_trails_and_order_free_seeking():
         find_element(bare.template, "trail/0")
 
     direct = find_element(sliding.frame(2), "trail/0")
-    seeked = find_element(sliding.at(t_jd[2]).view, "trail/0")
+    seeked = find_element(sliding.at(time_jd[2]).view, "trail/0")
     assert direct.visible == seeked.visible
 
 
@@ -546,8 +550,10 @@ def test_growing_and_sliding_trails_and_order_free_seeking():
 def test_orbit_preparation_propagates_once(monkeypatch):
     """Prepare east/north once; circular solution from Green (1985), ch. 17."""
     orbit = _circular_orbit(3)
-    t_jd = jnp.linspace(0.0, 400.0, 30)
-    phase = np.linspace(0.0, 0.5, 3)[:, None] + np.sqrt(G * Msun2kg) * np.asarray(t_jd)
+    time_jd = jnp.linspace(0.0, 400.0, 30)
+    phase = np.linspace(0.0, 0.5, 3)[:, None] + np.sqrt(G * Msun2kg) * np.asarray(
+        time_jd
+    )
     expected_ra = 0.1 * np.sin(phase)
     expected_dec = 0.1 * np.cos(phase)
 
@@ -566,7 +572,7 @@ def test_orbit_preparation_propagates_once(monkeypatch):
     monkeypatch.setattr(KeplerianOrbit, "position_arcsec", counting_position)
     monkeypatch.setattr(KeplerianOrbit, "propagate", counting_propagate)
 
-    sequence = prepare_sky_track(orbit, t_jd=t_jd, history=5, **STELLAR)
+    sequence = prepare_sky_track(orbit, time_jd=time_jd, history=5, **STELLAR)
     assert calls == {"position_arcsec": 1, "propagate": 1}
     for k in range(3):
         path = find_element(sequence.template, f"path/{k}")
@@ -598,13 +604,13 @@ def test_dense_circular_orbit_matches_analytic_checkpoints():
     """Prepared east/north follows Green (1985), ch. 17 circular motion."""
     radius = _circle_radius_arcsec()
     period_d = 365.25
-    t_jd = np.linspace(0.0, period_d, 400)
+    time_jd = np.linspace(0.0, period_d, 400)
     sequence = prepare_sky_track(
-        _circular_orbit(), t_jd=t_jd, iwa_arcsec=0.99 * radius, **STELLAR
+        _circular_orbit(), time_jd=time_jd, iwa_arcsec=0.99 * radius, **STELLAR
     )
 
     for index in (0, 57, 199, 311, 399):
-        phase = np.sqrt(G * Msun2kg) * t_jd[index]
+        phase = np.sqrt(G * Msun2kg) * time_jd[index]
         expected = radius * np.array([np.sin(phase), np.cos(phase)])
         head = find_element(sequence.frame(index), "head/0")
         np.testing.assert_allclose(head.xy[0], expected, rtol=0, atol=1e-6)
@@ -616,7 +622,7 @@ def test_dense_circular_orbit_matches_analytic_checkpoints():
     # between samples the head holds the earlier propagated sample exactly:
     # it stays on the orbit and never cuts the chord toward the IWA
     for t in np.linspace(0.0, period_d, 1111):
-        held = int(np.searchsorted(t_jd, t, side="right")) - 1
+        held = int(np.searchsorted(time_jd, t, side="right")) - 1
         head = find_element(sequence.at(t).view, "head/0")
         np.testing.assert_array_equal(head.xy[0], path.xy[held])
         assert np.linalg.norm(head.xy[0]) > 0.99 * radius
@@ -633,7 +639,9 @@ def test_no_renderer_interpolates_a_sparse_chord_through_the_iwa():
     radius = 1.0
     tracks = _circle(3, radius=radius)
     iwa = 0.6 * radius  # every chord's midpoint sits at 0.5 * radius
-    sequence = prepare_sky_track(tracks, t_jd=np.array([0.0, 1.0, 2.0]), iwa_arcsec=iwa)
+    sequence = prepare_sky_track(
+        tracks, time_jd=np.array([0.0, 1.0, 2.0]), iwa_arcsec=iwa
+    )
 
     from eyepiece import mpl
 
@@ -654,8 +662,8 @@ def test_no_renderer_interpolates_a_sparse_chord_through_the_iwa():
 
 def test_equal_time_marks_spread_where_the_planet_moves_fast():
     """Equal-time samples spread near periapsis, bunch near apoapsis."""
-    t_jd = np.linspace(0.0, 541.0, 120)
-    sequence = prepare_sky_track(_eccentric_orbit(), t_jd=t_jd, **STELLAR)
+    time_jd = np.linspace(0.0, 541.0, 120)
+    sequence = prepare_sky_track(_eccentric_orbit(), time_jd=time_jd, **STELLAR)
     xy = find_element(sequence.template, "path/0").xy
     step = np.linalg.norm(np.diff(xy, axis=0), axis=1)
     separation = np.linalg.norm(xy[:-1], axis=1)
@@ -677,16 +685,16 @@ def test_static_view_invents_no_timestamps():
     assert all(find_element(view, f"path/{k}").visible == (0, None) for k in range(2))
     assert np.shares_memory(find_element(view, "path/0").xy, tracks)
 
-    with pytest.raises(TypeError, match="t_jd"):
-        prepare_sky_view(tracks, t_jd=np.arange(5.0))
+    with pytest.raises(TypeError, match="time_jd"):
+        prepare_sky_view(tracks, time_jd=np.arange(5.0))
 
 
 def test_static_view_from_an_orbit_matches_the_sequence_paths():
     """The static and sequence views share one builder's paths."""
     orbit = _eccentric_orbit(2)
-    t_jd = np.linspace(0.0, 300.0, 25)
-    view = prepare_sky_view(orbit, t_jd=t_jd, **STELLAR)
-    sequence = prepare_sky_track(orbit, t_jd=t_jd, **STELLAR)
+    time_jd = np.linspace(0.0, 300.0, 25)
+    view = prepare_sky_view(orbit, time_jd=time_jd, **STELLAR)
+    sequence = prepare_sky_track(orbit, time_jd=time_jd, **STELLAR)
     for k in range(2):
         np.testing.assert_array_equal(
             find_element(view, f"path/{k}").xy,
@@ -726,7 +734,7 @@ def test_manim_places_heads_observations_and_iwa_in_data_coordinates(tmp_path):
     tracks = np.concatenate([_circle(6), _circle(6, radius=0.7, phase=0.3)])
     sequence = prepare_sky_track(
         tracks,
-        t_jd=np.arange(6.0),
+        time_jd=np.arange(6.0),
         source_ids=("b", "c"),
         observations=obs,
         iwa_arcsec=0.2,
@@ -769,7 +777,7 @@ def test_manim_error_bar_endpoints_match_data_and_matplotlib(tmp_path):
     xerr = np.array([0.02, 0.05, 0.08])
     yerr = np.array([0.03, 0.01, 0.06])
     sequence = prepare_sky_track(
-        _circle(4), t_jd=np.arange(4.0), observations=(xy, xerr, yerr)
+        _circle(4), time_jd=np.arange(4.0), observations=(xy, xerr, yerr)
     )
     view = sequence.frame(1)
     spec = view.axes

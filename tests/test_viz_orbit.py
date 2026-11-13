@@ -147,7 +147,7 @@ def test_plot_sky_track_bare_arrays_door():
     assert "path/1" in result.parts
     np.testing.assert_array_equal(result.parts["path/1"].get_xydata(), stacked[1])
 
-    with pytest.raises(TypeError, match="t_jd"):
+    with pytest.raises(TypeError, match="time_jd"):
         plot_sky_track((ra, dec), T_JD)
 
 
@@ -305,7 +305,7 @@ def test_plot_orbit_ascending_node_rises():
     _, ascending, _ = _mark_geometry(orbit)
 
     t_dense = jnp.linspace(2460000.0, 2460900.0, 4000)
-    r_AU, _, _ = orbit.propagate(t_jd=t_dense, Ms_kg=STELLAR["Ms_kg"])
+    r_AU, _, _ = orbit.propagate(time_jd=t_dense, Ms_kg=STELLAR["Ms_kg"])
     xyz = np.moveaxis(np.asarray(r_AU), 1, 2)[0]
     nearest = np.argmin(np.linalg.norm(xyz - ascending[0], axis=-1))
     assert 0 < nearest < len(xyz) - 1

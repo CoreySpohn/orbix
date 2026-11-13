@@ -107,12 +107,12 @@ def test_propagate_returns_three_arrays_with_expected_shapes():
 
     orbit = KeplerianOrbit(**_earthlike_orbit_params())
     trig_solver = get_grid_solver(level="scalar", E=False, trig=True, jit=True)
-    t_jd = jnp.linspace(0.0, 365.0, 10)
+    time_jd = jnp.linspace(0.0, 365.0, 10)
 
     Ms_kg = jnp.atleast_1d(1.988409870698051e30)  # 1 solar mass
     r_AU, phase_angle_rad, dist_AU = orbit.propagate(
         trig_solver,
-        t_jd,
+        time_jd,
         Ms_kg=Ms_kg,
     )
 
@@ -200,10 +200,10 @@ def test_propagate_raises_without_Ms_kg_keyword():
 
     orbit = KeplerianOrbit(**_earthlike_orbit_params())
     trig_solver = get_grid_solver(level="scalar", E=False, trig=True, jit=True)
-    t_jd = jnp.array([0.0])
+    time_jd = jnp.array([0.0])
 
     with pytest.raises(TypeError):
-        orbit.propagate(trig_solver, t_jd, 1.988409870698051e30)
+        orbit.propagate(trig_solver, time_jd, 1.988409870698051e30)
 
 
 def test_position_arcsec_shape_units_and_north_periapsis():
@@ -213,14 +213,14 @@ def test_position_arcsec_shape_units_and_north_periapsis():
 
     orbit = KeplerianOrbit(**_earthlike_orbit_params())
     trig_solver = get_grid_solver(level="scalar", E=False, trig=True, jit=True)
-    t_jd = jnp.linspace(0.0, 365.0, 5)
+    time_jd = jnp.linspace(0.0, 365.0, 5)
 
     Ms_kg = jnp.atleast_1d(1.988409870698051e30)
     dist_pc = jnp.atleast_1d(10.0)
 
     ra, dec = orbit.position_arcsec(
         trig_solver,
-        t_jd,
+        time_jd,
         Ms_kg=Ms_kg,
         dist_pc=dist_pc,
     )
@@ -359,9 +359,9 @@ def test_separation_and_position_at_circular_quadratures():
     )
     # Choose distance so that the angular semi-major axis is 0.1 arcsec.
     stellar = dict(Ms_kg=Msun2kg, dist_pc=10.0 * orbit.a_AU)
-    t_jd = jnp.array([0.0, 100.0, 200.0, 300.0])
-    ra, dec = orbit.position_arcsec(solve_trig, t_jd, **stellar)
-    sep = orbit.separation_arcsec(solve_trig, t_jd, **stellar)
+    time_jd = jnp.array([0.0, 100.0, 200.0, 300.0])
+    ra, dec = orbit.position_arcsec(solve_trig, time_jd, **stellar)
+    sep = orbit.separation_arcsec(solve_trig, time_jd, **stellar)
     assert ra.shape == dec.shape == sep.shape == (1, 4)
     np.testing.assert_allclose(ra[0], [0.0, 0.05, 0.0, -0.05], atol=1e-12)
     np.testing.assert_allclose(dec[0], [0.1, 0.0, -0.1, 0.0], atol=1e-12)
@@ -369,17 +369,19 @@ def test_separation_and_position_at_circular_quadratures():
 
 
 def test_default_trig_solver_matches_explicit_grid_solver():
-    """propagate(t_jd=...) with no solver matches the explicit grid solver."""
+    """propagate(time_jd=...) with no solver matches the explicit grid solver."""
     from orbix.kepler.shortcuts.grid import get_grid_solver
     from orbix.orbit import KeplerianOrbit
 
     orbit = KeplerianOrbit(**_earthlike_orbit_params())
-    t_jd = jnp.linspace(0.0, 365.0, 7)
+    time_jd = jnp.linspace(0.0, 365.0, 7)
     Ms_kg = jnp.atleast_1d(1.988409870698051e30)
 
     explicit = get_grid_solver(level="scalar", E=False, trig=True, jit=True)
-    r_default, beta_default, d_default = orbit.propagate(t_jd=t_jd, Ms_kg=Ms_kg)
-    r_explicit, beta_explicit, d_explicit = orbit.propagate(explicit, t_jd, Ms_kg=Ms_kg)
+    r_default, beta_default, d_default = orbit.propagate(time_jd=time_jd, Ms_kg=Ms_kg)
+    r_explicit, beta_explicit, d_explicit = orbit.propagate(
+        explicit, time_jd, Ms_kg=Ms_kg
+    )
 
     np.testing.assert_array_equal(r_default, r_explicit)
     np.testing.assert_array_equal(beta_default, beta_explicit)
@@ -391,21 +393,21 @@ def test_default_solver_on_position_and_separation():
     from orbix.orbit import KeplerianOrbit
 
     orbit = KeplerianOrbit(**_earthlike_orbit_params())
-    t_jd = jnp.linspace(0.0, 365.0, 5)
+    time_jd = jnp.linspace(0.0, 365.0, 5)
     Ms_kg = jnp.atleast_1d(1.988409870698051e30)
 
-    ra, dec = orbit.position_arcsec(t_jd=t_jd, Ms_kg=Ms_kg, dist_pc=10.0)
-    sep = orbit.separation_arcsec(t_jd=t_jd, Ms_kg=Ms_kg, dist_pc=10.0)
+    ra, dec = orbit.position_arcsec(time_jd=time_jd, Ms_kg=Ms_kg, dist_pc=10.0)
+    sep = orbit.separation_arcsec(time_jd=time_jd, Ms_kg=Ms_kg, dist_pc=10.0)
     assert ra.shape == (1, 5)
     np.testing.assert_allclose(sep, jnp.sqrt(ra**2 + dec**2), rtol=1e-10)
 
 
 def test_propagate_missing_times_raises():
-    """Omitting t_jd raises a TypeError that names the argument."""
+    """Omitting time_jd raises a TypeError that names the argument."""
     from orbix.orbit import KeplerianOrbit
 
     orbit = KeplerianOrbit(**_earthlike_orbit_params())
-    with pytest.raises(TypeError, match="t_jd"):
+    with pytest.raises(TypeError, match="time_jd"):
         orbit.propagate(Ms_kg=jnp.atleast_1d(2.0e30))
 
 
@@ -414,7 +416,7 @@ def test_propagate_times_passed_as_solver_raises():
     from orbix.orbit import KeplerianOrbit
 
     orbit = KeplerianOrbit(**_earthlike_orbit_params())
-    with pytest.raises(TypeError, match="t_jd"):
+    with pytest.raises(TypeError, match="time_jd"):
         orbit.propagate(jnp.linspace(0.0, 10.0, 3), Ms_kg=jnp.atleast_1d(2.0e30))
 
 
@@ -501,5 +503,5 @@ def test_from_period_broadcasts_batched_samples():
     )
     assert orbit.a_AU.shape == (K,)
     assert orbit.t0_d.shape == (K,)
-    r_AU, _, _ = orbit.propagate(t_jd=jnp.linspace(0.0, 100.0, 3), Ms_kg=2.0e30)
+    r_AU, _, _ = orbit.propagate(time_jd=jnp.linspace(0.0, 100.0, 3), Ms_kg=2.0e30)
     assert r_AU.shape == (K, 3, 3)

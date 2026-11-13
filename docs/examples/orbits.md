@@ -76,7 +76,7 @@ orbit = KeplerianOrbit(
     a_AU=A_AU, e=ECC, W_rad=BIG_OMEGA_RAD, i_rad=INC_RAD,
     w_rad=SMALL_OMEGA_RAD, M0_rad=M0_RAD, t0_d=T0_D,
 )
-t_jd = jnp.linspace(T0_D, T0_D + PERIOD_D, 240)
+time_jd = jnp.linspace(T0_D, T0_D + PERIOD_D, 240)
 
 # A second cast for the 3D views: three near-coplanar planets, the way a
 # planetary system actually sits. Keeping the mutual inclinations small (7 to
@@ -113,7 +113,7 @@ OUTER_PERIOD_D = 2.35**1.5 * 365.25
 t_system = jnp.linspace(T0_D, T0_D + OUTER_PERIOD_D, 240)
 
 result = viz.plot_sky_track(
-    orbit, t_jd, Ms_kg=MSUN_KG, dist_pc=10.0,
+    orbit, time_jd, Ms_kg=MSUN_KG, dist_pc=10.0,
     style=styles["planet b"], iwa_arcsec=0.06,
 )
 ```
@@ -136,7 +136,7 @@ rng = np.random.default_rng(7)
 SIGMA_ARCSEC = 0.008
 t_obs = T0_D + np.array([70.0, 250.0, 430.0])
 ra_true, dec_true = orbit.position_arcsec(
-    t_jd=jnp.asarray(t_obs), Ms_kg=MSUN_KG, dist_pc=10.0
+    time_jd=jnp.asarray(t_obs), Ms_kg=MSUN_KG, dist_pc=10.0
 )
 # Observations are (xy, xerr, yerr): positions shaped (P, 2) and one-sigma
 # errors along RA and Dec.
@@ -161,7 +161,7 @@ draws = dict(
 )
 fan = KeplerianOrbit.from_period(**draws, Ms_kg=MSUN_KG)
 result = viz.plot_sky_track(
-    fan, t_jd, Ms_kg=MSUN_KG, dist_pc=10.0,
+    fan, time_jd, Ms_kg=MSUN_KG, dist_pc=10.0,
     style=styles["planet b"], iwa_arcsec=0.06, observations=epochs,
 )
 ```
@@ -220,7 +220,7 @@ for name, planet in zip(PLANETS, one_planet):
 # and keeps the scale equal on all three axes; the tick locator keeps the
 # shorter axis from crowding its labels together.
 z_half = 1.15 * float(np.max(np.abs(
-    np.asarray(system.propagate(t_jd=t_system, Ms_kg=MSUN_KG)[0])[:, 2]
+    np.asarray(system.propagate(time_jd=t_system, Ms_kg=MSUN_KG)[0])[:, 2]
 )))
 xy_half = ax3d.get_xlim()[1]
 ax3d.set_zlim(-z_half, z_half)

@@ -117,7 +117,7 @@ def test_preparation_runs_without_either_renderer_interface():
         "theta = np.linspace(0.0, 6.0, 7)\n"
         "xy = np.stack([np.cos(theta), np.sin(theta)], axis=-1)[None]\n"
         "obs = (np.array([[0.5, 0.2]]), np.array([0.01]), np.array([0.02]))\n"
-        "seq = prepare_sky_track(xy, t_jd=np.arange(7.0), observations=obs,\n"
+        "seq = prepare_sky_track(xy, time_jd=np.arange(7.0), observations=obs,\n"
         "                        iwa_arcsec=0.3, history=3)\n"
         "seq.frame(6); seq.strip([0, 3]); seq.at(2.5); seq.schedule(1.0, 10)\n"
         "prepare_sky_view(xy, iwa_arcsec=0.3)\n"

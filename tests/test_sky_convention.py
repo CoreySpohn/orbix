@@ -115,7 +115,9 @@ def test_ascending_node_cardinal_directions(node_deg, expected):
         t0_d=0.0,
     )
     # For e=w=M0=0, t=t0 is the ascending node.
-    ra, dec = orbit.position_arcsec(t_jd=jnp.array([0.0]), Ms_kg=Msun2kg, dist_pc=10.0)
+    ra, dec = orbit.position_arcsec(
+        time_jd=jnp.array([0.0]), Ms_kg=Msun2kg, dist_pc=10.0
+    )
     assert ra.shape == dec.shape == (1, 1)
     np.testing.assert_allclose([ra[0, 0], dec[0, 0]], expected, atol=1e-12, rtol=0)
 
@@ -153,7 +155,7 @@ def test_alpha_cen_published_astrometry(alpha_cen_orbit):
     orbit, stellar = alpha_cen_orbit
     epoch, pa_deg, sigma_pa, rho_arcsec, sigma_rho = ALPHA_CEN_ASTROMETRY.T
     ra, dec = orbit.position_arcsec(
-        t_jd=jnp.asarray((epoch - 2000.0) * 365.25), **stellar
+        time_jd=jnp.asarray((epoch - 2000.0) * 365.25), **stellar
     )
     delta_pa = (np.rad2deg(np.arctan2(ra[0], dec[0])) - pa_deg + 180.0) % 360.0 - 180.0
     delta_rho = np.hypot(ra[0], dec[0]) - rho_arcsec

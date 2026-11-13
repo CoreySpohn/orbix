@@ -62,7 +62,7 @@ orbit = KeplerianOrbit(
     a_AU=A_AU, e=ECC, W_rad=BIG_OMEGA_RAD, i_rad=INC_RAD,
     w_rad=SMALL_OMEGA_RAD, M0_rad=M0_RAD, t0_d=T0_D,
 )
-t_jd = jnp.linspace(T0_D, T0_D + PERIOD_D, 240)
+time_jd = jnp.linspace(T0_D, T0_D + PERIOD_D, 240)
 
 # A second cast for the 3D views: three near-coplanar planets, the way a
 # planetary system actually sits. Keeping the mutual inclinations small (7 to
@@ -109,7 +109,7 @@ cannot see into.
 
 ```{code-cell} ipython3
 result = viz.plot_sky_track(
-    orbit, t_jd, Ms_kg=MSUN_KG, dist_pc=10.0,
+    orbit, time_jd, Ms_kg=MSUN_KG, dist_pc=10.0,
     style=styles["planet b"], iwa_arcsec=0.06,
 )
 ```
@@ -127,7 +127,7 @@ rng = np.random.default_rng(11)
 SIGMA_ARCSEC = 0.008
 t_obs = T0_D + np.array([70.0, 250.0, 430.0])
 ra_true, dec_true = orbit.position_arcsec(
-    t_jd=jnp.asarray(t_obs), Ms_kg=MSUN_KG, dist_pc=10.0
+    time_jd=jnp.asarray(t_obs), Ms_kg=MSUN_KG, dist_pc=10.0
 )
 epochs = (
     np.column_stack([
@@ -152,7 +152,7 @@ fan = KeplerianOrbit.from_period(
 )
 weights = rng.dirichlet(np.full(K, 3.0))
 result = viz.plot_sky_track(
-    fan, t_jd, Ms_kg=MSUN_KG, dist_pc=10.0,
+    fan, time_jd, Ms_kg=MSUN_KG, dist_pc=10.0,
     style=styles["planet b"], weights=weights, iwa_arcsec=0.06,
     observations=epochs,
 )
@@ -218,7 +218,7 @@ for name, planet in zip(PLANETS, one_planet):
 # and keeps the scale equal on all three axes; the tick locator keeps the
 # shorter axis from crowding its labels together.
 z_half = 1.15 * float(np.max(np.abs(
-    np.asarray(system.propagate(t_jd=t_system, Ms_kg=MSUN_KG)[0])[:, 2]
+    np.asarray(system.propagate(time_jd=t_system, Ms_kg=MSUN_KG)[0])[:, 2]
 )))
 xy_half = ax3d.get_xlim()[1]
 ax3d.set_zlim(-z_half, z_half)
@@ -299,11 +299,11 @@ from eyepiece.style import snapshot_profile
 from matplotlib.font_manager import FontProperties
 
 view = viz.prepare_sky_view(
-    fan, t_jd=t_jd, Ms_kg=MSUN_KG, dist_pc=10.0, source_ids="planet b",
+    fan, time_jd=time_jd, Ms_kg=MSUN_KG, dist_pc=10.0, source_ids="planet b",
     weights=weights, observations=epochs, iwa_arcsec=0.06,
 )
 sequence = viz.prepare_sky_track(
-    orbit, t_jd=t_jd, Ms_kg=MSUN_KG, dist_pc=10.0, source_ids="planet b",
+    orbit, time_jd=time_jd, Ms_kg=MSUN_KG, dist_pc=10.0, source_ids="planet b",
     observations=epochs, iwa_arcsec=0.06, history=60,
 )
 cast = SourceCast(["planet b"])
@@ -354,7 +354,7 @@ variants = [
 fig, axes = plt.subplots(2, 3, figsize=(12.0, 7.4), layout="constrained")
 for ax, (label, kw) in zip(axes.ravel(), variants):
     viz.plot_sky_track(
-        fan, t_jd, Ms_kg=MSUN_KG, dist_pc=10.0, ax=ax,
+        fan, time_jd, Ms_kg=MSUN_KG, dist_pc=10.0, ax=ax,
         **{"style": styles["planet b"], **kw},
     )
     ax.set_title(label, fontsize=10.5)
@@ -457,7 +457,7 @@ Positions are `(N, 3)`, one row per point, while `propagate` returns
 `(K, 3, N)`; transpose one orbit out of the batch to feed it.
 
 ```{code-cell} ipython3
-xyz = np.asarray(orbit.propagate(t_jd=t_jd, Ms_kg=MSUN_KG)[0][0]).T
+xyz = np.asarray(orbit.propagate(time_jd=time_jd, Ms_kg=MSUN_KG)[0][0]).T
 depth = viz.depth_scale(xyz, azim_deg=-50.0, elev_deg=25.0)
 mult = viz.depth_size(depth)
 
