@@ -43,6 +43,17 @@
 * The broken predict/pdet functions and the `discrete_e` factory were removed
   (they did not work correctly and had no working callers).
 
+## [4.0.0](https://github.com/CoreySpohn/orbix/compare/v3.0.0...v4.0.0) (2026-11-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* the time argument is time_jd
+
+### Code Refactoring
+
+* the time argument is time_jd ([272453b](https://github.com/CoreySpohn/orbix/commit/272453b3cbb484c5b57358c7cac8e8f3adf05512))
+
 ## [3.0.0](https://github.com/CoreySpohn/orbix/compare/v2.0.0...v3.0.0) (2026-11-04)
 
 
