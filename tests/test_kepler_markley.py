@@ -163,3 +163,25 @@ def test_gradients_with_integer_constants():
     periapsis = jax.jit(jax.grad(lambda e: E_solve(0, e)))(0.3)
     np.testing.assert_allclose(circular, 1.0, rtol=0, atol=2e-15)
     np.testing.assert_allclose(periapsis, 0.0, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize(
+    "x64,dtype", [(False, np.float32), (True, np.float32), (True, np.float64)]
+)
+def test_tracing_precision_context(x64, dtype):
+    """High-precision roots agree within 16 eps; catches int32 literal overflow.
+
+    The tolerance covers argument reduction and conditioning at e=0.95 on
+    these interior points. Explicit float32 inputs stay float32 under x64.
+    """
+    with jax.enable_x64(x64):
+        means = np.array([-0.2, 0.0, 0.01, 1.0, 3.0, 6.1], dtype=dtype)
+        eccentricity = dtype(0.95)
+        expected = np.array(
+            [_reference(float(m) % two_pi, eccentricity) for m in means]
+        ).T
+        result = jax.jit(E_solve_trig)(jnp.array(means), jnp.array(eccentricity))
+        assert all(value.dtype == dtype for value in result)
+        np.testing.assert_allclose(
+            result, expected, rtol=0, atol=16 * np.finfo(dtype).eps
+        )

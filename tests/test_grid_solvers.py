@@ -8,7 +8,7 @@ from hwoutils.constants import two_pi
 from hypothesis import example, given
 from hypothesis import strategies as st
 
-from orbix.kepler.markley import E_solve
+from orbix.kepler.markley import E_solve, E_solve_trig
 from orbix.kepler.shortcuts.grid import get_grid_solver
 
 
@@ -158,3 +158,72 @@ def test_linear_grid_monotone_at_cell_boundary(grid_solvers, cell):
     assert 0 <= result[1] - result[0] <= 2e-10 / (1 - 0.5) + 2e-12
     for trig in (np.asarray(triple[1:]), np.asarray(trig_only)):
         assert np.all(np.abs(trig[:, 1] - trig[:, 0]) <= 2e-10 / (1 - 0.5) + 2e-12)
+
+
+@pytest.mark.parametrize("kind", ["linear", "bilinear"])
+@pytest.mark.parametrize("outputs", [(True, True), (True, False), (False, True)])
+def test_grid_precision_and_cache(kind, outputs):
+    """Dtypes match input promotion exactly and caches separate default dtypes.
+
+    Compare all builders with the combined output to 2 eps (floating summation
+    floor). At a table node, 8 eps agreement with Markley checks table precision,
+    not just the output cast. Frozen float32 values pin the pre-fix behavior.
+    """
+    low = high = None
+    for x64 in (False, True, False):
+        with jax.enable_x64(x64):
+            solver = get_grid_solver(
+                kind=kind, E=outputs[0], trig=outputs[1], n_e=16, n_M=64
+            )
+            if x64:
+                high = solver
+                assert high is not low
+            elif low is None:
+                low = solver
+            else:
+                assert solver is low
+            for dtype in [jnp.float32, jnp.float64] if x64 else [jnp.float32]:
+                mean, e = jnp.asarray(2.0, dtype), jnp.asarray(0.3, dtype)
+                values = jax.jit(solver)(mean, e)
+                assert all(v.dtype == dtype for v in jax.tree.leaves(values))
+                full = get_grid_solver(kind=kind, n_e=16, n_M=64)(mean, e)
+                expected = full if all(outputs) else full[0] if outputs[0] else full[1:]
+                np.testing.assert_allclose(
+                    values, expected, rtol=0, atol=2 * np.finfo(dtype).eps
+                )
+            if x64:
+                mixed = solver(jnp.float32(2.0), jnp.float64(0.3))
+                assert all(v.dtype == jnp.float64 for v in jax.tree.leaves(mixed))
+                node = (jnp.float64(two_pi / 4), jnp.float64(0.25))
+                truth = E_solve_trig(*node)
+                expected = (
+                    truth if all(outputs) else truth[0] if outputs[0] else truth[1:]
+                )
+                np.testing.assert_allclose(
+                    solver(*node), expected, rtol=0, atol=8 * np.finfo(np.float64).eps
+                )
+
+
+@pytest.mark.parametrize("kind", ["linear", "bilinear"])
+def test_grid_float32_values_unchanged(kind):
+    """Frozen pre-fix float32 results agree exactly (zero-tolerance regression)."""
+    expected = {
+        "linear": [
+            [0.10000000149011612, 2.2441091537475586, 5.218289852142334],
+            [0.09982188791036606, 0.7811498641967773, -0.874165952205658],
+            [0.9949170351028442, -0.6230855584144592, 0.484312504529953],
+        ],
+        "bilinear": [
+            [0.10000000894069672, 2.235628128051758, 5.180873394012451],
+            [0.09982188791036606, 0.7862817645072937, -0.8907663822174072],
+            [0.9949170351028442, -0.6163423657417297, 0.4508167803287506],
+        ],
+    }
+    with jax.enable_x64(False):
+        solver = get_grid_solver(kind=kind, n_e=16, n_M=64)
+        result = jax.jit(jax.vmap(solver))(
+            jnp.array([0.1, 2.0, -0.3]), jnp.array([0.0, 0.3, 0.9])
+        )
+        np.testing.assert_array_equal(
+            result, np.asarray(expected[kind], dtype=np.float32)
+        )

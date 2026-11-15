@@ -41,6 +41,13 @@ def E_solve_trig(M, e):
     are those of the implicit Kepler solution away from the wrap seam; at the
     seam the derivative follows the continuous, unwrapped E convention.
     """
+    return _solve_trig_value(M, e)
+
+
+def _solve_trig_value(M, e):
+    """Evaluate Markley's algorithm without a derivative rule."""
+    dtype = jnp.result_type(M, e, 0.0)
+    M, e = jnp.asarray(M, dtype=dtype), jnp.asarray(e, dtype=dtype)
     reduced = jnp.fmod(M, two_pi)
     absolute = jnp.abs(reduced)
     reflected = absolute > jnp.pi
@@ -74,7 +81,10 @@ def E_solve_trig(M, e):
             * (
                 1 / 120
                 - x2
-                * (1 / 5040 - x2 * (1 / 362880 - x2 * (1 / 39916800 - x2 / 6227020800)))
+                * (
+                    1 / 5040
+                    - x2 * (1 / 362880 - x2 * (1 / 39916800 - x2 / 6227020800.0))
+                )
             )
         )
     )

@@ -28,7 +28,6 @@ from orbix.kepler.core import E_solve_jit
 
 
 # Caching here lets us give the same solver to multiple planets.
-@cache
 def get_grid_solver(
     level="scalar", jit=False, kind="bilinear", E=True, trig=True, n_e=512, n_M=2048
 ):
@@ -55,6 +54,15 @@ def get_grid_solver(
         n_M:
             The number of mean anomaly steps in the grid.
     """
+    dtype = jnp.asarray(0.0).dtype
+    # Keep cached arrays concrete even when first requested inside a JIT trace.
+    with jax.ensure_compile_time_eval():
+        return _get_grid_solver(level, jit, kind, E, trig, n_e, n_M, dtype)
+
+
+@cache
+def _get_grid_solver(level, jit, kind, E, trig, n_e, n_M, dtype):
+    """Cache by construction dtype as well as lookup configuration."""
     if not E and not trig:
         raise ValueError("get_grid_solver: at least one of E or trig must be True")
     if E and trig:
@@ -84,6 +92,18 @@ def get_grid_solver(
     if jit:
         func = jax.jit(func)
     return func
+
+
+def _with_input_dtype(lookup):
+    """Preserve the floating input result dtype independently of table dtype."""
+
+    def solve(M_scalar, e_scalar):
+        dtype = jnp.result_type(M_scalar, e_scalar, 0.0)
+        return jax.tree.map(
+            lambda value: value.astype(dtype), lookup(M_scalar, e_scalar)
+        )
+
+    return solve
 
 
 def _setup(n_e: int = 1000, n_M: int = 3600):
@@ -178,7 +198,7 @@ def E_trig_lin(n_e=1024, n_M=4096):
             _lin(cosE_grid, dcosE_dind, *p),
         )
 
-    return _lookup_scalar
+    return _with_input_dtype(_lookup_scalar)
 
 
 def E_lin(n_e=1024, n_M=4096):
@@ -193,7 +213,7 @@ def E_lin(n_e=1024, n_M=4096):
         p = _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, n_M_int, n_e)
         return _lin(E_grid, dE_dind_grid, *p)
 
-    return _lookup_scalar
+    return _with_input_dtype(_lookup_scalar)
 
 
 def trig_lin(n_e=1024, n_M=4096):
@@ -208,7 +228,7 @@ def trig_lin(n_e=1024, n_M=4096):
         p = _grid_lin_params(M_scalar, e_scalar, inv_dM, inv_de, n_M_int, n_e)
         return _lin(sinE_grid, dsinE_dind, *p), _lin(cosE_grid, dcosE_dind, *p)
 
-    return _lookup_scalar
+    return _with_input_dtype(_lookup_scalar)
 
 
 ################################################################################
@@ -233,6 +253,12 @@ def _indices_frac(M, e, inv_dM, inv_de, n_M, n_e):
 
 
 def _E_grid_base(n_e: int, n_M: int, *, dtype=jnp.float32):
+    with jax.ensure_compile_time_eval():
+        return _cached_E_grid_base(n_e, n_M, jnp.dtype(dtype))
+
+
+@cache
+def _cached_E_grid_base(n_e, n_M, dtype):
     e_grid = jnp.linspace(0.0, 1.0, n_e, dtype=dtype, endpoint=False)
     M_grid = jnp.linspace(0.0, two_pi, n_M, dtype=dtype, endpoint=False)
     E_grid = jax.vmap(lambda e: E_solve_jit(M_grid, e))(e_grid)
@@ -243,7 +269,9 @@ def _E_grid_base(n_e: int, n_M: int, *, dtype=jnp.float32):
     E_grid = jnp.concatenate([E_grid, _last_E_row[jnp.newaxis, :]], axis=0)
     # Append last column of 2pi-eps to make the grid complete with one more
     # column because we always pull in a square patch of 2x2
-    _last_E_col = jnp.repeat(two_pi - jnp.finfo(dtype).eps, n_e + 1, axis=0)
+    _last_E_col = jnp.repeat(
+        jnp.asarray(two_pi - jnp.finfo(dtype).eps, dtype=dtype), n_e + 1, axis=0
+    )
     E_grid = jnp.concatenate([E_grid, _last_E_col[:, jnp.newaxis]], axis=1)
     inv_dM = 1.0 / (M_grid[1] - M_grid[0])
     inv_de = 1.0 / (e_grid[1] - e_grid[0])
@@ -262,6 +290,13 @@ def _build_E_trig_grid(n_e: int, n_M: int, *, dtype=jnp.float32):
 
 
 def _build_trig_grid(n_e: int, n_M: int, *, dtype=jnp.float32):
+    """Return a cached trig table, materialized outside any active trace."""
+    with jax.ensure_compile_time_eval():
+        return _cached_trig_grid(n_e, n_M, jnp.dtype(dtype))
+
+
+@cache
+def _cached_trig_grid(n_e, n_M, dtype):
     """Return sinE-cosE tensor of shape (2, n_e, n_M+1) and inverse steps."""
     E_grid, inv_dM, inv_de = _E_grid_base(n_e, n_M, dtype=dtype)
     trig = jnp.stack([jnp.sin(E_grid), jnp.cos(E_grid)], axis=0)
@@ -309,20 +344,20 @@ def _scalar_trig_bilin(trig, inv_dM, inv_de, n_M, n_e, M_scalar, e_scalar):
 
 def E_trig_bilin(n_e=1024, n_M=4096):
     """E, sinE, cosE via bilinear interp of packed grid."""
-    triple, inv_dM, inv_de = _build_E_trig_grid(n_e, n_M)
+    triple, inv_dM, inv_de = _build_E_trig_grid(n_e, n_M, dtype=jnp.asarray(0.0).dtype)
     scalar_fun = partial(_scalar_E_trig_bilin, triple, inv_dM, inv_de, n_M, n_e)
-    return scalar_fun
+    return _with_input_dtype(scalar_fun)
 
 
 def E_bilin(n_e=1024, n_M=4096):
     """E via bilinear interp of packed grid."""
-    E_grid, inv_dM, inv_de = _build_E_grid(n_e, n_M)
+    E_grid, inv_dM, inv_de = _build_E_grid(n_e, n_M, dtype=jnp.asarray(0.0).dtype)
     scalar_fun = partial(_scalar_E_bilin, E_grid, inv_dM, inv_de, n_M, n_e)
-    return scalar_fun
+    return _with_input_dtype(scalar_fun)
 
 
 def trig_bilin(n_e=1024, n_M=4096):
     """sinE, cosE via bilinear interp of packed grid."""
-    trig, inv_dM, inv_de = _build_trig_grid(n_e, n_M)
+    trig, inv_dM, inv_de = _build_trig_grid(n_e, n_M, dtype=jnp.asarray(0.0).dtype)
     scalar_fun = partial(_scalar_trig_bilin, trig, inv_dM, inv_de, n_M, n_e)
-    return scalar_fun
+    return _with_input_dtype(scalar_fun)
