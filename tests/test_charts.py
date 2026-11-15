@@ -21,7 +21,13 @@ def _round_trip(chart, x):
 
 
 @pytest.mark.parametrize(
-    "chart", [FrameChart(), EccentricityVectorChart(), ClassicalChart()]
+    "chart",
+    [
+        FrameChart(),
+        FrameChart(gauge_sd=None),
+        EccentricityVectorChart(),
+        ClassicalChart(),
+    ],
 )
 def test_round_trip(chart):
     """Fails if chart coordinates, phase, sign convention or batch axes change.
@@ -52,7 +58,8 @@ def test_round_trip(chart):
 
 
 @pytest.mark.parametrize("e,inc", [(0.0, 0.7), (0.3, 0.0), (0.3, np.pi)])
-def test_frame_singular_round_trip(e, inc):
+@pytest.mark.parametrize("gauge_sd", [0.1, None])
+def test_frame_singular_round_trip(e, inc, gauge_sd):
     """Fails if circular or either face-on states lose phase in frame inversion.
 
     Truth: FrameOrbit.from_classical at e=0, i=0 or i=pi, followed by its
@@ -63,7 +70,7 @@ def test_frame_singular_round_trip(e, inc):
     orbit = FrameOrbit.from_classical(
         1.3, e, inc, 0.4, 0.7, 0.2, mu_AU3_per_d2=1.0, epoch_d=17.0
     )
-    charts = [FrameChart()]
+    charts = [FrameChart(gauge_sd=gauge_sd)]
     if e == 0.0:
         charts.append(EccentricityVectorChart())
     for chart in charts:
@@ -92,6 +99,7 @@ def _volume_comparison(source, target, x):
         (EccentricityVectorChart(), ClassicalChart()),
         (ClassicalChart(), EccentricityVectorChart()),
         (FrameChart(), ClassicalChart()),
+        (FrameChart(gauge_sd=None), ClassicalChart()),
     ],
 )
 def test_volume_against_automatic_jacobian(source, target):
@@ -105,8 +113,9 @@ def test_volume_against_automatic_jacobian(source, target):
     For the 6x7 frame Jacobian J, normalization kills the radial direction
     and scales three quaternion tangent directions by 1/r. The coarea
     Jacobian is sqrt(det(J J.T)). Cartesian dv=r^3 dr dS3, so removing
-    the radial gauge requires subtracting log Normal4(v)+3 log r from
-    the frame log volume. The remainder minus Classical.log_volume must
+    the radial gauge requires subtracting log g(r), the radial density
+    per unit r: log g(r) = log lift(v) + 3 log r, up to a constant.
+    The remainder minus Classical.log_volume must
     equal log coarea Jacobian plus a constant. Dropping the disk term is
     a negative control required to fail this very same spread assertion.
     """
@@ -119,8 +128,11 @@ def test_volume_against_automatic_jacobian(source, target):
         np.testing.assert_allclose(
             np.einsum("bij,bj->bi", jac, radial), 0, atol=2e-12, rtol=0
         )
-        gaussian = -np.sum(v * v, axis=-1) / 2 - 2 * np.log(2 * np.pi)
-        difference = difference - gaussian - 3 * np.log(radius)
+        if source.gauge_sd is None:
+            radial_log_density = -(radius**2) / 2 + 3 * np.log(radius) - np.log(2)
+        else:
+            radial_log_density = -0.5 * ((radius - 1) / source.gauge_sd) ** 2
+        difference = difference - radial_log_density
         sign, logdet = np.linalg.slogdet(jac @ np.swapaxes(jac, -1, -2))
         np.testing.assert_array_equal(sign, 1)
         logdet /= 2
@@ -142,7 +154,7 @@ def test_volume_against_automatic_jacobian(source, target):
 @eqx.filter_jit
 def _orientation_sample(v):
     x = jnp.concatenate([jnp.zeros((*v.shape[:-1], 3)), v], axis=-1)
-    orbit = FrameChart().to_orbit(x, mu_AU3_per_d2=1.0)
+    orbit = FrameChart(gauge_sd=None).to_orbit(x, mu_AU3_per_d2=1.0)
     normal = rotate(orbit.quat, jnp.array([0.0, 0.0, 1.0]))
     return -normal[..., 2], jnp.arctan2(-normal[..., 1], normal[..., 0])
 
@@ -155,7 +167,19 @@ def test_frame_isotropy():
     Pearson chi-square with 19 degrees of freedom, false rejection 5e-7
     per marginal (union bound 1e-6 overall). Expected bin count is 10000,
     making the chi-square approximation accurate. No propagation is needed.
+
+    At five points the default gauge density times r^3 must factor into
+    a constant sphere density and the stated radial normal. This catches
+    a missing coarea correction or the old Gaussian lift as the default.
     """
+    radius = np.array([0.8, 0.9, 1.0, 1.1, 1.2])
+    direction = np.random.default_rng(1).normal(size=(5, 4))
+    direction /= np.linalg.norm(direction, axis=-1, keepdims=True)
+    x = jnp.asarray(np.concatenate([np.zeros((5, 3)), radius[:, None] * direction], -1))
+    radial_density = np.asarray(FrameChart().log_volume(x)) + 3 * np.log(radius)
+    np.testing.assert_allclose(
+        radial_density - radial_density[2], [-2, -0.5, 0, -0.5, -2], atol=2e-14, rtol=0
+    )
     v = jnp.asarray(np.random.default_rng(0).normal(size=(200_000, 4)))
     cosine, node = map(np.asarray, _orientation_sample(v))
     threshold = chi2.isf(5e-7, 19)
@@ -167,7 +191,13 @@ def test_frame_isotropy():
 
 
 @pytest.mark.parametrize(
-    "chart", [FrameChart(), EccentricityVectorChart(), ClassicalChart()]
+    "chart",
+    [
+        FrameChart(),
+        FrameChart(gauge_sd=None),
+        EccentricityVectorChart(),
+        ClassicalChart(),
+    ],
 )
 def test_unconstrained(chart):
     """Fails if scale-5 inputs produce unbound or nonfinite frame states.
@@ -189,7 +219,8 @@ def test_unconstrained(chart):
     )
 
 
-def test_frame_origin_autodiff():
+@pytest.mark.parametrize("gauge_sd", [0.1, None])
+def test_frame_origin_autodiff(gauge_sd):
     """Fails if guarded zero branches leak NaNs into position autodiff.
 
     Truth: the disk map has identity Jacobian at u=0, and the frame chart
@@ -200,7 +231,7 @@ def test_frame_origin_autodiff():
     At epoch and identity orientation, dr/dln(a)=(1,0,0), proving the
     assertion is not satisfied by zeroing every tangent.
     """
-    chart = FrameChart()
+    chart = FrameChart(gauge_sd=gauge_sd)
     x = jnp.zeros(7)
 
     def position(point):
@@ -214,6 +245,10 @@ def test_frame_origin_autodiff():
     np.testing.assert_array_equal(
         chart.to_orbit(x, mu_AU3_per_d2=1.0).quat, [1, 0, 0, 0]
     )
+    if gauge_sd is None:
+        np.testing.assert_allclose(chart.log_volume(x), -2 * np.log(2 * np.pi))
+    else:
+        assert np.isneginf(chart.log_volume(x))
 
 
 def test_uniform_in_e():

@@ -3,8 +3,8 @@
 The common reference measure is Haar orientation measure times dex dey
 times d(ln a). For a density p against that measure, the coordinate log
 density is log(p(chart.to_orbit(x))) + chart.log_volume(x). The frame chart
-also supplies a normalized radial gauge density. Plain real angles have
-periodic predictions; their densities are interpreted per fundamental cell.
+also supplies a radial gauge density, possibly up to a constant. Plain real
+angles have periodic predictions; densities are interpreted per fundamental cell.
 
 Transforms do not clip. As with exp and sigmoid, floating-point overflow,
 underflow and rounding to a boundary limit the representable input range.
@@ -97,13 +97,22 @@ class FrameChart(AbstractChart):
     Use nonzero v for differentiable inference; a Gaussian draw is nonzero
     almost surely.
 
-    log_volume = -2 log(1+|u|^2) - |v|^2/2 - 2 log(2*pi).
-    The four-dimensional standard normal gives exactly Haar orientations
-    and a proper radial gauge. The omitted additive constant is zero when
-    Haar measure has total mass one; both quaternion signs are integrated.
+    For positive gauge_sd, with r=|v|, log_volume is
+    -2 log(1+|u|^2) - 0.5*((r-1)/gauge_sd)^2 - 3 log(r).
+    The additive normalization constant is omitted, including the normal's
+    truncation to r>0 (a negligible correction for small gauge_sd); r=0
+    has zero density. Since d^4 v=r^3 dr dS3, the r^3 factor cancels:
+    length and Haar-uniform direction are independent. The default keeps
+    r near one to limit changes in orientation scales during inference.
+
+    With gauge_sd=None, log_volume is instead
+    -2 log(1+|u|^2) - |v|^2/2 - 2 log(2*pi), unchanged and normalized.
+    Gaussian four-vector draws then give exact isotropic orientations.
+    Both quaternion signs are integrated in either gauge.
     """
 
     n_coords: ClassVar[int] = 7
+    gauge_sd: float | None = eqx.field(static=True, default=0.1)
 
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
         """Build an epoch frame directly, without eccentricity or node angles."""
@@ -141,13 +150,17 @@ class FrameChart(AbstractChart):
         return jnp.concatenate([jnp.log(orbit.a_AU)[..., None], u, quat], axis=-1)
 
     def log_volume(self, x) -> Array:
-        """Return disk area density times the normalized Gaussian gauge lift."""
+        """Return disk area density times the selected radial gauge lift."""
         x = _coordinates(x, self.n_coords)
-        return (
-            _disk_log_volume(x[..., 1:3])
-            - jnp.sum(x[..., 3:] ** 2, axis=-1) / 2
-            - 2 * jnp.log(2 * jnp.pi)
-        )
+        squared = jnp.sum(x[..., 3:] ** 2, axis=-1)
+        if self.gauge_sd is None:
+            gauge = -squared / 2 - 2 * jnp.log(2 * jnp.pi)
+        else:
+            nonzero = squared > 0
+            radius = jnp.sqrt(jnp.where(nonzero, squared, 1.0))
+            gauge = -0.5 * ((radius - 1) / self.gauge_sd) ** 2 - 3 * jnp.log(radius)
+            gauge = jnp.where(nonzero, gauge, -jnp.inf)
+        return _disk_log_volume(x[..., 1:3]) + gauge
 
 
 class EccentricityVectorChart(AbstractChart):
