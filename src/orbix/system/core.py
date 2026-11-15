@@ -192,12 +192,3 @@ class System(eqx.Module):
             jacobi_to_barycentric(v, self.star.mass_Msun, self.planets.mass_Msun),
             self.frame.dist_pc,
         )
-
-    def solve_at(self, time_d, *, solver=_DEFAULT_SOLVER):
-        """Solve one time per input row, shared by all bodies in that row.
-
-        This unbatched System has no draw axis to pair with times, so this
-        equals solve: output shape is (K+1,) + time_shape + (3,). For batched
-        systems, callers can vmap solve_at to pair each system with its time.
-        """
-        return self.solve(time_d, solver=solver)

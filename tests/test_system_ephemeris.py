@@ -259,12 +259,9 @@ def test_host_time_observables_and_solver_trace():
     same = solve(sys, times, Markley())
     assert len(traces) - baseline == 1
     np.testing.assert_array_equal(eph.position_AU, same.position_AU)
-    np.testing.assert_array_equal(
-        sys.solve_at(times).position_AU, sys.solve(times).position_AU
-    )
-    # Stacked systems are caller-owned; solve_at pairs each draw with one row.
+    # Stacked systems are caller-owned; vmap pairs each draw with one time.
     draws = jax.tree.map(lambda x: jnp.stack([x] * 3), sys)
-    paired = jax.vmap(lambda system, time: system.solve_at(time))(draws, times)
+    paired = jax.vmap(lambda system, time: system.solve(time))(draws, times)
     np.testing.assert_allclose(
         paired.position_AU, jnp.moveaxis(eph.position_AU, 1, 0), atol=2e-14, rtol=0
     )

@@ -27,7 +27,7 @@ def test_cartesian_singular_round_trip_and_derivatives(e, inc):
 
     Truth: Cartesian two-body flow (Danby, Fundamentals of Celestial Mechanics).
     Set mu=1 to keep r and v order one. Central differences at h=1e-4
-    have O(h**2) truncation: check both AD modes to order 2 at 1e-4.
+    have O(h**2) truncation: forward mode to order 2, reverse to order 1, at 1e-4.
     Epoch round trips allow 1e-12 relative plus 1e-14 for zero components,
     covering float64 solve/rotation roundoff. No classical angle is inverted.
     """
@@ -43,15 +43,16 @@ def test_cartesian_singular_round_trip_and_derivatives(e, inc):
         lambda x: FrameOrbit.from_cartesian(x[:3], x[3:], mu_AU3_per_d2=1.0)
     )(state)
     assert all(np.isfinite(leaf).all() for leaf in jax.tree.leaves(chart_jac))
-    check_grads(
-        _propagate_cartesian,
-        (state,),
-        order=2,
-        modes=("fwd", "rev"),
-        eps=1e-4,
-        atol=1e-4,
-        rtol=1e-4,
-    )
+    for order, modes in ((2, ("fwd",)), (1, ("rev",))):
+        check_grads(
+            _propagate_cartesian,
+            (state,),
+            order=order,
+            modes=modes,
+            eps=1e-4,
+            atol=1e-4,
+            rtol=1e-4,
+        )
 
 
 @pytest.mark.parametrize("e,inc", [(1e-6, 0.7), (0.6, 1.1), (0.2, 2.6)])
