@@ -4,12 +4,18 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from hwoutils.constants import G, Msun2kg, two_pi
+from hwoutils.constants import AU2m, G, Msun2kg, d2s, two_pi
 from hypothesis import given
 from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
 
-from orbix.equations.orbit import mean_motion, period_a, period_n, period_to_sma
+from orbix.equations.orbit import (
+    mean_motion,
+    period_a,
+    period_n,
+    period_to_sma,
+    semi_amplitude,
+)
 from orbix.kepler.markley import solve_trig
 from orbix.orbit import KeplerianOrbit
 
@@ -505,3 +511,141 @@ def test_from_period_broadcasts_batched_samples():
     assert orbit.t0_d.shape == (K,)
     r_AU, _, _ = orbit.propagate(time_jd=jnp.linspace(0.0, 100.0, 3), Ms_kg=2.0e30)
     assert r_AU.shape == (K, 3, 3)
+
+
+@pytest.mark.parametrize("solver", [None, solve_trig])
+def test_zero_planet_mass_preserves_defaults(solver):
+    """Fails if zero mass changes defaults; require exact array equality."""
+    orbit = KeplerianOrbit(**_earthlike_orbit_params())
+    times = jnp.array([0.0, 37.0, 200.0])
+    for method, extra in (
+        (orbit.propagate, {}),
+        (orbit.position_arcsec, {"dist_pc": 10.0}),
+    ):
+        default = method(solver, times, Ms_kg=Msun2kg, **extra)
+        explicit = method(solver, times, Ms_kg=Msun2kg, Mp_kg=0.0, **extra)
+        for actual, expected in zip(explicit, default, strict=True):
+            np.testing.assert_array_equal(actual, expected)
+
+
+@pytest.mark.parametrize("batched_mass", [False, True])
+def test_total_mass_period_and_basis_round_trip(batched_mass):
+    """Fails if either basis omits planet mass or loses phase.
+
+    Allow 2e-12 AU for x64 solve/period roundoff. At Mp/Ms=0.1,
+    using the stellar period instead shifts the position by over 0.1 AU.
+    """
+    orbit = KeplerianOrbit(
+        a_AU=jnp.array([1.0, 2.0]),
+        e=jnp.array([0.2, 0.4]),
+        W_rad=jnp.array([0.3, 0.7]),
+        i_rad=jnp.array([0.6, 1.1]),
+        w_rad=jnp.array([0.8, -0.5]),
+        M0_rad=jnp.array([0.4, -0.9]),
+        t0_d=jnp.array([20.0, -30.0]),
+    )
+    mass = Msun2kg * (jnp.array([1.0, 1.3]) if batched_mass else 1.0)
+    context = dict(Ms_kg=mass, Mp_kg=0.1 * mass)
+    periods = two_pi * jnp.sqrt(orbit.a_AU**3 / (G * (1.1 * mass)))
+    stellar_periods = two_pi * jnp.sqrt(orbit.a_AU**3 / (G * mass))
+    times = jnp.concatenate([jnp.array([0.0]), periods, stellar_periods])
+    r = orbit.propagate(solve_trig, times, **context)[0]
+    for k in range(2):
+        np.testing.assert_allclose(r[k, :, k + 1], r[k, :, 0], atol=2e-12, rtol=0)
+        assert np.linalg.norm(r[k, :, k + 3] - r[k, :, 0]) > 0.1
+    basis = orbit.to_period_basis(**context)
+    np.testing.assert_allclose(basis[0], periods, rtol=2e-15)
+    rebuilt = KeplerianOrbit.from_period(*basis, **context)
+    np.testing.assert_allclose(
+        rebuilt.propagate(solve_trig, times, **context)[0], r, atol=2e-12, rtol=0
+    )
+    east, north = orbit.position_arcsec(solve_trig, times, dist_pc=10.0, **context)
+    np.testing.assert_allclose(east, r[:, 0] / 10.0, atol=2e-14, rtol=0)
+    np.testing.assert_allclose(north, r[:, 1] / 10.0, atol=2e-14, rtol=0)
+    np.testing.assert_allclose(
+        orbit.separation_arcsec(solve_trig, times, dist_pc=10.0, **context),
+        np.hypot(east, north),
+        atol=2e-14,
+        rtol=0,
+    )
+
+
+def test_velocity_matches_position_derivatives():
+    """Fails if velocity omits total mass, anomaly rate, or a frame component.
+
+    With h=1e-3 day, central differences have O((n*h)^2) truncation
+    and O(eps/h) roundoff: allow 2e-9 relative plus 2e-12 AU/day.
+    Autodiff of the x64 Markley solution agrees to 2e-13 AU/day.
+    """
+    orbit = KeplerianOrbit(1.7, 0.4, 0.3, 0.8, 0.6, 0.7, 20.0)
+    times = jnp.array([-50.0, 37.0, 250.0])
+    context = dict(Ms_kg=Msun2kg, Mp_kg=0.1 * Msun2kg)
+
+    def position(t):
+        return orbit.propagate(solve_trig, t, **context)[0]
+
+    velocity = orbit.velocity_AU_d(solve_trig, times, **context)
+    assert velocity.shape == (1, 3, 3)
+    h = 1e-3
+    finite_difference = (position(times + h) - position(times - h)) / (2 * h)
+    np.testing.assert_allclose(velocity, finite_difference, rtol=2e-9, atol=2e-12)
+    derivative = jax.jacfwd(position)(times)
+    np.testing.assert_allclose(
+        velocity, jnp.diagonal(derivative, axis1=2, axis2=3), atol=2e-13, rtol=0
+    )
+
+
+def test_radial_velocity_circular_amplitude():
+    """Fails if RV mass scale or m/s conversion is wrong.
+
+    semi_amplitude neglects Mp in the denominator: fractional error is
+    (2/3)*q + O(q**2), q=Mp/Ms=1e-6. Allow q relative error.
+    Sampling both extrema avoids a discretization error.
+    """
+    q = 1e-6
+    context = dict(Ms_kg=Msun2kg, Mp_kg=q * Msun2kg)
+    orbit = KeplerianOrbit.from_period(400.0, 0.0, 0.5, 0.3, 1.0, 0.0, 0.0, **context)
+    rv = orbit.radial_velocity_m_s(solve_trig, jnp.array([0.0, 200.0]), **context)
+    expected = semi_amplitude(400.0, Msun2kg, q * Msun2kg, 0.0, np.pi / 3)
+    np.testing.assert_allclose(np.ptp(rv) / 2, expected * AU2m / d2s, rtol=q, atol=0)
+
+
+@pytest.mark.parametrize(
+    "observable", ["radial_velocity_m_s", "reflex_position_arcsec"]
+)
+def test_observable_element_gradients(observable):
+    """Fails if any of seven element derivatives is lost or nonfinite.
+
+    Use x64 and h=1e-5 in AU, radians, days, or eccentricity. Central
+    differences balance O(h**2) truncation and O(eps/h) cancellation;
+    allow 2e-7 relative plus 2e-9 m/s or 2e-13 arcsec absolute.
+    Check full forward and reverse Jacobians, including RV's zero node column.
+    """
+    assert jax.config.x64_enabled
+    elements = jnp.array([1.7, 0.4, 0.3, 0.8, 0.6, 0.7, 20.0])
+
+    @jax.jit
+    def evaluate(values):
+        orbit = KeplerianOrbit(*values)
+        extra = {"dist_pc": 10.0} if observable == "reflex_position_arcsec" else {}
+        return jnp.asarray(
+            getattr(orbit, observable)(
+                solve_trig,
+                jnp.array([-50.0, 37.0, 250.0]),
+                Ms_kg=Msun2kg,
+                Mp_kg=0.01 * Msun2kg,
+                **extra,
+            )
+        )
+
+    h = 1e-5
+    offsets = h * jnp.eye(7)
+    finite_difference = (
+        jax.vmap(evaluate)(elements + offsets) - jax.vmap(evaluate)(elements - offsets)
+    ) / (2 * h)
+    finite_difference = jnp.moveaxis(finite_difference, 0, -1)
+    atol = 2e-13 if observable == "reflex_position_arcsec" else 2e-9
+    for transform in (jax.jacfwd, jax.jacrev):
+        derivative = jax.jit(transform(evaluate))(elements)
+        assert np.isfinite(derivative).all()
+        np.testing.assert_allclose(derivative, finite_difference, rtol=2e-7, atol=atol)

@@ -27,7 +27,7 @@ from abc import abstractmethod
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from hwoutils.constants import G, pc2AU, rad2arcsec, two_pi
+from hwoutils.constants import AU2m, G, d2s, pc2AU, rad2arcsec, two_pi
 from jaxtyping import Array
 
 from orbix.equations.orbit import (
@@ -75,6 +75,7 @@ class AbstractOrbit(eqx.Module):
         time_jd: Array = None,
         *,
         Ms_kg: Array,
+        Mp_kg: Array = 0.0,
     ) -> tuple[Array, Array, Array]:
         """Propagate to times ``time_jd``.
 
@@ -87,6 +88,8 @@ class AbstractOrbit(eqx.Module):
                 callers relying on the default solver need not pass a
                 positional None.
             Ms_kg: Stellar mass in kg, shape ``(K,)`` or scalar.
+            Mp_kg: Planet mass in kg, shape ``(K,)`` or scalar. Defaults
+                to zero; the relative orbit uses the total mass.
 
         Returns:
             tuple[Array, Array, Array]: Positions, phase angles, and distances:
@@ -145,6 +148,7 @@ class KeplerianOrbit(AbstractOrbit):
         tp_d: Array,
         *,
         Ms_kg: Array,
+        Mp_kg: Array = 0.0,
     ) -> KeplerianOrbit:
         """Construct from the period parameterization used by orbit-fitting code.
 
@@ -166,6 +170,8 @@ class KeplerianOrbit(AbstractOrbit):
             sin_w: Sine of the argument of periapsis.
             tp_d: Time of periapsis passage in days (JD in practice).
             Ms_kg: Stellar mass in kg.
+            Mp_kg: Planet mass in kg. Defaults to zero; the semi-major
+                axis is computed using the total mass.
 
         Returns:
             A ``KeplerianOrbit`` whose leading axis is the common
@@ -179,13 +185,41 @@ class KeplerianOrbit(AbstractOrbit):
             )
         )
         return cls(
-            a_AU=period_to_sma(T_d, Ms_kg),
+            a_AU=period_to_sma(T_d, Ms_kg + Mp_kg),
             e=e,
             W_rad=W_rad,
             i_rad=jnp.arccos(cos_i),
             w_rad=jnp.arctan2(sin_w, cos_w),
             M0_rad=jnp.zeros_like(T_d),
             t0_d=tp_d,
+        )
+
+    def to_period_basis(
+        self, *, Ms_kg: Array, Mp_kg: Array = 0.0
+    ) -> tuple[Array, Array, Array, Array, Array, Array, Array]:
+        """Convert to the period parameterization accepted by ``from_period``.
+
+        Args:
+            Ms_kg: Stellar mass in kg, shape ``(K,)`` or scalar.
+            Mp_kg: Planet mass in kg, shape ``(K,)`` or scalar. Defaults
+                to zero; the period uses the total mass.
+
+        Returns:
+            Tuple ``(T_d, e, cos_i, W_rad, cos_w, sin_w, tp_d)``, each
+            shape ``(K,)``. Period and periapsis epoch are in days,
+            longitude of the ascending node is in radians, and the
+            remaining elements are dimensionless.
+        """
+        T_d = period_n(mean_motion(self.a_AU, G * (Ms_kg + Mp_kg)))
+        tp_d = self.t0_d - T_d * self.M0_rad / two_pi
+        return (
+            T_d,
+            self.e,
+            jnp.cos(self.i_rad),
+            self.W_rad,
+            jnp.cos(self.w_rad),
+            jnp.sin(self.w_rad),
+            tp_d,
         )
 
     def _AB(self) -> tuple[Array, Array]:
@@ -202,14 +236,44 @@ class KeplerianOrbit(AbstractOrbit):
             jnp.cos(self.w_rad),
         )
 
+    def _solve_kepler(
+        self, trig_solver, time_jd, *, Ms_kg, Mp_kg
+    ) -> tuple[Array, Array, Array]:
+        """Return mean motion (K,) and sinE, cosE (K, T) for the relative orbit."""
+        if time_jd is None:
+            raise TypeError("propagate() missing required argument: 'time_jd'")
+        trig_solver = _resolve_trig_solver(trig_solver)
+        time_jd = jnp.atleast_1d(time_jd)
+
+        mu = G * (Ms_kg + Mp_kg)
+        n = mean_motion(self.a_AU, mu)
+        T_d = period_n(n)
+        tp_d = self.t0_d - T_d * self.M0_rad / two_pi
+
+        # Mean anomaly and Kepler solution each have shape (K, T).
+        M = jax.vmap(mean_anomaly_tp, (None, 0, 0))(time_jd, n, tp_d)
+        solver_t = jax.vmap(trig_solver, in_axes=(0, None))
+        solver_kt = jax.vmap(solver_t, in_axes=(0, 0))
+        sinE, cosE = solver_kt(M, self.e)
+        return n, sinE, cosE
+
     def propagate(
         self,
         trig_solver=None,
         time_jd: Array = None,
         *,
         Ms_kg: Array,
+        Mp_kg: Array = 0.0,
     ) -> tuple[Array, Array, Array]:
         """Propagate Keplerian orbit to times ``time_jd``.
+
+        Args:
+            trig_solver: Scalar Kepler solver ``(M, e) -> (sinE, cosE)``.
+                None selects the cached default grid solver.
+            time_jd: Times in Julian Days, shape ``(T,)``. Required.
+            Ms_kg: Stellar mass in kg, shape ``(K,)`` or scalar.
+            Mp_kg: Planet mass in kg, shape ``(K,)`` or scalar. Defaults
+                to zero; propagation uses the total mass.
 
         Returns:
             tuple[Array, Array, Array]: Positions, phase angles, and distances:
@@ -223,26 +287,10 @@ class KeplerianOrbit(AbstractOrbit):
                   The calculation is gradient-safe at conjunction.
                 - ``dist_AU``: ``(K, T)`` star-planet distance.
         """
-        if time_jd is None:
-            raise TypeError("propagate() missing required argument: 'time_jd'")
-        trig_solver = _resolve_trig_solver(trig_solver)
-        time_jd = jnp.atleast_1d(time_jd)
-
+        _, sinE, cosE = self._solve_kepler(
+            trig_solver, time_jd, Ms_kg=Ms_kg, Mp_kg=Mp_kg
+        )
         A_AU, B_AU = self._AB()
-
-        # Derived quantities that depend on stellar context
-        mu = G * Ms_kg
-        n = mean_motion(self.a_AU, mu)
-        T_d = period_n(n)
-        tp_d = self.t0_d - T_d * self.M0_rad / two_pi
-
-        # Mean anomaly at each time, shape (K, T)
-        M = jax.vmap(mean_anomaly_tp, (None, 0, 0))(time_jd, n, tp_d)
-
-        # Kepler solve -> sinE, cosE each shape (K, T)
-        solver_t = jax.vmap(trig_solver, in_axes=(0, None))
-        solver_kt = jax.vmap(solver_t, in_axes=(0, 0))
-        sinE, cosE = solver_kt(M, self.e)
 
         # Position shape (K, 3, T)
         r_AU = jax.vmap(single_r, (1, 1, 0, 0, 0))(
@@ -265,12 +313,48 @@ class KeplerianOrbit(AbstractOrbit):
 
         return r_AU, phase_angle_rad, dist_AU
 
+    def velocity_AU_d(
+        self,
+        trig_solver=None,
+        time_jd: Array = None,
+        *,
+        Ms_kg: Array,
+        Mp_kg: Array = 0.0,
+    ) -> Array:
+        """Compute the relative velocity in the (east, north, away) frame.
+
+        Uses the closed-form eccentric-anomaly rate
+        ``dE/dt = n / (1 - e*cosE)`` with the same solve as ``propagate``.
+
+        Args:
+            trig_solver: Scalar Kepler solver ``(M, e) -> (sinE, cosE)``.
+                None selects the cached default grid solver.
+            time_jd: Times in Julian Days, shape ``(T,)``. Required.
+            Ms_kg: Stellar mass in kg, shape ``(K,)`` or scalar.
+            Mp_kg: Planet mass in kg, shape ``(K,)`` or scalar. Defaults
+                to zero; velocity uses the total mass.
+
+        Returns:
+            Relative velocity in AU/day, shape ``(K, 3, T)``. Row 2 is
+            positive away from the observer.
+        """
+        n, sinE, cosE = self._solve_kepler(
+            trig_solver, time_jd, Ms_kg=Ms_kg, Mp_kg=Mp_kg
+        )
+        A_AU, B_AU = self._AB()
+        dE_dt = n[:, None] / (1.0 - self.e[:, None] * cosE)
+        return (
+            -A_AU.T[:, :, None] * sinE[:, None, :]
+            + B_AU.T[:, :, None] * cosE[:, None, :]
+        ) * dE_dt[:, None, :]
+
     def position_arcsec(
         self,
         trig_solver=None,
         time_jd: Array = None,
         *,
         Ms_kg: Array,
+        Mp_kg: Array = 0.0,
         dist_pc: Array,
     ) -> tuple[Array, Array]:
         """On-sky ``(raoff, decoff)`` in arcsec, each shape ``(K, T)``.
@@ -279,8 +363,19 @@ class KeplerianOrbit(AbstractOrbit):
         raoff = Delta alpha cos delta (east), decoff = Delta delta (north).
         The east component includes cos delta; it is not the RA angle itself.
         This is a thin wrapper around ``propagate`` for projected position.
+
+        Args:
+            trig_solver: Scalar Kepler solver ``(M, e) -> (sinE, cosE)``.
+                None selects the cached default grid solver.
+            time_jd: Times in Julian Days, shape ``(T,)``. Required.
+            Ms_kg: Stellar mass in kg, shape ``(K,)`` or scalar.
+            Mp_kg: Planet mass in kg, shape ``(K,)`` or scalar. Defaults to zero.
+            dist_pc: Distance in parsecs, shape ``(K,)`` or scalar.
+
+        Returns:
+            East and north offsets in arcsec, each shape ``(K, T)``.
         """
-        r_AU, _, _ = self.propagate(trig_solver, time_jd, Ms_kg=Ms_kg)
+        r_AU, _, _ = self.propagate(trig_solver, time_jd, Ms_kg=Ms_kg, Mp_kg=Mp_kg)
         dist_AU = jnp.atleast_1d(dist_pc) * pc2AU
         scale = rad2arcsec / dist_AU
         dra_arcsec = r_AU[:, 0] * scale[:, None]
@@ -293,16 +388,111 @@ class KeplerianOrbit(AbstractOrbit):
         time_jd: Array = None,
         *,
         Ms_kg: Array,
+        Mp_kg: Array = 0.0,
         dist_pc: Array,
     ) -> Array:
-        """Projected angular separation in arcsec, shape ``(K, T)``."""
+        """Projected angular separation in arcsec, shape ``(K, T)``.
+
+        Args:
+            trig_solver: Scalar Kepler solver ``(M, e) -> (sinE, cosE)``.
+                None selects the cached default grid solver.
+            time_jd: Times in Julian Days, shape ``(T,)``. Required.
+            Ms_kg: Stellar mass in kg, shape ``(K,)`` or scalar.
+            Mp_kg: Planet mass in kg, shape ``(K,)`` or scalar. Defaults to zero.
+            dist_pc: Distance in parsecs, shape ``(K,)`` or scalar.
+
+        Returns:
+            Projected separation in arcsec, shape ``(K, T)``.
+        """
         ra, dec = self.position_arcsec(
             trig_solver,
             time_jd,
             Ms_kg=Ms_kg,
+            Mp_kg=Mp_kg,
             dist_pc=dist_pc,
         )
         return jnp.sqrt(ra**2 + dec**2)
+
+    def position_angle_deg(
+        self,
+        trig_solver=None,
+        time_jd: Array = None,
+        *,
+        Ms_kg: Array,
+        Mp_kg: Array = 0.0,
+    ) -> Array:
+        """Compute position angle east of north in degrees.
+
+        Args:
+            trig_solver: Scalar Kepler solver ``(M, e) -> (sinE, cosE)``.
+                None selects the cached default grid solver.
+            time_jd: Times in Julian Days, shape ``(T,)``. Required.
+            Ms_kg: Stellar mass in kg, shape ``(K,)`` or scalar.
+            Mp_kg: Planet mass in kg, shape ``(K,)`` or scalar. Defaults to zero.
+
+        Returns:
+            Position angle in ``[0, 360)`` degrees, shape ``(K, T)``.
+            The angle is undefined at zero projected separation.
+        """
+        r_AU, _, _ = self.propagate(trig_solver, time_jd, Ms_kg=Ms_kg, Mp_kg=Mp_kg)
+        angle_deg = jnp.rad2deg(jnp.arctan2(r_AU[:, 0], r_AU[:, 1])) % 360.0
+        # A tiny negative angle can round to 360 when wrapped.
+        return jnp.where(angle_deg == 360.0, 0.0, angle_deg)
+
+    def reflex_position_arcsec(
+        self,
+        trig_solver=None,
+        time_jd: Array = None,
+        *,
+        Ms_kg: Array,
+        Mp_kg: Array,
+        dist_pc: Array,
+    ) -> tuple[Array, Array]:
+        """Compute the star's sky offset about the system barycentre.
+
+        Args:
+            trig_solver: Scalar Kepler solver ``(M, e) -> (sinE, cosE)``.
+                None selects the cached default grid solver.
+            time_jd: Times in Julian Days, shape ``(T,)``. Required.
+            Ms_kg: Stellar mass in kg, shape ``(K,)`` or scalar.
+            Mp_kg: Planet mass in kg, shape ``(K,)`` or scalar.
+            dist_pc: Distance in parsecs, shape ``(K,)`` or scalar.
+
+        Returns:
+            East and north stellar offsets in arcsec, each shape ``(K, T)``.
+            These are opposite the planet's relative offsets, scaled by
+            ``Mp_kg / (Ms_kg + Mp_kg)``.
+        """
+        east, north = self.position_arcsec(
+            trig_solver, time_jd, Ms_kg=Ms_kg, Mp_kg=Mp_kg, dist_pc=dist_pc
+        )
+        fraction = jnp.atleast_1d(-Mp_kg / (Ms_kg + Mp_kg))[:, None]
+        return fraction * east, fraction * north
+
+    def radial_velocity_m_s(
+        self,
+        trig_solver=None,
+        time_jd: Array = None,
+        *,
+        Ms_kg: Array,
+        Mp_kg: Array,
+    ) -> Array:
+        """Compute the star's radial velocity induced by this planet.
+
+        Args:
+            trig_solver: Scalar Kepler solver ``(M, e) -> (sinE, cosE)``.
+                None selects the cached default grid solver.
+            time_jd: Times in Julian Days, shape ``(T,)``. Required.
+            Ms_kg: Stellar mass in kg, shape ``(K,)`` or scalar.
+            Mp_kg: Planet mass in kg, shape ``(K,)`` or scalar.
+
+        Returns:
+            Stellar velocity in m/s, shape ``(K, T)``, positive when the
+            star recedes from the observer. No systemic velocity is added.
+        """
+        velocity = self.velocity_AU_d(trig_solver, time_jd, Ms_kg=Ms_kg, Mp_kg=Mp_kg)
+        fraction = jnp.atleast_1d(-Mp_kg / (Ms_kg + Mp_kg))[:, None]
+        return fraction * velocity[:, 2] * (AU2m / d2s)
 
     def __repr__(self) -> str:
         """Compact summary of the seven Keplerian elements.

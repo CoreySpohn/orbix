@@ -102,9 +102,21 @@ def _numpy_k16_position(epoch_yr):
     return east, north
 
 
-@pytest.mark.parametrize("node_deg, expected", [(0.0, [0.0, 0.1]), (90.0, [0.1, 0.0])])
-def test_ascending_node_cardinal_directions(node_deg, expected):
-    """Omega runs north through east: Green, Spherical Astronomy (1985), ch. 17."""
+@pytest.mark.parametrize(
+    "node_deg, expected, expected_pa",
+    [
+        (0.0, [0.0, 0.1], 0.0),
+        (90.0, [0.1, 0.0], 90.0),
+        (-90.0, [-0.1, 0.0], 270.0),
+        (-1e-16, [0.0, 0.1], 0.0),
+    ],
+)
+def test_ascending_node_cardinal_directions(node_deg, expected, expected_pa):
+    """Fails if PA swaps east/north or wraps outside [0, 360).
+
+    Omega runs north through east (Green 1985, ch. 17). Allow 1e-12
+    arcsec or deg for x64 trigonometric roundoff at cardinal directions.
+    """
     orbit = KeplerianOrbit(
         a_AU=1.0,
         e=0.0,
@@ -120,6 +132,36 @@ def test_ascending_node_cardinal_directions(node_deg, expected):
     )
     assert ra.shape == dec.shape == (1, 1)
     np.testing.assert_allclose([ra[0, 0], dec[0, 0]], expected, atol=1e-12, rtol=0)
+    pa = orbit.position_angle_deg(time_jd=jnp.array([0.0]), Ms_kg=Msun2kg)
+    assert pa.shape == (1, 1)
+    assert np.all((pa >= 0) & (pa < 360))
+    np.testing.assert_allclose(pa, expected_pa, atol=1e-12, rtol=0)
+
+
+@pytest.mark.parametrize("mass_ratio", [1e-3, 0.1])
+def test_stellar_reflex_signs(mass_ratio):
+    """Fails if stellar reflex shares the planet's position or velocity sign.
+
+    At the descending node the planet approaches and the star recedes.
+    Signs are strict; allow 2e-15 arcsec for x64 mass-scaled offsets.
+    """
+    orbit = KeplerianOrbit(1.0, 0.0, 0.3, np.pi / 3, 0.0, np.pi, 0.0)
+    context = dict(Ms_kg=Msun2kg, Mp_kg=mass_ratio * Msun2kg)
+    times = jnp.array([0.0])
+    relative = np.asarray(
+        orbit.position_arcsec(solve_trig, times, dist_pc=10.0, **context)
+    )
+    reflex = np.asarray(
+        orbit.reflex_position_arcsec(solve_trig, times, dist_pc=10.0, **context)
+    )
+    assert np.sum(relative * reflex) < 0
+    np.testing.assert_allclose(
+        reflex, -mass_ratio / (1 + mass_ratio) * relative, atol=2e-15, rtol=0
+    )
+    assert orbit.velocity_AU_d(solve_trig, times, **context)[0, 2, 0] < 0
+    rv = orbit.radial_velocity_m_s(solve_trig, times, **context)
+    assert rv.shape == (1, 1)
+    assert rv[0, 0] > 0
 
 
 def test_ascending_node_moves_away():
