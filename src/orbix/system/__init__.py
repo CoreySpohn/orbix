@@ -2,6 +2,7 @@
 
 from orbix.system.charts import (
     AbstractChart,
+    CartesianChart,
     ClassicalChart,
     EccentricityVectorChart,
     FrameChart,
@@ -20,6 +21,7 @@ from orbix.system.observables import (
 __all__ = [
     "AbstractChart",
     "Body",
+    "CartesianChart",
     "ClassicalChart",
     "EccentricityVectorChart",
     "Ephemeris",

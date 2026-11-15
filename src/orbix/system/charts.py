@@ -233,6 +233,66 @@ class EccentricityVectorChart(AbstractChart):
         return _disk_log_volume(x[..., 1:3]) + _inclination_log_volume(x[..., 3])
 
 
+class CartesianChart(AbstractChart):
+    """Epoch position and escape-speed-scaled velocity coordinates (p, w).
+
+    With positive scale_AU=s, r=s*p is in (east, north, away) AU and
+    v=sqrt(2*mu/|r|)*w/sqrt(1+|w|^2) is in AU/day. The velocity map is
+    smooth and bijective onto the open escape-speed ball, including w=0,
+    with no division by |w| and no clipping.
+
+    Nonzero position and nonradial velocity are required by FrameOrbit:
+    every finite input has negative energy at r!=0, but exactly radial
+    states (including w=0) have e=1 and no orbital-plane orientation.
+    This measure-zero set is excluded; circular and face-on orbits are
+    regular. Floating-point boundary limitations also apply.
+    """
+
+    n_coords: ClassVar[int] = 6
+    scale_AU: float = eqx.field(static=True, default=1.0)
+
+    def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
+        """Build a nonradial bound orbit from its Cartesian epoch state."""
+        x = _coordinates(x, self.n_coords)
+        r = self.scale_AU * x[..., :3]
+        escape = jnp.sqrt(2 * jnp.asarray(mu_AU3_per_d2) / jnp.linalg.norm(r, axis=-1))
+        return FrameOrbit.from_cartesian(
+            r,
+            escape[..., None] * _disk(x[..., 3:]),
+            mu_AU3_per_d2=mu_AU3_per_d2,
+            epoch_d=epoch_d,
+        )
+
+    def from_orbit(self, orbit: FrameOrbit) -> Array:
+        """Recover position and inverse-ball velocity at the stored epoch."""
+        r, v = orbit.to_cartesian()
+        escape = jnp.sqrt(2 * orbit.mu_AU3_per_d2 / jnp.linalg.norm(r, axis=-1))
+        return jnp.concatenate([r / self.scale_AU, _plane(v / escape[..., None])], -1)
+
+    def log_volume(self, x) -> Array:
+        """Return -3 log(|p|) - 4 log(1+|w|^2), independent of mu and scale.
+
+        Let s=scale_AU, R=s*|p|, b=1+|w|^2, a=R*b/2, and dnu be the
+        reference measure e de d(cos i) dW dw dM d(ln a) with unnormalized
+        Haar orientation. Delaunay actions L=sqrt(mu*a), G=L*sqrt(1-e^2),
+        H=G*cos(i), and J=s^3*(2*mu/R)^(3/2)*b^(-5/2) give:
+        d^3r d^3v = dL dG dH dM dw dW = (mu*a)^(3/2)/2 * dnu.
+        dnu/d^6x = 2*J/(mu*a)^(3/2) = 16*|p|^(-3)*b^(-4).
+
+        The ball Jacobian b^(-5/2) has one radial and two tangential
+        eigenvalues b^(-3/2), b^(-1/2), b^(-1/2). Position dependence of
+        escape speed leaves the phase-space Jacobian block triangular.
+        Thus escape-speed scaling cancels mu exactly, and R=s*|p| cancels
+        s. The omitted additive constant may depend on scale_AU only;
+        here it is independent of scale too: log(16) for unnormalized
+        Haar, or log(2/pi^2) for normalized Haar.
+        """
+        x = _coordinates(x, self.n_coords)
+        return -3 * jnp.log(jnp.linalg.norm(x[..., :3], axis=-1)) - 4 * jnp.log1p(
+            jnp.sum(x[..., 3:] ** 2, axis=-1)
+        )
+
+
 class ClassicalChart(AbstractChart):
     """Coordinates (ln a, logit(e), atanh(cos i), W, w, M0).
 

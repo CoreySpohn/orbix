@@ -7,7 +7,13 @@ import numpy as np
 import pytest
 from scipy.stats import chi2
 
-from orbix.system import ClassicalChart, EccentricityVectorChart, FrameChart, FrameOrbit
+from orbix.system import (
+    CartesianChart,
+    ClassicalChart,
+    EccentricityVectorChart,
+    FrameChart,
+    FrameOrbit,
+)
 from orbix.system.rotation import rotate
 
 
@@ -27,6 +33,8 @@ def _round_trip(chart, x):
         FrameChart(gauge_sd=None),
         EccentricityVectorChart(),
         ClassicalChart(),
+        CartesianChart(),
+        CartesianChart(scale_AU=3.0),
     ],
 )
 def test_round_trip(chart):
@@ -47,6 +55,18 @@ def test_round_trip(chart):
         pivot = np.take_along_axis(q, np.argmax(np.abs(q), axis=-1)[..., None], -1)
         q *= np.where(pivot < 0, -1.0, 1.0)
         delta = np.asarray(recovered) - expected
+    elif isinstance(chart, CartesianChart):
+        delta = np.asarray(recovered) - expected
+        r = chart.scale_AU * x[..., :3]
+        w = x[..., 3:]
+        v = (
+            w
+            * np.sqrt(2 / (np.linalg.norm(r, axis=-1) * (1 + np.sum(w * w, axis=-1))))[
+                ..., None
+            ]
+        )
+        np.testing.assert_allclose(original[0][..., 1, :], r, atol=1e-12, rtol=1e-12)
+        np.testing.assert_allclose(original[1][..., 1, :], v, atol=1e-12, rtol=1e-12)
     else:
         delta = np.asarray(recovered) - expected
         first_angle = 4 if isinstance(chart, EccentricityVectorChart) else 3
@@ -83,10 +103,38 @@ def test_frame_singular_round_trip(e, inc, gauge_sd):
         )
 
 
+@pytest.mark.parametrize("scale_AU", [1.0, 3.0])
+def test_cartesian_orbit_round_trip(scale_AU):
+    """Fails if Cartesian inversion loses generic, circular or face-on phase.
+
+    Truth: independently constructed classical states at their epoch and
+    two nearby times. Both AU positions and AU/day velocities agree to
+    1e-12 absolute/relative, allowing float64 rotation and solve roundoff.
+    """
+    orbit = FrameOrbit.from_classical(
+        1.3,
+        jnp.array([0.3, 0.0, 0.3, 0.3]),
+        jnp.array([0.7, 0.7, 0.0, np.pi]),
+        0.4,
+        0.7,
+        0.2,
+        mu_AU3_per_d2=1.0,
+        epoch_d=17.0,
+    )
+    chart = CartesianChart(scale_AU=scale_AU)
+    x = chart.from_orbit(orbit)
+    recovered, original, rebuilt = _round_trip(chart, x)
+    np.testing.assert_allclose(recovered, x, atol=1e-12, rtol=1e-12)
+    np.testing.assert_allclose(rebuilt, original, atol=1e-12, rtol=1e-12)
+    np.testing.assert_allclose(
+        rebuilt, orbit.at(jnp.array([16.7, 17.0, 17.8])), atol=1e-12, rtol=1e-12
+    )
+
+
 @eqx.filter_jit
-def _volume_comparison(source, target, x):
+def _volume_comparison(source, target, x, mu=1.0):
     def phi(point):
-        return target.from_orbit(source.to_orbit(point, mu_AU3_per_d2=1.0))
+        return target.from_orbit(source.to_orbit(point, mu_AU3_per_d2=mu))
 
     y = jax.vmap(phi)(x)
     jac = jax.vmap(jax.jacfwd(phi))(x)
@@ -151,6 +199,38 @@ def test_volume_against_automatic_jacobian(source, target):
             assert wrong_spread < 2e-11
 
 
+@pytest.mark.parametrize("scale_AU", [1.0, 3.0])
+@pytest.mark.parametrize("mu", [0.25, 4.0])
+def test_cartesian_volume_against_automatic_jacobian(scale_AU, mu):
+    """Fails for missing radius/ball factors or hidden mu normalization.
+
+    Truth: the 6x6 AD change-of-variables determinant at five seed-0
+    generic points. The same 2e-11 spread bound as the other chart pair
+    covers x64 inverse/determinant conditioning. The residual's constant
+    is also -log(16) at both mu and scale values, proving cancellation
+    rather than hiding mu in an untested additive constant. Dropping the
+    ball Jacobian once must fail the same spread assertion.
+    """
+    chart = CartesianChart(scale_AU=scale_AU)
+    x = jnp.asarray(np.random.default_rng(0).normal(size=(5, chart.n_coords)))
+    difference, jac = map(
+        np.asarray, _volume_comparison(chart, ClassicalChart(), x, jnp.asarray(mu))
+    )
+    sign, logdet = np.linalg.slogdet(jac)
+    assert np.all(np.abs(sign) == 1)
+    residual = difference - logdet
+    spread = np.ptp(residual)
+    print(f"Cartesian scale={scale_AU}, mu={mu} spread: {spread:.17g}")
+    assert spread < 2e-11
+    np.testing.assert_allclose(residual, -np.log(16.0), atol=2e-11, rtol=0)
+    if scale_AU == 1.0 and mu == 0.25:
+        ball_logdet = -2.5 * np.log1p(np.sum(np.asarray(x[..., 3:]) ** 2, axis=-1))
+        wrong_spread = np.ptp(residual - ball_logdet)
+        print(f"Missing ball term spread: {wrong_spread:.17g}")
+        with pytest.raises(AssertionError):
+            assert wrong_spread < 2e-11
+
+
 @eqx.filter_jit
 def _orientation_sample(v):
     x = jnp.concatenate([jnp.zeros((*v.shape[:-1], 3)), v], axis=-1)
@@ -197,14 +277,17 @@ def test_frame_isotropy():
         FrameChart(gauge_sd=None),
         EccentricityVectorChart(),
         ClassicalChart(),
+        CartesianChart(),
+        CartesianChart(scale_AU=3.0),
     ],
 )
 def test_unconstrained(chart):
     """Fails if scale-5 inputs produce unbound or nonfinite frame states.
 
-    Truth: the open disk, exponential and quaternion normalization enforce
-    e<1, a>0 and |q|=1 algebraically. Use 512 seed-0 draws; strict bounds
-    test the constraints, and 2e-15 absolute covers x64 norm roundoff.
+    Truth: disk/ball maps, the exponential and quaternion normalization
+    enforce e<1, a>0 and |q|=1 away from degenerate states. Use 512 seed-0
+    draws; strict bounds test the constraints, and 2e-15 absolute covers
+    x64 norm roundoff.
     """
     x = jnp.asarray(
         np.random.default_rng(0).normal(scale=5, size=(512, chart.n_coords))
