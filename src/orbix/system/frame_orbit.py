@@ -51,22 +51,79 @@ class FrameOrbit(eqx.Module):
         The first two columns of Rz(W) Rx(i) Rz(w+M0) have east/north swapped;
         their cross product supplies the proper right-handed third column.
         """
-        a, e, inc, node, peri, mean, mu, epoch = jnp.broadcast_arrays(
+        inc, node, peri, mean = map(jnp.asarray, (i_rad, W_rad, w_rad, M0_rad))
+        return cls.from_classical_trig(
+            a_AU=a_AU,
+            e=e,
+            cos_i=jnp.cos(inc),
+            sin_i=jnp.sin(inc),
+            cos_W=jnp.cos(node),
+            sin_W=jnp.sin(node),
+            cos_w=jnp.cos(peri),
+            sin_w=jnp.sin(peri),
+            cos_M0=jnp.cos(mean),
+            sin_M0=jnp.sin(mean),
+            mu_AU3_per_d2=mu_AU3_per_d2,
+            epoch_d=epoch_d,
+        )
+
+    @classmethod
+    def from_classical_trig(
+        cls,
+        *,
+        a_AU,
+        e,
+        cos_i,
+        sin_i,
+        cos_W,
+        sin_W,
+        cos_w,
+        sin_w,
+        cos_M0,
+        sin_M0,
+        mu_AU3_per_d2,
+        epoch_d=0.0,
+    ):
+        """Build from broadcast classical sine/cosine pairs without angle inversion.
+
+        Each (cos, sin) pair must lie on the unit circle, with sin_i >= 0.
+        Inputs are used as given, without renormalization or value validation.
+        The sky convention is that of from_classical: W is measured north
+        through east and the ascending node moves away.
+
+        Products form cos(w+M0) and sin(w+M0) directly; the stored frame absorbs
+        the epoch mean longitude, so no inverse trigonometric function is
+        needed. Independent trig inputs keep gradients finite at face-on
+        inclination, whereas the derivative of arccos at 1 is infinite.
+        For a time of periapsis tp_d, pass cos_M0=1, sin_M0=0, epoch_d=tp_d.
+        """
+        a, e, ci, si, cO, sO, cw, sw, cm, sm, mu, epoch = jnp.broadcast_arrays(
             *map(
                 jnp.asarray,
-                (a_AU, e, i_rad, W_rad, w_rad, M0_rad, mu_AU3_per_d2, epoch_d),
+                (
+                    a_AU,
+                    e,
+                    cos_i,
+                    sin_i,
+                    cos_W,
+                    sin_W,
+                    cos_w,
+                    sin_w,
+                    cos_M0,
+                    sin_M0,
+                    mu_AU3_per_d2,
+                    epoch_d,
+                ),
             )
         )
-        cO, sO = jnp.cos(node), jnp.sin(node)
-        ci, si = jnp.cos(inc), jnp.sin(inc)
-        cu, su = jnp.cos(peri + mean), jnp.sin(peri + mean)
+        cu, su = cw * cm - sw * sm, sw * cm + cw * sm
         f = jnp.stack([sO * cu + cO * ci * su, cO * cu - sO * ci * su, si * su], -1)
         g = jnp.stack([-sO * su + cO * ci * cu, -cO * su - sO * ci * cu, si * cu], -1)
         return cls(
             a,
             mean_motion(a, mu),
-            e * jnp.cos(mean),
-            -e * jnp.sin(mean),
+            e * cm,
+            -e * sm,
             from_basis(f, g, jnp.cross(f, g)),
             epoch,
         )
@@ -199,24 +256,37 @@ class FrameOrbit(eqx.Module):
         )
         return expanded._plane_coordinates_each(time, solver=solver)
 
-    def perifocal_coordinates(self, time_d, *, solver=_DEFAULT_SOLVER) -> Array:
-        """Return (cos(E)-e, sqrt(1-e**2)*sin(E)), shape B + time_shape + (2,).
+    def perifocal_coordinates(
+        self, time_d, *, solver=_DEFAULT_SOLVER
+    ) -> tuple[Array, Array]:
+        """Return dimensionless perifocal position and its rate in 1/day.
 
-        Rotate plane_coordinates into the classical periapsis axes without
-        another Kepler solve. These axes are undefined at e=0: there the
-        result uses f and g unchanged. Guarding the angle's inputs makes
-        the value and autodiff gradient finite at zero; this arbitrary
+        Position is (cos(E)-e, sqrt(1-e**2)*sin(E)); both arrays have shape
+        B + time_shape + (2,), with the same outer time broadcasting as at.
+
+        Rotate plane position and rate into the classical periapsis axes
+        without another Kepler solve. These axes are undefined at e=0:
+        there both results use f and g unchanged. Guarding the angle's inputs
+        makes both values and autodiff gradients finite at zero; this arbitrary
         fallback does not make the periapsis view continuous there.
         """
-        xy, _ = self.plane_coordinates(time_d, solver=solver)
+        xy, xy_rate = self.plane_coordinates(time_d, solver=solver)
         nonzero = (self.ex != 0) | (self.ey != 0)
         phi = jnp.arctan2(
             jnp.where(nonzero, self.ey, 0.0), jnp.where(nonzero, self.ex, 1.0)
         )
         shape = self.a_AU.shape + (1,) * jnp.ndim(time_d)
         c, s = jnp.cos(phi).reshape(shape), jnp.sin(phi).reshape(shape)
-        x, y = xy[..., 0], xy[..., 1]
-        return jnp.stack([c * x + s * y, -s * x + c * y], -1)
+        return tuple(
+            jnp.stack(
+                [
+                    c * value[..., 0] + s * value[..., 1],
+                    -s * value[..., 0] + c * value[..., 1],
+                ],
+                -1,
+            )
+            for value in (xy, xy_rate)
+        )
 
     def at_each(self, time_d, *, solver=_DEFAULT_SOLVER):
         """Evaluate paired times: broadcast(B, time_shape) + (3,), AU and AU/day.

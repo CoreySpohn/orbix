@@ -193,10 +193,11 @@ def test_shape_validation():
 @pytest.mark.parametrize("solver", [Markley(), Halley()])
 @pytest.mark.parametrize("time", [0.37, np.array([-0.3, 17.0, 300.0])])
 def test_plane_factorization(time, solver):
-    """Fails if the plane factors lose scale, velocity, or outer time axes.
+    """Fails if trig construction or plane factors lose state, scale, or time axes.
 
     Truth: the propagated state for the generic and singular element sets
-    above, batched together. Allow 1e-13 relative for float64 matrix products.
+    above, batched together. Trig construction must match every state leaf
+    and propagated position/rate to 1e-13 in float64.
     Both solvers must supply the same position and analytic-rate contract.
     """
     elements = np.array(
@@ -211,15 +212,41 @@ def test_plane_factorization(time, solver):
             (0.0, np.pi),
         ]
     ).reshape(2, 4, 2)
+    mean = 0.2 + np.arange(8).reshape(2, 4) * 0.1
     orbit = FrameOrbit.from_classical(
         1.3,
         elements[..., 0],
         elements[..., 1],
         0.4,
         0.7,
-        0.2 + np.arange(8).reshape(2, 4) * 0.1,
+        mean,
         mu_AU3_per_d2=1.0,
         epoch_d=17.0,
+    )
+    trig = FrameOrbit.from_classical_trig(
+        a_AU=1.3,
+        e=elements[..., 0],
+        cos_i=np.cos(elements[..., 1]),
+        sin_i=np.sin(elements[..., 1]),
+        cos_W=np.cos(0.4),
+        sin_W=np.sin(0.4),
+        cos_w=np.cos(0.7),
+        sin_w=np.sin(0.7),
+        cos_M0=np.cos(mean),
+        sin_M0=np.sin(mean),
+        mu_AU3_per_d2=1.0,
+        epoch_d=17.0,
+    )
+    for actual, expected in zip(
+        jax.tree.leaves(trig), jax.tree.leaves(orbit), strict=True
+    ):
+        assert actual.dtype == jnp.float64
+        np.testing.assert_allclose(actual, expected, rtol=1e-13, atol=1e-13)
+    np.testing.assert_allclose(
+        trig.at(time, solver=solver),
+        orbit.at(time, solver=solver),
+        rtol=1e-13,
+        atol=1e-13,
     )
     xy, xy_rate = orbit.plane_coordinates(time, solver=solver)
     basis = orbit.plane_basis()
@@ -234,11 +261,12 @@ def test_plane_factorization(time, solver):
 
 @pytest.mark.parametrize("e,inc", [(0.05, 0.7), (0.6, 1.1), (0.95, 2.6)])
 def test_perifocal_coordinates_and_thiele_innes(e, inc):
-    """Fails if periapsis rotation or east/north conventions change signs.
+    """Fails if perifocal rates or periapsis/east/north rotations change signs.
 
     Truth: NumPy Newton iteration for E-e*sin(E)=M and the classical
     Thiele-Innes formulas, including a retrograde orbit. Float64 permits
-    1e-12 relative plus 1e-14 absolute near coordinate zeros.
+    1e-12 relative plus 1e-14 absolute near coordinate zeros. Rates match
+    central differences at h=1e-5 days to 1e-7 relative.
     """
     a, node, peri, mean, epoch = 1.7, 0.4, 0.7, 0.2, 17.0
     orbit = FrameOrbit.from_classical(
@@ -255,8 +283,14 @@ def test_perifocal_coordinates_and_thiele_innes(e, inc):
     expected = np.stack(
         [np.cos(eccentric) - e, np.sqrt(1 - e * e) * np.sin(eccentric)], -1
     )
-    actual = orbit.perifocal_coordinates(times)
+    actual, rate = orbit.perifocal_coordinates(times)
     np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-14)
+    step = 1e-5
+    difference = (
+        orbit.perifocal_coordinates(times + step)[0]
+        - orbit.perifocal_coordinates(times - step)[0]
+    ) / (2 * step)
+    np.testing.assert_allclose(rate, difference, rtol=1e-7, atol=0)
     cO, sO, cw, sw, ci = (
         np.cos(node),
         np.sin(node),
@@ -270,6 +304,10 @@ def test_perifocal_coordinates_and_thiele_innes(e, inc):
     G = a * (-sO * sw + cO * cw * ci)
     sky = np.asarray(actual) @ np.array([[B, A], [G, F]])
     np.testing.assert_allclose(sky, orbit.at(times)[0][..., :2], rtol=1e-12, atol=1e-14)
+    sky_rate = np.asarray(rate) @ np.array([[B, A], [G, F]])
+    np.testing.assert_allclose(
+        sky_rate, orbit.at(times)[1][..., :2], rtol=1e-12, atol=1e-14
+    )
 
 
 @pytest.mark.parametrize("component", [0, 1])
@@ -292,11 +330,47 @@ def test_plane_coordinates_circular_gradient(component):
     assert np.isfinite(derivative)
     np.testing.assert_allclose(derivative, difference, rtol=1e-8, atol=1e-10)
     np.testing.assert_array_equal(
-        orbit.perifocal_coordinates(0.37), orbit.plane_coordinates(0.37)[0]
+        orbit.perifocal_coordinates(0.37), orbit.plane_coordinates(0.37)
     )
-    derivative = jax.grad(
-        lambda ex: eqx.tree_at(lambda o: o.ex, orbit, ex).perifocal_coordinates(0.37)[
-            component
-        ]
-    )(0.0)
+    for kind in (0, 1):
+        derivative = jax.grad(
+            lambda ex, kind=kind: eqx.tree_at(
+                lambda o: o.ex, orbit, ex
+            ).perifocal_coordinates(0.37)[kind][component]
+        )(0.0)
+        assert np.isfinite(derivative)
+
+
+@pytest.mark.parametrize("parameter", ["cos_i", "cos_w", "sin_w"])
+def test_classical_trig_gradients(parameter):
+    """Fails if angle inversion makes face-on or periapsis gradients singular.
+
+    Truth: central differences with independently varied trig inputs at e=0.3.
+    Float64 and h=1e-5 permit 1e-6 relative error from O(h**2) truncation,
+    plus 1e-11 absolute for roundoff in the zero face-on derivative.
+    """
+    inputs = dict(
+        a_AU=1.3,
+        e=0.3,
+        cos_i=1.0,
+        sin_i=0.0,
+        cos_W=np.cos(0.4),
+        sin_W=np.sin(0.4),
+        cos_w=np.cos(0.7),
+        sin_w=np.sin(0.7),
+        cos_M0=np.cos(0.2),
+        sin_M0=np.sin(0.2),
+        mu_AU3_per_d2=1.0,
+    )
+
+    def evaluate(value):
+        return FrameOrbit.from_classical_trig(**(inputs | {parameter: value})).at(0.37)[
+            0
+        ][0]
+
+    value = jnp.asarray(inputs[parameter], dtype=jnp.float64)
+    derivative = jax.grad(evaluate)(value)
+    step = 1e-5
+    difference = (evaluate(value + step) - evaluate(value - step)) / (2 * step)
     assert np.isfinite(derivative)
+    np.testing.assert_allclose(derivative, difference, rtol=1e-6, atol=1e-11)
