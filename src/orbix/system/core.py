@@ -6,8 +6,8 @@ The hierarchy is a set of independent Kepler orbits, not an N-body integrator.
 
 import equinox as eqx
 import jax.numpy as jnp
-import numpy as np
 from hwoutils.constants import G, Msun2kg
+from hwoutils.epoch import Epoch
 from jaxtyping import Array
 
 from orbix.kepler import Markley
@@ -52,29 +52,23 @@ class Body(eqx.Module):
 
 
 class SkyFrame(eqx.Module):
-    """Distance and host-only two-part Julian-date epoch metadata.
+    """Distance and the reference epoch that time offsets are measured from.
 
-    time_d converts host dates to offsets before any float32 device transfer.
-    scale labels the supplied time scale; no time-scale conversion is applied.
+    The epoch is host-only metadata (hwoutils.epoch.Epoch), never a traced
+    leaf. time_d converts host dates to offsets before any float32 device
+    transfer. No time-scale conversion is applied.
     """
 
     dist_pc: Array = eqx.field(converter=jnp.asarray)
-    epoch_jd1: float = eqx.field(static=True, converter=float, default=0.0)
-    epoch_jd2: float = eqx.field(static=True, converter=float, default=0.0)
-    scale: str = eqx.field(static=True, default="tdb")
+    epoch: Epoch = eqx.field(static=True, default=Epoch())
 
     def time_d(self, time_jd):
-        """Subtract the two-part epoch on the host in NumPy float64, in days.
+        """Days from the epoch, in NumPy float64 on the host.
 
         time_jd may be a numeric JD array or an object exposing jd1 and jd2
-        (for example astropy Time). The latter preserves sub-JD precision.
-        Input dates must already use this frame's time scale.
+        (for example astropy Time). Dates must use the epoch's time scale.
         """
-        if hasattr(time_jd, "jd1") and hasattr(time_jd, "jd2"):
-            return (np.asarray(time_jd.jd1, dtype=np.float64) - self.epoch_jd1) + (
-                np.asarray(time_jd.jd2, dtype=np.float64) - self.epoch_jd2
-            )
-        return (np.asarray(time_jd, dtype=np.float64) - self.epoch_jd1) - self.epoch_jd2
+        return self.epoch.days(time_jd)
 
 
 class Ephemeris(eqx.Module):

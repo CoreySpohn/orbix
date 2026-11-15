@@ -6,6 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from hwoutils.constants import AU2m, G, Msun2kg, d2s
+from hwoutils.epoch import Epoch
 
 from orbix.kepler import Markley
 from orbix.kepler.markley import solve_trig
@@ -238,12 +239,11 @@ def test_host_time_observables_and_solver_trace():
     must add exactly one trace on the first call and none on the second.
     Row pairing is checked against separately evaluated systems at each time.
     """
-    frame = SkyFrame(10.0, 2460000.0, 0.125, "tdb")
+    frame = SkyFrame(10.0, Epoch(2460000.0, 0.125, "tdb"))
     dates = np.array([2460000.125, 2460001.25])
     with jax.enable_x64(False):
         np.testing.assert_array_equal(frame.time_d(dates), [0.0, 1.125])
         assert frame.time_d(dates).dtype == np.float64
-    assert type(frame.epoch_jd1) is type(frame.epoch_jd2) is float
     assert len(jax.tree.leaves(frame)) == 1
     sys = _system()
     times = jnp.array([0.0, 200.0, 700.0])
