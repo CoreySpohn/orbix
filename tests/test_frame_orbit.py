@@ -188,3 +188,115 @@ def test_shape_validation():
     orbit = FrameOrbit.from_classical(1.0, 0.2, 0.7, 0.4, 0.3, 0.2, mu_AU3_per_d2=1.0)
     flipped = eqx.tree_at(lambda o: o.quat, orbit, -orbit.quat)
     np.testing.assert_array_equal(orbit.at(0.3), flipped.at(0.3))
+
+
+@pytest.mark.parametrize("solver", [Markley(), Halley()])
+@pytest.mark.parametrize("time", [0.37, np.array([-0.3, 17.0, 300.0])])
+def test_plane_factorization(time, solver):
+    """Fails if the plane factors lose scale, velocity, or outer time axes.
+
+    Truth: the propagated state for the generic and singular element sets
+    above, batched together. Allow 1e-13 relative for float64 matrix products.
+    Both solvers must supply the same position and analytic-rate contract.
+    """
+    elements = np.array(
+        [
+            (1e-6, 0.7),
+            (0.6, 1.1),
+            (0.2, 2.6),
+            (0.0, 0.7),
+            (0.3, 0.0),
+            (0.3, np.pi),
+            (0.0, 0.0),
+            (0.0, np.pi),
+        ]
+    ).reshape(2, 4, 2)
+    orbit = FrameOrbit.from_classical(
+        1.3,
+        elements[..., 0],
+        elements[..., 1],
+        0.4,
+        0.7,
+        0.2 + np.arange(8).reshape(2, 4) * 0.1,
+        mu_AU3_per_d2=1.0,
+        epoch_d=17.0,
+    )
+    xy, xy_rate = orbit.plane_coordinates(time, solver=solver)
+    basis = orbit.plane_basis()
+    assert basis.shape == (2, 4, 3, 2)
+    assert xy.shape == xy_rate.shape == (2, 4, *np.shape(time), 2)
+    basis = np.asarray(basis).reshape(2, 4, *(1,) * np.ndim(time), 3, 2)
+    expected = orbit.at(time, solver=solver)
+    for coordinates, state in zip((xy, xy_rate), expected, strict=True):
+        actual = (basis @ np.asarray(coordinates)[..., None])[..., 0]
+        np.testing.assert_allclose(actual, state, rtol=1e-13, atol=0)
+
+
+@pytest.mark.parametrize("e,inc", [(0.05, 0.7), (0.6, 1.1), (0.95, 2.6)])
+def test_perifocal_coordinates_and_thiele_innes(e, inc):
+    """Fails if periapsis rotation or east/north conventions change signs.
+
+    Truth: NumPy Newton iteration for E-e*sin(E)=M and the classical
+    Thiele-Innes formulas, including a retrograde orbit. Float64 permits
+    1e-12 relative plus 1e-14 absolute near coordinate zeros.
+    """
+    a, node, peri, mean, epoch = 1.7, 0.4, 0.7, 0.2, 17.0
+    orbit = FrameOrbit.from_classical(
+        a, e, inc, node, peri, mean, mu_AU3_per_d2=1.0, epoch_d=epoch
+    )
+    times = epoch + np.array([-0.2, 0.0, 0.13, 0.5, 0.9]) * float(orbit.period_d)
+    anomaly = mean + float(orbit.n_rad_per_d) * (times - epoch)
+    anomaly = (anomaly + np.pi) % (2 * np.pi) - np.pi
+    eccentric = np.where(anomaly >= 0, np.pi, -np.pi)
+    for _ in range(20):
+        eccentric -= (eccentric - e * np.sin(eccentric) - anomaly) / (
+            1 - e * np.cos(eccentric)
+        )
+    expected = np.stack(
+        [np.cos(eccentric) - e, np.sqrt(1 - e * e) * np.sin(eccentric)], -1
+    )
+    actual = orbit.perifocal_coordinates(times)
+    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-14)
+    cO, sO, cw, sw, ci = (
+        np.cos(node),
+        np.sin(node),
+        np.cos(peri),
+        np.sin(peri),
+        np.cos(inc),
+    )
+    A = a * (cO * cw - sO * sw * ci)
+    B = a * (sO * cw + cO * sw * ci)
+    F = a * (-cO * sw - sO * cw * ci)
+    G = a * (-sO * sw + cO * cw * ci)
+    sky = np.asarray(actual) @ np.array([[B, A], [G, F]])
+    np.testing.assert_allclose(sky, orbit.at(times)[0][..., :2], rtol=1e-12, atol=1e-14)
+
+
+@pytest.mark.parametrize("component", [0, 1])
+def test_plane_coordinates_circular_gradient(component):
+    """Fails if circular plane coordinates have a singular eccentricity gradient.
+
+    Truth: a centered difference in ex at zero with h=1e-5; its O(h**2)
+    truncation permits 1e-8 relative and 1e-10 absolute in float64.
+    The undefined circular periapsis view must also have a finite fallback.
+    """
+    orbit = FrameOrbit.from_classical(1.3, 0.0, 0.7, 0.4, 0.7, 0.2, mu_AU3_per_d2=1.0)
+
+    def evaluate(ex):
+        changed = eqx.tree_at(lambda o: o.ex, orbit, jnp.asarray(ex))
+        return changed.plane_coordinates(0.37)[0][component]
+
+    derivative = jax.grad(evaluate)(0.0)
+    step = 1e-5
+    difference = (evaluate(step) - evaluate(-step)) / (2 * step)
+    assert np.isfinite(derivative)
+    np.testing.assert_allclose(derivative, difference, rtol=1e-8, atol=1e-10)
+    np.testing.assert_array_equal(
+        orbit.perifocal_coordinates(0.37), orbit.plane_coordinates(0.37)[0]
+    )
+    derivative = jax.grad(
+        lambda ex: eqx.tree_at(lambda o: o.ex, orbit, ex).perifocal_coordinates(0.37)[
+            component
+        ]
+    )(0.0)
+    assert np.isfinite(derivative)

@@ -150,6 +150,43 @@ class FrameOrbit(eqx.Module):
 
     def at(self, time_d, *, solver=_DEFAULT_SOLVER):
         """Evaluate the outer product: B + time_shape + (3,), AU and AU/day."""
+        xy, xy_rate = self.plane_coordinates(time_d, solver=solver)
+        basis = self.plane_basis().reshape(
+            (*self.a_AU.shape, *(1,) * jnp.ndim(time_d), 3, 2)
+        )
+        return (basis @ xy[..., None])[..., 0], (basis @ xy_rate[..., None])[..., 0]
+
+    def plane_basis(self) -> Array:
+        """Return the constant B + (3, 2) plane-to-sky matrix in AU.
+
+        Its columns are a_AU times the f and g axes in (east, north, away).
+        Multiplying by plane_coordinates gives position and velocity.
+        Rows 0 and 1 (east, north) generalize the Thiele-Innes constants
+        to these nonsingular axes.
+
+        Let R(phi) = [[cos(phi), -sin(phi)], [sin(phi), cos(phi)]] and
+        phi = atan2(ey, ex), the argument of periapsis measured from f.
+        Where periapsis is defined, plane_basis()[..., :2, :] @ R(phi)
+        equals [[B, G], [A, F]] for the classical Thiele-Innes constants.
+        The classical argument w is measured from the ascending node:
+        phi = w - u, where u locates f from that node. For from_classical,
+        u = w + M0, so phi = -M0. W is north through east and the ascending
+        node moves away, as in from_classical.
+        """
+        f = rotate(self.quat, jnp.array([1.0, 0.0, 0.0]))
+        g = rotate(self.quat, jnp.array([0.0, 1.0, 0.0]))
+        return self.a_AU[..., None, None] * jnp.stack([f, g], -1)
+
+    def plane_coordinates(
+        self, time_d, *, solver=_DEFAULT_SOLVER
+    ) -> tuple[Array, Array]:
+        """Return dimensionless plane position and its rate in 1/day.
+
+        Both arrays have shape B + time_shape + (2,), with the same outer
+        time broadcasting as at. Coordinates use the nonsingular f and g
+        axes of ex and ey, in units of the semi-major axis. Position and
+        rate are finite and smooth at e=0; one Kepler solve supplies both.
+        """
         time = jnp.asarray(time_d)
         shape = self.a_AU.shape + (1,) * time.ndim
         expanded = FrameOrbit(
@@ -160,7 +197,26 @@ class FrameOrbit(eqx.Module):
             self.quat.reshape((*shape, 4)),
             self.epoch_d.reshape(shape),
         )
-        return expanded.at_each(time, solver=solver)
+        return expanded._plane_coordinates_each(time, solver=solver)
+
+    def perifocal_coordinates(self, time_d, *, solver=_DEFAULT_SOLVER) -> Array:
+        """Return (cos(E)-e, sqrt(1-e**2)*sin(E)), shape B + time_shape + (2,).
+
+        Rotate plane_coordinates into the classical periapsis axes without
+        another Kepler solve. These axes are undefined at e=0: there the
+        result uses f and g unchanged. Guarding the angle's inputs makes
+        the value and autodiff gradient finite at zero; this arbitrary
+        fallback does not make the periapsis view continuous there.
+        """
+        xy, _ = self.plane_coordinates(time_d, solver=solver)
+        nonzero = (self.ex != 0) | (self.ey != 0)
+        phi = jnp.arctan2(
+            jnp.where(nonzero, self.ey, 0.0), jnp.where(nonzero, self.ex, 1.0)
+        )
+        shape = self.a_AU.shape + (1,) * jnp.ndim(time_d)
+        c, s = jnp.cos(phi).reshape(shape), jnp.sin(phi).reshape(shape)
+        x, y = xy[..., 0], xy[..., 1]
+        return jnp.stack([c * x + s * y, -s * x + c * y], -1)
 
     def at_each(self, time_d, *, solver=_DEFAULT_SOLVER):
         """Evaluate paired times: broadcast(B, time_shape) + (3,), AU and AU/day.
@@ -168,6 +224,12 @@ class FrameOrbit(eqx.Module):
         One eccentric-longitude solve supplies both position and analytic
         velocity; there is no trigonometry outside that solve.
         """
+        xy, xy_rate = self._plane_coordinates_each(time_d, solver=solver)
+        basis = self.plane_basis()
+        return (basis @ xy[..., None])[..., 0], (basis @ xy_rate[..., None])[..., 0]
+
+    def _plane_coordinates_each(self, time_d, *, solver):
+        """Evaluate dimensionless plane position and rate at paired times."""
         sine, cosine = kepler(
             self.n_rad_per_d * (jnp.asarray(time_d) - self.epoch_d),
             self.ex,
@@ -180,16 +242,12 @@ class FrameOrbit(eqx.Module):
             beta * self.ex * self.ey,
             1 - beta * self.ex**2,
         )
-        x = self.a_AU * (bxx * cosine + bxy * sine - self.ex)
-        y = self.a_AU * (bxy * cosine + byy * sine - self.ey)
+        x = bxx * cosine + bxy * sine - self.ex
+        y = bxy * cosine + byy * sine - self.ey
         rate = self.n_rad_per_d / (1 - self.ex * cosine - self.ey * sine)
-        vx = self.a_AU * rate * (-bxx * sine + bxy * cosine)
-        vy = self.a_AU * rate * (-bxy * sine + byy * cosine)
-        zero = jnp.zeros_like(x)
-        return (
-            rotate(self.quat, jnp.stack([x, y, zero], -1)),
-            rotate(self.quat, jnp.stack([vx, vy, zero], -1)),
-        )
+        vx = rate * (-bxx * sine + bxy * cosine)
+        vy = rate * (-bxy * sine + byy * cosine)
+        return jnp.stack([x, y], -1), jnp.stack([vx, vy], -1)
 
     @property
     def e(self):
