@@ -152,7 +152,6 @@ def animate_orbit(
     time_jd=None,
     *,
     time_d=None,
-    Ms_kg=None,
     dist_pc=None,
     trig_solver=None,
     kind="sky",
@@ -182,15 +181,14 @@ def animate_orbit(
             (``(K, T, 2)`` or an ``(ra, dec)`` pair); for ``kind="3d"``
             ``(T, 3)`` / ``(K, T, 3)`` positions.
         time_d: Float days from the engine object's epoch, shape ``(T,)``.
-        time_jd: Times in Julian Days, shape ``(T,)``. Required for
+        time_jd: Compatibility alias for ``time_d``, shape ``(T,)``. Required for
             ``kind="sky"``, where the samples' physical times drive the
             playback clock, and on the 3D orbit door; on the 3D bare-track
             door it is optional and used only for the elapsed-time label
             (length must match the track).
-        Ms_kg: Stellar mass in kg, for legacy orbits only.
-        dist_pc: Distance in parsecs for frame or legacy sky orbits.
+        dist_pc: Distance in parsecs for frame sky orbits.
             A system uses its stored distance.
-        trig_solver: Engine solver strategy, or the legacy solver callable.
+        trig_solver: Engine solver strategy (Markley, Halley, or Grid).
             None uses the input object's default.
         kind: ``"sky"`` (sky-plane arcsec: ``prepare_sky_track`` played by
             ``eyepiece.mpl.animate``) or ``"3d"`` (star-centric AU, via
@@ -287,7 +285,6 @@ def animate_orbit(
         return _animate_sky(
             orbit_or_tracks,
             time_jd,
-            Ms_kg=Ms_kg,
             dist_pc=dist_pc,
             trig_solver=trig_solver,
             history=history,
@@ -332,14 +329,13 @@ def animate_orbit(
     base = plot_orbit(
         orbit_or_tracks,
         base_t,
-        Ms_kg=Ms_kg,
         trig_solver=trig_solver,
         style=style,
         marks=marks,
         marker_scale=0.0,
         trail_kw={"alpha": 0.45},
     )
-    tracks, _ = _positions(orbit_or_tracks, base_t, Ms_kg, trig_solver)
+    tracks, _ = _positions(orbit_or_tracks, base_t, trig_solver)
 
     ax = base.ax
     n_tracks, n_frames = tracks.shape[0], tracks.shape[1]
@@ -465,7 +461,6 @@ def _animate_sky(
     orbit_or_tracks,
     time_jd,
     *,
-    Ms_kg,
     dist_pc,
     trig_solver,
     history,
@@ -489,7 +484,6 @@ def _animate_sky(
     sequence = prepare_sky_track(
         orbit_or_tracks,
         time_jd=time_jd,
-        Ms_kg=Ms_kg,
         dist_pc=dist_pc,
         trig_solver=trig_solver,
         source_ids=source_ids,

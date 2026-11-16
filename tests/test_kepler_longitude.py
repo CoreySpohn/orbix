@@ -9,7 +9,6 @@ import pytest
 from jax.test_util import check_grads
 
 from orbix.kepler import AbstractKeplerSolver, Grid, Halley, Markley, kepler
-from orbix.kepler.markley import solve_trig
 
 _SOLVERS = (Markley(), Halley(), Grid())
 
@@ -55,8 +54,8 @@ def test_residual(solver, x64):
 
 
 @pytest.mark.parametrize("x64", [False, True])
-def test_markley_against_halley_and_existing_solver(x64):
-    """Independent Halley and existing Markley agree within 24 eps/(1-e).
+def test_markley_against_halley_and_periapsis_rotation(x64):
+    """Fails if independent Halley or periapsis rotations disagree within 24 eps/(1-e).
 
     The implicit slope bounds the amplification of input and rotation rounding;
     the grid spans longitude, eccentricity and periapsis independently.
@@ -75,7 +74,7 @@ def test_markley_against_halley_and_existing_solver(x64):
             actual[0] * jnp.cos(p) - actual[1] * jnp.sin(p),
             actual[1] * jnp.cos(p) + actual[0] * jnp.sin(p),
         )
-        expected = jax.jit(solve_trig)(lam - p, e)
+        expected = jax.jit(kepler)(lam - p, e, 0, solver=Halley())
         assert np.all(np.abs(np.asarray(rotated) - np.asarray(expected)) <= bound)
 
 

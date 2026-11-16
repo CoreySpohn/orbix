@@ -1,27 +1,59 @@
-"""Table-free elliptic Kepler solver with implicit derivatives.
+"""Private Markley (1995) cubic starter and fifth-order correction.
 
-The cubic starter and fifth-order correction follow Markley (1995),
-``Kepler Equation Solver``, Celestial Mechanics and Dynamical Astronomy 63,
-101-111, https://doi.org/10.1007/BF00691917. An open NASA report is available
-at https://ntrs.nasa.gov/citations/19950021346.
-
-This implementation reuses the polynomial sine/cosine helper from the RPP
-solver, evaluates the small-angle residual without subtractive cancellation,
-and rotates the trig pair through the correction. There is no table setup,
-interval search, or convergence loop. All entry points support broadcasting,
-JIT, vmap, and forward/reverse automatic differentiation.
-
-Inputs must satisfy 0 <= e < 1 and use radians. Enable JAX float64 for
-precision-sensitive work. Phase reduction uses the floating-point value of
-2*pi; phase information lost when forming or wrapping M cannot be recovered,
-and its error is amplified near periapsis for almost-parabolic orbits.
+Reference: Celestial Mechanics and Dynamical Astronomy 63, 101-111,
+https://doi.org/10.1007/BF00691917. The reduced polynomial trig helper is
+adapted from orvara (BSD 3-clause), Copyright (c) 2021 Timothy Brandt,
+Trent Dupuy, Yiting Li, G. Mirek Brandt, Yunlin Zeng, Daniel Michalik,
+and Virginia Raposo-Pulido. Small-angle residuals avoid cancellation
+near parabolic periapsis; phase information lost in input rounding
+cannot be recovered.
 """
 
 import jax
 import jax.numpy as jnp
 from hwoutils.constants import two_pi
 
-from orbix.kepler.core import fast_sinE_cosE
+_if3 = 1.0 / 6.0
+_if5 = 1.0 / (6.0 * 20.0)
+_if7 = 1.0 / (6.0 * 20.0 * 42.0)
+_if9 = 1.0 / (6.0 * 20.0 * 42.0 * 72.0)
+_if11 = 1.0 / (6.0 * 20.0 * 42.0 * 72.0 * 110.0)
+_if13 = 1.0 / (6.0 * 20.0 * 42.0 * 72.0 * 110.0 * 156.0)
+_if15 = 1.0 / (6.0 * 20.0 * 42.0 * 72.0 * 110.0 * 156.0 * 210.0)
+
+
+def _shortsin(x):
+    """Approximates the sine function using a short polynomial.
+
+    This is only valid between [0, pi].
+    """
+    x2 = x * x
+    return x * (
+        1
+        - x2
+        * (
+            _if3
+            - x2
+            * (
+                _if5
+                - x2 * (_if7 - x2 * (_if9 - x2 * (_if11 - x2 * (_if13 - x2 * _if15))))
+            )
+        )
+    )
+
+
+def _sin_cos(E):
+    """Compute the sine and cosine of the eccentric anomaly using _shortsin."""
+    # Select the reduced angle before evaluating the polynomial. A vmapped
+    # switch evaluates all three branches, tripling the polynomial/sqrt work.
+    low = E <= (jnp.pi / 4)
+    middle = (E > (jnp.pi / 4)) & (E < (3 * jnp.pi / 4))
+    x = jnp.where(middle, (jnp.pi / 2) - E, jnp.where(low, E, jnp.pi - E))
+    small = _shortsin(x)
+    large = jax.lax.sqrt(1.0 - small * small)
+    sinE = jnp.where(middle, large, small)
+    cosE = jnp.where(middle, small, jnp.where(low, large, -large))
+    return sinE, cosE
 
 
 def _denominator(sine, cosine, e):
@@ -32,19 +64,7 @@ def _denominator(sine, cosine, e):
     return (1 - e) + e * one_minus_cos
 
 
-@jax.custom_jvp
-def E_solve_trig(M, e):
-    """Return (E, sin(E), cos(E)) for broadcast-compatible M and e.
-
-    E is wrapped to [0, 2*pi), up to endpoint rounding. The trig pair retains
-    small negative phases even when the wrapped E rounds to 2*pi. Derivatives
-    are those of the implicit Kepler solution away from the wrap seam; at the
-    seam the derivative follows the continuous, unwrapped E convention.
-    """
-    return _solve_trig_value(M, e)
-
-
-def _solve_trig_value(M, e):
+def _markley_pair(M, e):
     """Evaluate Markley's algorithm without a derivative rule."""
     dtype = jnp.result_type(M, e, 0.0)
     M, e = jnp.asarray(M, dtype=dtype), jnp.asarray(e, dtype=dtype)
@@ -67,7 +87,7 @@ def _solve_trig_value(M, e):
     r = (3 * alpha * d * (d - ome) + mean * mean) * mean
     w = jnp.cbrt(jnp.abs(r) + jnp.sqrt(q**3 + r * r)) ** 2
     initial = (2 * r * w / (w * w + w * q + q * q) + mean) / d
-    sine, cosine = fast_sinE_cosE(initial)
+    sine, cosine = _sin_cos(initial)
 
     # For E < 0.3 the omitted E**15/15! term is below 1.1e-20. Evaluating
     # E - sin(E) directly loses the residual when e approaches one.
@@ -105,32 +125,4 @@ def _solve_trig_value(M, e):
     cos_delta = 1 - delta2 / 2 + delta2 * delta2 / 24
     sinE = sine * cos_delta + cosine * sin_delta
     cosE = cosine * cos_delta - sine * sin_delta
-    eccentric = initial + correction
-    E = jnp.where(negative, two_pi - eccentric, eccentric)
-    return E, jnp.where(negative, -sinE, sinE), cosE
-
-
-@E_solve_trig.defjvp
-def _solve_jvp(primals, tangents):
-    """Differentiate the equation rather than the numerical approximation."""
-    M, e = primals
-    M_dot, e_dot = tangents
-    # A nondifferentiated integer literal (e.g. e=0) has a float0 tangent.
-    if getattr(M_dot, "dtype", None) == jax.dtypes.float0:
-        M_dot = 0.0
-    if getattr(e_dot, "dtype", None) == jax.dtypes.float0:
-        e_dot = 0.0
-    E, sine, cosine = E_solve_trig(M, e)
-    E_dot = (M_dot + sine * e_dot) / _denominator(sine, cosine, e)
-    return (E, sine, cosine), (E_dot, cosine * E_dot, -sine * E_dot)
-
-
-def E_solve(M, e):
-    """Return wrapped eccentric anomaly for broadcast-compatible M and e."""
-    return E_solve_trig(M, e)[0]
-
-
-def solve_trig(M, e):
-    """Return differentiable (sin(E), cos(E)), suitable as an orbit solver."""
-    _, sine, cosine = E_solve_trig(M, e)
-    return sine, cosine
+    return jnp.where(negative, -sinE, sinE), cosE

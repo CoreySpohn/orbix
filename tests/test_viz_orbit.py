@@ -41,7 +41,7 @@ def _orbit(K=1):
 
 
 T_JD = jnp.linspace(2460000.0, 2460500.0, 60)
-STELLAR = dict(Ms_kg=jnp.atleast_1d(MSUN_KG), dist_pc=jnp.atleast_1d(10.0))
+STELLAR = dict(dist_pc=jnp.atleast_1d(10.0))
 
 
 def test_plot_sky_track_single_orbit_contract():
@@ -204,7 +204,7 @@ def test_plot_orbit_single_contract():
 
     from orbix.viz import plot_orbit
 
-    result = plot_orbit(_orbit(), T_JD, Ms_kg=STELLAR["Ms_kg"])
+    result = plot_orbit(_orbit(), T_JD)
     assert isinstance(result, ep.PlotResult)
     assert result.ax.name == "3d"
     assert "line" in result.artists and "scatter" in result.artists
@@ -219,7 +219,7 @@ def test_plot_orbit_batch_returns_lists():
     from orbix.viz import plot_orbit
 
     K = 3
-    result = plot_orbit(_orbit(K), T_JD, Ms_kg=STELLAR["Ms_kg"])
+    result = plot_orbit(_orbit(K), T_JD)
     assert len(result.artists["lines"]) == K
     assert len(result.artists["scatter"]) == K
 
@@ -283,7 +283,7 @@ def test_observer_3d_view_matches_sky_panel():
     fig = plt.figure()
     ax = fig.add_subplot(projection="3d", proj_type="ortho")
     ax.view_init(elev=-90, azim=90, roll=0)
-    spatial = plot_orbit(orbit, T_JD, Ms_kg=STELLAR["Ms_kg"], ax=ax, depth="none")
+    spatial = plot_orbit(orbit, T_JD, ax=ax, depth="none")
     sky = plot_sky_track(orbit, T_JD, **STELLAR)
     xyz = spatial.artists["lines"][0].get_data_3d()
     projected = np.array(proj3d.proj_transform(*xyz, ax.get_proj()))[:2].T
@@ -328,7 +328,6 @@ def test_plot_orbit_marks_smoke_and_errors():
     result = plot_orbit(
         _orbit(),
         T_JD,
-        Ms_kg=STELLAR["Ms_kg"],
         marks={"periapsis", "nodes"},
     )
     assert len(result.artists["scatter"]) == 4
@@ -337,7 +336,7 @@ def test_plot_orbit_marks_smoke_and_errors():
     with pytest.raises(ValueError, match="elements"):
         plot_orbit(np.zeros((10, 3)), marks={"periapsis"})
     with pytest.raises(ValueError, match="unknown marks"):
-        plot_orbit(_orbit(), T_JD, Ms_kg=STELLAR["Ms_kg"], marks={"apoapsis"})
+        plot_orbit(_orbit(), T_JD, marks={"apoapsis"})
 
 
 def test_plot_sky_track_per_track_colors():
@@ -393,7 +392,7 @@ def test_plot_orbit_panes_take_the_axes_facecolor():
     """The 3D panes follow the axes facecolor instead of matplotlib gray."""
     from orbix.viz import plot_orbit
 
-    result = plot_orbit(_orbit(), T_JD, Ms_kg=STELLAR["Ms_kg"])
+    result = plot_orbit(_orbit(), T_JD)
     face = result.ax.get_facecolor()
     for pane_axis in (result.ax.xaxis, result.ax.yaxis, result.ax.zaxis):
         assert tuple(pane_axis.pane.get_facecolor()) == pytest.approx(face)
@@ -405,7 +404,7 @@ def test_plot_orbit_star_chart_look_under_markers():
 
     from orbix.viz import plot_orbit
 
-    result = plot_orbit(_orbit(), T_JD, Ms_kg=STELLAR["Ms_kg"], depth="markers")
+    result = plot_orbit(_orbit(), T_JD, depth="markers")
     line = result.artists["line"]
     assert line.get_linestyle() == "--"
     assert line.get_alpha() == pytest.approx(0.5)
@@ -413,9 +412,7 @@ def test_plot_orbit_star_chart_look_under_markers():
     scatter_rgba = tuple(result.artists["scatter"].get_facecolor()[0])
     assert scatter_rgba == pytest.approx(text_rgba)
 
-    styled = plot_orbit(
-        _orbit(), T_JD, Ms_kg=STELLAR["Ms_kg"], style="#22aabb", depth="markers"
-    )
+    styled = plot_orbit(_orbit(), T_JD, style="#22aabb", depth="markers")
     assert styled.artists["line"].get_linestyle() == "-"
     assert styled.artists["line"].get_color() == "#22aabb"
 
@@ -431,7 +428,7 @@ def test_plot_orbit_unstyled_path_is_visible_without_markers():
 
     from orbix.viz import plot_orbit
 
-    result = plot_orbit(_orbit(), T_JD, Ms_kg=STELLAR["Ms_kg"])
+    result = plot_orbit(_orbit(), T_JD)
     text_rgba = matplotlib.colors.to_rgba(mpl.rcParams["text.color"])
     line_rgba = matplotlib.colors.to_rgba(result.artists["line"].get_color())
     assert line_rgba == pytest.approx(text_rgba)
@@ -462,7 +459,6 @@ def test_plot_orbit_per_track_marker_scale():
     result = plot_orbit(
         _orbit(2),
         T_JD,
-        Ms_kg=STELLAR["Ms_kg"],
         marker_scale=[0.0, 20.0],
         depth="markers",
     )
@@ -471,7 +467,7 @@ def test_plot_orbit_per_track_marker_scale():
     assert np.max(second.get_sizes()) > 0.0
 
     with pytest.raises(ValueError, match="marker_scale has 3"):
-        plot_orbit(_orbit(2), T_JD, Ms_kg=STELLAR["Ms_kg"], marker_scale=[1, 2, 3])
+        plot_orbit(_orbit(2), T_JD, marker_scale=[1, 2, 3])
 
 
 def test_depth_helpers_are_public():

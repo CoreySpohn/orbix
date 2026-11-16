@@ -120,39 +120,6 @@ def _resolve_time(time_jd, time_d):
     return time_jd if time_d is None else time_d
 
 
-def _legacy_orbit_arrays(value, times, Ms_kg, dist_pc, trig_solver, angular):
-    """Adapt the angle-field orbit to host tracks and optional mark geometry."""
-    if not hasattr(value, "propagate"):
-        return None
-    from orbix.orbit import AbstractOrbit
-
-    if not isinstance(value, AbstractOrbit):
-        return None
-    missing = [
-        name for name, arg in (("time_jd", times), ("Ms_kg", Ms_kg)) if arg is None
-    ]
-    if angular and dist_pc is None:
-        missing.append("dist_pc")
-    if missing:
-        raise TypeError("preparing an orbit requires " + ", ".join(missing))
-    if angular:
-        ra, dec = value.position_arcsec(
-            trig_solver, times, Ms_kg=Ms_kg, dist_pc=dist_pc
-        )
-        return np.asarray(jnp.stack([ra, dec], axis=-1)), None
-    r, _, _ = value.propagate(trig_solver, times, Ms_kg=Ms_kg)
-    geometry = None
-    if hasattr(value, "_AB"):
-        A, B = value._AB()
-        geometry = (
-            np.asarray(A),
-            np.asarray(B),
-            np.asarray(value.e),
-            np.asarray(value.w_rad),
-        )
-    return np.moveaxis(np.asarray(r, float), 1, 2), geometry
-
-
 def _frame_geometry(orbit):
     """Perifocal A, B, eccentricity and node phase; circular periapsis is arbitrary."""
     basis = np.asarray(orbit.plane_basis()).reshape(-1, 3, 2)
@@ -165,7 +132,7 @@ def _frame_geometry(orbit):
     return A.T, B.T, e, node_phase
 
 
-def _orbit_arrays(value, times, Ms_kg, dist_pc, trig_solver, *, angular=False):
+def _orbit_arrays(value, times, dist_pc, trig_solver, *, angular=False):
     """Return host tracks and mark geometry, or None for a bare-array input.
 
     Engine time arguments are float days from the object's epoch. Batch
@@ -206,13 +173,13 @@ def _orbit_arrays(value, times, Ms_kg, dist_pc, trig_solver, *, angular=False):
         tracks = jnp.stack([ra, dec], -1) if angular else r
         host = np.asarray(tracks)
         return host.reshape(-1, host.shape[-2], host.shape[-1]), geometry
-    return _legacy_orbit_arrays(value, times, Ms_kg, dist_pc, trig_solver, angular)
+    return None
 
 
-def _sky_xy(orbit_or_radec, time_jd, Ms_kg, dist_pc, trig_solver):
+def _sky_xy(orbit_or_radec, time_jd, dist_pc, trig_solver):
     """Normalize the input to host coordinates of shape ``(K, T, 2)`` arcsec."""
     prepared = _orbit_arrays(
-        orbit_or_radec, time_jd, Ms_kg, dist_pc, trig_solver, angular=True
+        orbit_or_radec, time_jd, dist_pc, trig_solver, angular=True
     )
     if prepared is not None:
         return prepared[0]
@@ -442,7 +409,6 @@ def prepare_sky_track(
     *,
     time_jd=None,
     time_d=None,
-    Ms_kg=None,
     dist_pc=None,
     trig_solver=None,
     source_ids=None,
@@ -456,20 +422,18 @@ def prepare_sky_track(
 
     Args:
         orbit_or_radec: A ``FrameOrbit`` with ``dist_pc``, a ``System``
-            with its stored distance, a legacy orbit with mass and distance,
+            with its stored distance,
             or bare tracks
             in arcsec: an array shaped ``(K, T, 2)`` of (RA, Dec) offsets,
             borrowed as given, or an ``(ra, dec)`` pair of ``(T,)`` or
             ``(K, T)`` arrays. A tuple or list of two is always read as an
             ``(ra, dec)`` pair. A row with a nonfinite coordinate is a gap.
         time_d: Float days from the engine object's epoch, shape ``(T,)``.
-        time_jd: Legacy sample times in Julian days, shape ``(T,)``, finite and
-            strictly increasing. They time the orbit's propagation and,
-            for either door, the sequence samples.
-        Ms_kg: Stellar mass in kg, for legacy orbits only.
-        dist_pc: Distance in parsecs for a frame or legacy orbit. A system
+        time_jd: Compatibility alias for ``time_d``, shape ``(T,)``, finite and
+            strictly increasing. Values use the same epoch as the orbit.
+        dist_pc: Distance in parsecs for a frame orbit. A system
             uses its stored distance.
-        trig_solver: Engine solver strategy, or the legacy solver callable.
+        trig_solver: Engine solver strategy (Markley, Halley, or Grid).
             None uses the input object's default.
         source_ids: The scientific source of each track: None (every track
             is one source, ``"track"``), one name for every track, or K
@@ -514,7 +478,7 @@ def prepare_sky_track(
     times_jd = _sample_times(time_jd)
     trail, window = _trail_window(history)
     custom_clock = None if clock_fmt is None else Clock(CLOCK_ID, fmt=clock_fmt)
-    tracks = _sky_xy(orbit_or_radec, time_jd, Ms_kg, dist_pc, trig_solver)
+    tracks = _sky_xy(orbit_or_radec, time_jd, dist_pc, trig_solver)
     if tracks.shape[1] != times_jd.size:
         raise ValueError(
             f"time_jd has {times_jd.size} entries for a {tracks.shape[1]}-sample track"
@@ -561,7 +525,6 @@ def prepare_sky_view(
     *,
     time_jd=None,
     time_d=None,
-    Ms_kg=None,
     dist_pc=None,
     trig_solver=None,
     source_ids=None,
@@ -577,9 +540,8 @@ def prepare_sky_view(
     Args:
         orbit_or_radec: As for ``prepare_sky_track``.
         time_d: Float days from the engine object's epoch, shape ``(T,)``.
-        time_jd: Legacy times in Julian days, shape ``(T,)``. Orbit door only: bare
-            tracks are drawn as given.
-        Ms_kg: As for ``prepare_sky_track``.
+        time_jd: Compatibility alias for ``time_d``, shape ``(T,)``. Orbit door only:
+            bare tracks are drawn as given.
         dist_pc: As for ``prepare_sky_track``.
         trig_solver: As for ``prepare_sky_track``.
         source_ids: As for ``prepare_sky_track``.
@@ -598,7 +560,7 @@ def prepare_sky_view(
     """
     time_jd = _resolve_time(time_jd, time_d)
     prepared = _orbit_arrays(
-        orbit_or_radec, time_jd, Ms_kg, dist_pc, trig_solver, angular=True
+        orbit_or_radec, time_jd, dist_pc, trig_solver, angular=True
     )
     if prepared is None:
         if time_jd is not None:
@@ -606,7 +568,7 @@ def prepare_sky_view(
                 "time_jd only applies when propagating an orbit; bare tracks are "
                 "drawn as given"
             )
-        tracks = _sky_xy(orbit_or_radec, None, Ms_kg, dist_pc, trig_solver)
+        tracks = _sky_xy(orbit_or_radec, None, dist_pc, trig_solver)
     else:
         tracks = prepared[0]
     return _build_view(

@@ -11,8 +11,8 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 
-from orbix.kepler.markley import _solve_trig_value
-from orbix.kepler.shortcuts.grid import _build_trig_grid, _indices_frac
+from orbix.kepler._grid import _build_trig_grid, _indices_frac
+from orbix.kepler._markley import _markley_pair
 
 
 class AbstractKeplerSolver(eqx.Module):
@@ -34,7 +34,7 @@ class Markley(AbstractKeplerSolver):
 
     def solve(self, mean_anomaly, e):
         """Evaluate the table-free Markley algorithm elementwise."""
-        return _solve_trig_value(mean_anomaly, e)[1:]
+        return _markley_pair(mean_anomaly, e)
 
 
 class Halley(AbstractKeplerSolver):
@@ -86,7 +86,7 @@ class Grid(AbstractKeplerSolver):
         table, inv_dM, inv_de = _build_trig_grid(
             self.n_e, self.n_M, dtype=jnp.asarray(0.0).dtype
         )
-        e0, m0, de, dm = _indices_frac(mean, e, inv_dM, inv_de, self.n_M, self.n_e)
+        e0, m0, de, dm = _indices_frac(mean, e, inv_dM, inv_de, self.n_M)
         pair = (
             table[:, e0, m0] * ((1 - de) * (1 - dm))
             + table[:, e0, m0 + 1] * ((1 - de) * dm)

@@ -1,4 +1,4 @@
-"""Properties for the Orvara solvers and their polynomial/trig boundaries."""
+"""Kepler equation, continuity, near-circular, and reduced-trig regressions."""
 
 import jax
 import jax.numpy as jnp
@@ -9,7 +9,8 @@ from hypothesis import example, given
 from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
 
-from orbix.kepler import core
+from orbix.kepler import kepler
+from orbix.kepler._markley import _sin_cos
 
 
 def _floats(low, high):
@@ -18,29 +19,9 @@ def _floats(low, high):
 
 @jax.jit
 def _solutions(means, e):
-    """Exercise public wrappers and the appropriate low/high-e branch."""
-    wrapped = jnp.mod(means, two_pi)
-    branch_e = jnp.where(e == 0, 0.3, e)
-    branch = jax.lax.cond(e < 0.78, core.le_E, core.he_E, wrapped, branch_e)
-    branch_trig = jax.lax.cond(
-        e < 0.78, core.le_E_trig, core.he_E_trig, wrapped, branch_e
-    )
-    branch = jnp.where(e == 0, core.identity_solver(wrapped, e), branch)
-    identity = core.identity_solver_trig(wrapped, e)
-    branch_trig = tuple(
-        jnp.where(e == 0, x, y) for x, y in zip(identity, branch_trig, strict=False)
-    )
-    return (
-        jnp.stack([core.E_solve(means, e), core.E_solve_trig(means, e)[0], branch]),
-        jnp.stack(
-            [
-                jnp.stack(core.E_solve_trig(means, e)[1:]),
-                jnp.stack(core.solve_trig(means, e)),
-                jnp.stack(core.diff_solve_trig(means, e)),
-                jnp.stack(branch_trig[1:]),
-            ]
-        ),
-    )
+    """Recover the angle for residual checks from the public solver pair."""
+    sine, cosine = kepler(means, e, 0)
+    return jnp.mod(jnp.arctan2(sine, cosine), two_pi), jnp.stack([sine, cosine])
 
 
 @given(
@@ -68,37 +49,35 @@ def test_solver_equation_trig_and_continuity(e, mean, step):
             np.nextafter(np.pi, 4),
         ]
     )
-    # Retain every eccentricity from the old near-pi grid and pin dispatch edges.
+    # Retain the near-pi regression eccentricities and the 0.78 boundary.
     for ecc in (e, 0.0, 0.05, 0.2, 0.5, 0.9, np.nextafter(0.78, 0), 0.78, 0.99):
         eccentric, trig = map(
             np.asarray,
             _solutions(jnp.asarray(means), jnp.asarray(ecc, dtype=jnp.float64)),
         )
         assert np.all((eccentric >= -4e-14) & (eccentric <= two_pi + 4e-14))
-        sine, cosine = trig[:, 0], trig[:, 1]
+        sine, cosine = trig
         residual = eccentric - ecc * np.sin(eccentric) - means
         np.testing.assert_allclose(
             np.arctan2(np.sin(residual), np.cos(residual)), 0, atol=4e-14, rtol=0
         )
-        np.testing.assert_allclose(
-            sine, np.broadcast_to(np.sin(eccentric[0]), sine.shape), atol=4e-14, rtol=0
-        )
+        np.testing.assert_allclose(sine, np.sin(eccentric), atol=4e-14, rtol=0)
         np.testing.assert_allclose(
             cosine,
-            np.broadcast_to(np.cos(eccentric[0]), cosine.shape),
+            np.cos(eccentric),
             atol=4e-14,
             rtol=0,
         )
         np.testing.assert_allclose(sine**2 + cosine**2, 1, atol=4e-14, rtol=0)
-        offset = eccentric[:, :2] - means[:2]
+        offset = eccentric[:2] - means[:2]
         lifted = means[:2] + np.arctan2(np.sin(offset), np.cos(offset))
-        delta = lifted[:, 1] - lifted[:, 0]
+        delta = lifted[1] - lifted[0]
         actual_step = means[1] - means[0]
         assert np.all(delta >= actual_step / (1 + ecc) - 8e-14)
         assert np.all(delta <= actual_step / (1 - ecc) + 8e-14)
 
 
-_fast_trig = jax.jit(core.fast_sinE_cosE)
+_fast_trig = jax.jit(_sin_cos)
 
 
 @given(angles=arrays(np.float64, (16,), elements=_floats(0.0, np.pi)))
@@ -119,8 +98,8 @@ def test_fast_trig_across_quadrants(angles):
 @example(e=0.78)
 @example(e=0.95)
 @given(e=st.one_of(st.just(0.0), _floats(1e-100, 0.99)))
-def test_polynomial_interval_boundaries(e):
-    """Fails if interval selection loses 4e-14 rad at either side of a table edge.
+def test_eccentric_anomaly_nodes(e):
+    """Fails if solving known roots loses 4e-14 rad at sampled anomaly nodes.
 
     Tiny positive e is covered by the explicit overflow regression.
     """
@@ -145,15 +124,13 @@ def test_polynomial_interval_boundaries(e):
 )
 def test_tiny_positive_eccentricity_remains_finite(e):
     """Fails if a near-circular orbit becomes NaN through inverse-e overflow."""
-    result = core.E_solve_jit(jnp.array([1.3]), jnp.asarray(e))
-    np.testing.assert_allclose(result, [1.3], atol=4e-14, rtol=0)
     roots, trig = _solutions(jnp.array([1.3]), jnp.asarray(e))
     np.testing.assert_allclose(roots, 1.3, atol=4e-14, rtol=0)
-    np.testing.assert_allclose(trig[:, 0], np.sin(1.3), atol=4e-14, rtol=0)
-    np.testing.assert_allclose(trig[:, 1], np.cos(1.3), atol=4e-14, rtol=0)
+    np.testing.assert_allclose(trig[0], np.sin(1.3), atol=4e-14, rtol=0)
+    np.testing.assert_allclose(trig[1], np.cos(1.3), atol=4e-14, rtol=0)
     gradient = jax.grad(
-        lambda ecc: sum(
-            jnp.sum(x) for x in core.E_solve_trig_jit(jnp.array([1.3]), ecc)
-        )
+        lambda ecc: sum(jnp.sum(x) for x in kepler(jnp.array([1.3]), ecc, 0))
     )(jnp.asarray(e))
-    assert np.isfinite(gradient)
+    np.testing.assert_allclose(
+        gradient, (np.cos(1.3) - np.sin(1.3)) * np.sin(1.3), atol=4e-14, rtol=0
+    )

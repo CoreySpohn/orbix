@@ -11,7 +11,23 @@ from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
 from jax.test_util import check_grads
 
-from orbix.kepler.markley import E_solve, E_solve_trig, solve_trig
+from orbix.kepler import Markley, kepler
+
+
+def _pair(mean, e):
+    """Exercise the public longitude equation at zero periapsis longitude."""
+    return kepler(mean, e, 0, solver=Markley())
+
+
+def _wrapped_angle(mean, e):
+    """Recover an angle only for the equation and monotonicity assertions."""
+    sine, cosine = _pair(mean, e)
+    return jnp.mod(jnp.arctan2(sine, cosine), two_pi)
+
+
+def _angle_and_pair(mean, e):
+    sine, cosine = _pair(mean, e)
+    return jnp.mod(jnp.arctan2(sine, cosine), two_pi), sine, cosine
 
 
 def _reference(m, e):
@@ -34,7 +50,7 @@ def _reference(m, e):
     "e", [0.0, 1e-8, 0.3, 0.78, 0.95, 0.9999, 1 - 1e-12, np.nextafter(1.0, 0.0)]
 )
 def test_matches_high_precision_roots(e):
-    """E and its trig pair agree within 8e-15 rad (fp, sampled double floor).
+    """Fails if the trig pair loses 8e-15 accuracy against high-precision roots.
 
     The logarithmic periapsis points expose cancellation that a small equation
     residual would hide when dM/dE approaches zero.
@@ -51,8 +67,8 @@ def test_matches_high_precision_roots(e):
         ]
     )
     reference = np.array([_reference(m, e) for m in means]).T
-    result = jax.jit(E_solve_trig)(jnp.array(means), jnp.array(e))
-    np.testing.assert_allclose(np.array(result), reference, rtol=0, atol=8e-15)
+    result = jax.jit(_pair)(jnp.array(means), jnp.array(e))
+    np.testing.assert_allclose(np.array(result), reference[1:], rtol=0, atol=8e-15)
 
 
 def test_tiny_signed_mean_anomalies():
@@ -60,18 +76,18 @@ def test_tiny_signed_mean_anomalies():
     means = np.geomspace(1e-24, 1e-8, 24)
     e = np.nextafter(1.0, 0.0)
     expected = np.array([_reference(m, e) for m in means]).T
-    positive = jax.jit(solve_trig)(jnp.array(means), jnp.array(e))
-    negative = jax.jit(solve_trig)(-jnp.array(means), jnp.array(e))
+    positive = jax.jit(_pair)(jnp.array(means), jnp.array(e))
+    negative = jax.jit(_pair)(-jnp.array(means), jnp.array(e))
     np.testing.assert_allclose(positive[0], expected[1], rtol=5e-14, atol=0)
     np.testing.assert_allclose(negative[0], -expected[1], rtol=5e-14, atol=0)
     np.testing.assert_allclose(negative[1], expected[2], rtol=5e-14, atol=0)
 
 
-_broadcast_solve = jax.jit(E_solve_trig)
+_broadcast_solve = jax.jit(_angle_and_pair)
 _mapped_solve = jax.jit(
-    jax.vmap(jax.vmap(E_solve, in_axes=(0, None)), in_axes=(None, 0))
+    jax.vmap(jax.vmap(_wrapped_angle, in_axes=(0, None)), in_axes=(None, 0))
 )
-_scalar_solve = jax.jit(E_solve)
+_scalar_solve = jax.jit(_wrapped_angle)
 
 
 @example(
@@ -138,7 +154,7 @@ def test_implicit_derivatives(e):
     """Both AD modes and second derivatives match finite differences (fp)."""
     means = jnp.array([0.2, 1.0, 2.5, 4.0])
     check_grads(
-        solve_trig,
+        _pair,
         (means, jnp.array(e)),
         order=2,
         modes=["fwd", "rev"],
@@ -152,16 +168,16 @@ def test_float32():
     means = np.linspace(0.01, 6.27, 100).astype(np.float32)
     eccentricity = np.float32(0.95)
     expected = np.array([_reference(m, eccentricity) for m in means]).T
-    result = jax.jit(E_solve_trig)(jnp.array(means), jnp.array(eccentricity))
+    result = jax.jit(_pair)(jnp.array(means), jnp.array(eccentricity))
     assert all(x.dtype == jnp.float32 for x in result)
-    np.testing.assert_allclose(result, expected, rtol=0, atol=2e-6)
+    np.testing.assert_allclose(result, expected[1:], rtol=0, atol=2e-6)
 
 
 def test_gradients_with_integer_constants():
     """Integer circular/periapsis constants must not break real AD (alg)."""
-    circular = jax.jit(jax.grad(lambda m: E_solve(m, 0)))(1.0)
-    periapsis = jax.jit(jax.grad(lambda e: E_solve(0, e)))(0.3)
-    np.testing.assert_allclose(circular, 1.0, rtol=0, atol=2e-15)
+    circular = jax.jit(jax.grad(lambda m: _pair(m, 0)[0]))(1.0)
+    periapsis = jax.jit(jax.grad(lambda e: _pair(0, e)[0]))(0.3)
+    np.testing.assert_allclose(circular, np.cos(1.0), rtol=0, atol=2e-15)
     np.testing.assert_allclose(periapsis, 0.0, rtol=0, atol=0)
 
 
@@ -180,8 +196,8 @@ def test_tracing_precision_context(x64, dtype):
         expected = np.array(
             [_reference(float(m) % two_pi, eccentricity) for m in means]
         ).T
-        result = jax.jit(E_solve_trig)(jnp.array(means), jnp.array(eccentricity))
+        result = jax.jit(_pair)(jnp.array(means), jnp.array(eccentricity))
         assert all(value.dtype == dtype for value in result)
         np.testing.assert_allclose(
-            result, expected, rtol=0, atol=16 * np.finfo(dtype).eps
+            result, expected[1:], rtol=0, atol=16 * np.finfo(dtype).eps
         )

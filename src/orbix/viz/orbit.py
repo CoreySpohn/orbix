@@ -170,7 +170,6 @@ def plot_sky_track(
     time_jd=None,
     *,
     time_d=None,
-    Ms_kg=None,
     dist_pc=None,
     trig_solver=None,
     ax=None,
@@ -198,15 +197,14 @@ def plot_sky_track(
 
     Args:
         orbit_or_radec: A ``FrameOrbit`` (requiring ``dist_pc``), a ``System``
-            (using its stored distance), a legacy orbit, or bare arcsec tracks: an
+            (using its stored distance), or bare arcsec tracks: an
             array shaped ``(K, T, 2)``, or an ``(ra, dec)`` pair of
             ``(T,)`` or ``(K, T)`` arrays.
         time_d: Float days from the engine object's epoch, shape ``(T,)``.
-        time_jd: Times in Julian Days, shape ``(T,)``. Orbit door only.
-        Ms_kg: Stellar mass in kg, for legacy orbits only.
-        dist_pc: Distance in parsecs for a frame or legacy orbit. A system
+        time_jd: Compatibility alias for ``time_d``, shape ``(T,)``. Orbit door only.
+        dist_pc: Distance in parsecs for a frame orbit. A system
             uses its stored distance.
-        trig_solver: Engine solver strategy, or the legacy solver callable.
+        trig_solver: Engine solver strategy (Markley, Halley, or Grid).
             None uses the input object's default.
         ax: Axes to draw into. None creates a new figure and axes. An axes
             that already holds data keeps it in view: the new limits grow
@@ -255,7 +253,6 @@ def plot_sky_track(
     view = prepare_sky_view(
         orbit_or_radec,
         time_jd=_resolve_time(time_jd, time_d),
-        Ms_kg=Ms_kg,
         dist_pc=dist_pc,
         trig_solver=trig_solver,
         source_ids=source_ids,
@@ -293,7 +290,7 @@ def _track_colors(style, colors, n_tracks):
     return None
 
 
-def _positions(orbit_or_xyz, time_jd, Ms_kg, trig_solver):
+def _positions(orbit_or_xyz, time_jd, trig_solver):
     """Normalize the input to positions of shape ``(K, T, 3)``.
 
     Orbit rows already use right-handed (east, north, away); only the
@@ -304,7 +301,7 @@ def _positions(orbit_or_xyz, time_jd, Ms_kg, trig_solver):
         mark geometry can be computed from its elements rather than
         re-derived from the sampled track.
     """
-    prepared = _orbit_arrays(orbit_or_xyz, time_jd, Ms_kg, None, trig_solver)
+    prepared = _orbit_arrays(orbit_or_xyz, time_jd, None, trig_solver)
     if prepared is not None:
         return prepared
 
@@ -368,7 +365,6 @@ def plot_orbit(
     time_jd=None,
     *,
     time_d=None,
-    Ms_kg=None,
     trig_solver=None,
     ax=None,
     style=None,
@@ -396,13 +392,12 @@ def plot_orbit(
 
     Args:
         orbit_or_xyz: A ``FrameOrbit``, a ``System`` (planets relative to its
-            star), a legacy orbit, or bare positions shaped ``(T, 3)``
+            star), or bare positions shaped ``(T, 3)``
             or ``(K, T, 3)``. Bare positions are in whatever units the
             caller made them, so no axis labels are set on that door.
         time_d: Float days from the engine object's epoch, shape ``(T,)``.
-        time_jd: Times in Julian Days, shape ``(T,)``. Orbit door only.
-        Ms_kg: Stellar mass in kg, for legacy orbits only.
-        trig_solver: Engine solver strategy, or the legacy solver callable.
+        time_jd: Compatibility alias for ``time_d``, shape ``(T,)``. Orbit door only.
+        trig_solver: Engine solver strategy (Markley, Halley, or Grid).
             None uses the input object's default.
         ax: A ``projection="3d"`` axes to draw into. None creates one.
         style: A color, or a ``SourceStyles`` entry (which also sets the
@@ -411,7 +406,7 @@ def plot_orbit(
             the mode's text color (white dots on a dark background) over
             a transparent dashed gray path.
         marks: Optional set drawn from ``{"periapsis", "nodes"}``. Requires
-            a Kepler ellipse: a frame or legacy orbit, a single-planet
+            a Kepler ellipse: a frame orbit, a single-planet
             system, or a system with all planets massless. Bare xyz and
             massive multi-planet systems raise if marks are requested. Periapsis is a
             diamond in the track color; the nodes are up/down triangles
@@ -449,7 +444,7 @@ def plot_orbit(
     """
     ep = eyepiece()
     positions, orbit = _positions(
-        orbit_or_xyz, _resolve_time(time_jd, time_d), Ms_kg, trig_solver
+        orbit_or_xyz, _resolve_time(time_jd, time_d), trig_solver
     )
     marks = set(marks or ())
     unknown = marks - {"periapsis", "nodes"}

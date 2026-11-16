@@ -25,33 +25,38 @@ pip install orbix
 
 ```python
 import jax.numpy as jnp
-from orbix.orbit import KeplerianOrbit
-from orbix.kepler.shortcuts.grid import get_grid_solver
+from hwoutils.constants import G, Msun2kg
+from orbix.system import FrameOrbit, offset_arcsec, phase_angle_rad, distance_AU
 
-orbit = KeplerianOrbit(
+orbit = FrameOrbit.from_classical(
     a_AU=1.0,
     e=0.0167,
     W_rad=0.0,
     i_rad=0.0,
     w_rad=0.0,
     M0_rad=0.0,
-    t0_d=0.0,
+    epoch_d=0.0,
+    mu_AU3_per_d2=G * Msun2kg,
 )
-trig_solver = get_grid_solver(level="scalar", E=False, trig=True)
-time_jd = jnp.linspace(2451545.0, 2451545.0 + 365.25, 5)
-r_AU, phase_angle_rad, dist_AU = orbit.propagate(trig_solver, time_jd, Ms_kg=1.989e30)
-print(r_AU.shape)  # (1, 3, 5): (K orbits, xyz, T times)
+time_d = jnp.linspace(0.0, 365.25, 5)
+r_AU, v_AU_per_d = orbit.at(time_d)
+beta_rad = phase_angle_rad(r_AU)
+radius_AU = distance_AU(r_AU)
+raoff, decoff = offset_arcsec(r_AU, 10.0)
+print(r_AU.shape)  # (5, 3): (T times, xyz)
 ```
 
-`get_grid_solver` builds a cached grid-interpolation Kepler solver with the
-contract `trig_solver(M, e) -> (sinE, cosE)`; `KeplerianOrbit.propagate` uses
-it to convert orbital elements and times into position vectors, phase angle,
-and star-planet distance.
+`FrameOrbit` stores a non-singular orbit frame and propagates through
+`at(time_d)`. Times are days on the same origin as `epoch_d`; positions and
+velocities have shape `(*batch, T, 3)`. `System` constructs Jacobi orbits for
+multiple bodies and returns a solve-once `Ephemeris` through `solve(time_d)`.
+The package root exports only `__version__`; import engine names from
+`orbix.system` and solver names from `orbix.kepler`.
 
 Raw orbit rows are **(east, north, away)** in AU, a right-handed frame.
 Velocities share this order in AU/day; dz/dt is the body's radial velocity
 relative to the star, positive receding. `state_vector_to_keplerian` takes
-position and velocity in that frame. `position_arcsec` returns `(raoff,
+position and velocity in that frame. `offset_arcsec` returns `(raoff,
 decoff)` = (Delta alpha cos delta, Delta delta), east and north offsets in
 arcsec. Omega is the ascending (receding) node's PA measured north through
 east; i < 90 deg gives increasing PA, and omega is measured from that node
@@ -59,12 +64,14 @@ in the direction of motion. Phase angle is beta, with cos(beta) = z/r;
 alpha denotes angular separation. See the documentation's sky-coordinate
 convention for details.
 
-For an alternative without interpolation tables, use
-`from orbix.kepler import markley_solve_trig` and pass `markley_solve_trig` as the
-orbit's `trig_solver`. This Markley-based solver supports scalar inputs,
-broadcasting, and both forward and reverse derivatives. Enable
+The default solver is the table-free `Markley()` strategy. Pass
+`solver=Halley()` or `solver=Grid()` to `at`, `solve`, or the non-singular
+`kepler(mean_longitude, ex, ey, solver=...)` function from `orbix.kepler`.
+It returns `(sin(F), cos(F))` for `lambda = F - ex*sin(F) + ey*cos(F)`,
+where `(ex, ey) = e*(cos(p), sin(p))` and `p` is longitude of periapsis.
+All strategies support broadcasting and implicit forward/reverse derivatives,
+including circular orbits and higher orders. Enable
 `jax.config.update("jax_enable_x64", True)` for double-precision accuracy.
-The RPP/orvara solver remains available in `orbix.kepler.core`.
 
 ## Scope
 

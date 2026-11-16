@@ -91,7 +91,7 @@ def _eccentric_orbit(K=1):
     )
 
 
-STELLAR = dict(Ms_kg=jnp.atleast_1d(Msun2kg), dist_pc=jnp.atleast_1d(DIST_PC))
+STELLAR = dict(dist_pc=jnp.atleast_1d(DIST_PC))
 
 
 # --- the brief's contract ------------------------------------------------------
@@ -196,7 +196,7 @@ def test_clock_fmt_sets_the_label_and_is_checked_before_propagating():
     )
     assert find_element(sequence.frame(2), "clock").text == "2.50 d"
     assert find_element(sequence.strip([2]), "0/clock").text == "2.50 d"
-    # The orbit door is missing Ms_kg and dist_pc, so propagating would raise
+    # The orbit door is missing dist_pc, so propagating would raise
     # a TypeError; the format error comes first.
     with pytest.raises(ValueError, match="fmt"):
         prepare_sky_track(
