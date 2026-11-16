@@ -43,6 +43,25 @@
 * The broken predict/pdet functions and the `discrete_e` factory were removed
   (they did not work correctly and had no working callers).
 
+## [4.1.0](https://github.com/CoreySpohn/orbix/compare/v4.0.0...v4.1.0) (2026-11-16)
+
+
+### Features
+
+* a non-singular Kepler function in eccentric longitude with implicit derivatives and solver strategies ([0e9c214](https://github.com/CoreySpohn/orbix/commit/0e9c214146868d2798e5d8b7228466ccf0de573b))
+* a non-singular orbit state, a Jacobi system and a solve-once ephemeris in orbix.system ([43f96bf](https://github.com/CoreySpohn/orbix/commit/43f96bfe71d478fbc92ecbe451e53990bc328ad7))
+* a position-and-velocity orbit chart with a closed-form volume, for short arcs ([bdb724d](https://github.com/CoreySpohn/orbix/commit/bdb724d7dfaf67ee3f9910869a4c74bd729ee133))
+* orbit charts with closed-form volumes against one reference measure ([388fefb](https://github.com/CoreySpohn/orbix/commit/388fefb9443c809659e0abb7ea840e7174f4d66b))
+* **system:** frame orbit from cosines and sines of the classical angles; perifocal rates ([73549c2](https://github.com/CoreySpohn/orbix/commit/73549c294ba23704eda0f08b669d14d71ecb617b))
+* **system:** orbit-plane coordinates and plane basis of a frame orbit ([736cb6f](https://github.com/CoreySpohn/orbix/commit/736cb6f7ac55fb9b55802e8bb04cc926d02cb2aa))
+* the frame chart holds its gauge length near one by default, keeping orientations uniform ([0b5409b](https://github.com/CoreySpohn/orbix/commit/0b5409b658681ffca7f1cbc38c7a7d9253cc80fb))
+* total-mass propagation, velocity, position angle, stellar reflex and radial velocity on KeplerianOrbit ([0c3b770](https://github.com/CoreySpohn/orbix/commit/0c3b7704b75f99b7a0138b2baccfe86f27150106))
+
+
+### Bug Fixes
+
+* the Markley solver traces in float32 and the grid solvers return the dtype of their inputs ([4e83d00](https://github.com/CoreySpohn/orbix/commit/4e83d001644e390fb19c2fdb843467d89bbdeb89))
+
 ## [4.0.0](https://github.com/CoreySpohn/orbix/compare/v3.0.0...v4.0.0) (2026-11-13)
 
 
