@@ -6,9 +6,11 @@ from orbix.system.charts import (
     ClassicalChart,
     EccentricityVectorChart,
     FrameChart,
+    ThieleInnesChart,
 )
 from orbix.system.core import Body, Ephemeris, SkyFrame, System, enclosed_mu
 from orbix.system.frame_orbit import FrameOrbit
+from orbix.system.linear import fit_linear_map, frame_to_sky_block, sky_block_to_frame
 from orbix.system.observables import (
     distance_AU,
     offset_arcsec,
@@ -29,11 +31,15 @@ __all__ = [
     "FrameOrbit",
     "SkyFrame",
     "System",
+    "ThieleInnesChart",
     "distance_AU",
     "enclosed_mu",
+    "fit_linear_map",
+    "frame_to_sky_block",
     "offset_arcsec",
     "phase_angle_rad",
     "position_angle_deg",
     "radial_velocity_m_per_s",
     "separation_arcsec",
+    "sky_block_to_frame",
 ]

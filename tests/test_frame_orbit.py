@@ -8,6 +8,7 @@ import pytest
 from hwoutils.constants import G, Msun2kg
 from jax.test_util import check_grads
 
+from orbix.equations.orbit import thiele_innes_constants
 from orbix.kepler import Halley, Markley
 from orbix.system import FrameOrbit
 
@@ -210,9 +211,11 @@ def test_plane_factorization(time, solver):
             (0.3, np.pi),
             (0.0, 0.0),
             (0.0, np.pi),
+            (0.9, np.pi / 2),
+            (0.0, np.pi / 2),
         ]
-    ).reshape(2, 4, 2)
-    mean = 0.2 + np.arange(8).reshape(2, 4) * 0.1
+    ).reshape(2, 5, 2)
+    mean = 0.2 + np.arange(10).reshape(2, 5) * 0.1
     orbit = FrameOrbit.from_classical(
         1.3,
         elements[..., 0],
@@ -250,13 +253,44 @@ def test_plane_factorization(time, solver):
     )
     xy, xy_rate = orbit.plane_coordinates(time, solver=solver)
     basis = orbit.plane_basis()
-    assert basis.shape == (2, 4, 3, 2)
-    assert xy.shape == xy_rate.shape == (2, 4, *np.shape(time), 2)
-    basis = np.asarray(basis).reshape(2, 4, *(1,) * np.ndim(time), 3, 2)
+    np.testing.assert_array_equal(orbit.in_plane(time, solver=solver), (xy, xy_rate))
+    np.testing.assert_array_equal(orbit.linear_map, basis)
+    assert basis.shape == (2, 5, 3, 2)
+    assert xy.shape == xy_rate.shape == (2, 5, *np.shape(time), 2)
+    basis = np.asarray(basis).reshape(2, 5, *(1,) * np.ndim(time), 3, 2)
     expected = orbit.at(time, solver=solver)
     for coordinates, state in zip((xy, xy_rate), expected, strict=True):
         actual = (basis @ np.asarray(coordinates)[..., None])[..., 0]
         np.testing.assert_allclose(actual, state, rtol=1e-13, atol=0)
+        np.testing.assert_allclose(
+            actual, state, rtol=8 * np.finfo(float).eps, atol=8 * np.finfo(float).eps
+        )
+    # Two-term matrix products differ only by fusion: 8 eps times the scale.
+    paired_time = jnp.asarray(mean)
+    for coords, state in zip(
+        orbit.in_plane_each(paired_time, solver=solver),
+        orbit.at_each(paired_time, solver=solver),
+        strict=True,
+    ):
+        product = (orbit.linear_map @ coords[..., None])[..., 0]
+        np.testing.assert_allclose(product, state, atol=8 * np.finfo(float).eps, rtol=0)
+    if solver == Markley() and np.ndim(time) == 1:
+
+        def factors(o):
+            return o.linear_map, o.in_plane(time), o.in_plane_each(paired_time[0])
+
+        eager = factors(orbit)
+        for actual in (jax.jit(factors)(orbit), jax.vmap(factors)(orbit)):
+            for left, right in zip(
+                jax.tree.leaves(actual), jax.tree.leaves(eager), strict=True
+            ):
+                np.testing.assert_allclose(left, right, atol=2e-14, rtol=2e-14)
+        loop = [factors(jax.tree.map(lambda a, k=k: a[k], orbit)) for k in range(2)]
+        stacked = jax.tree.map(lambda *a: jnp.stack(a), *loop)
+        for left, right in zip(
+            jax.tree.leaves(stacked), jax.tree.leaves(eager), strict=True
+        ):
+            np.testing.assert_allclose(left, right, atol=2e-14, rtol=2e-14)
 
 
 @pytest.mark.parametrize("e,inc", [(0.05, 0.7), (0.6, 1.1), (0.95, 2.6)])
@@ -302,6 +336,16 @@ def test_perifocal_coordinates_and_thiele_innes(e, inc):
     B = a * (sO * cw + cO * sw * ci)
     F = a * (-cO * sw - sO * cw * ci)
     G = a * (-sO * sw + cO * cw * ci)
+    # R(-M0) changes epoch mean-longitude axes to periapsis axes.
+    c, s = np.cos(-mean), np.sin(-mean)
+    classical = orbit.linear_map[:2] @ np.array([[c, -s], [s, c]])
+    constants = a * np.asarray(thiele_innes_constants(node, inc, peri))
+    np.testing.assert_allclose(
+        classical,
+        constants[[1, 3, 0, 2]].reshape(2, 2),
+        rtol=0,
+        atol=16 * np.finfo(float).eps * a,
+    )
     sky = np.asarray(actual) @ np.array([[B, A], [G, F]])
     np.testing.assert_allclose(sky, orbit.at(times)[0][..., :2], rtol=1e-12, atol=1e-14)
     sky_rate = np.asarray(rate) @ np.array([[B, A], [G, F]])
@@ -400,3 +444,34 @@ def test_size_and_period_accessors():
         np.testing.assert_allclose(
             period, expected_period, rtol=4 * np.finfo(np.float64).eps, atol=0
         )
+
+
+def test_linear_factors_stored_leaf_derivatives():
+    """Fails if circular/face-on factors introduce singular stored-leaf AD.
+
+    All nine stored scalars, including four quaternion entries, are varied.
+    Central differences h=1e-5 have O(h^2) error; 2e-8 relative and 2e-9
+    absolute cover truncation and subtraction roundoff for O(1) outputs.
+    Quaternion perturbations test the stored polynomial extension directly.
+    """
+    from jax.flatten_util import ravel_pytree
+
+    def factors(flat, unravel):
+        orbit = unravel(flat)
+        xy, rate = orbit.in_plane(0.37)
+        return jnp.concatenate([orbit.linear_map.ravel(), xy, rate])
+
+    for e, inc in ((0.0, 0.7), (0.3, 0.0), (0.0, np.pi)):
+        orbit = FrameOrbit.from_classical(1.3, e, inc, 0.4, 0.7, 0.2, mu_AU3_per_d2=1.0)
+        flat, unravel = ravel_pytree(orbit)
+
+        def evaluate(x, unravel=unravel):
+            return factors(x, unravel)
+
+        derivative = jax.jacfwd(evaluate)(flat)
+        step = 1e-5 * jnp.eye(flat.size)
+        difference = (
+            jax.vmap(evaluate)(flat + step) - jax.vmap(evaluate)(flat - step)
+        ).T / 2e-5
+        assert np.isfinite(derivative).all()
+        np.testing.assert_allclose(derivative, difference, rtol=2e-8, atol=2e-9)

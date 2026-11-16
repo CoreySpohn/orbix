@@ -241,6 +241,43 @@ class FrameOrbit(eqx.Module):
         g = rotate(self.quat, jnp.array([0.0, 1.0, 0.0]))
         return self.a_AU[..., None, None] * jnp.stack([f, g], -1)
 
+    @property
+    def linear_map(self) -> Array:
+        """Return a [f g], shape B + (3, 2), in (east, north, away) AU.
+
+        This is plane_basis() unchanged. The stored f axis points along
+        epoch mean longitude; g completes the right-handed orbital frame.
+        These axes remain defined at e=0 and face-on. Applied to in_plane
+        position/rate, this matrix gives at position/velocity.
+
+        For e>0, let phi=atan2(ey,ex) and
+        R(phi)=[[cos(phi),-sin(phi)],[sin(phi),cos(phi)]]. Then
+        linear_map[..., :2, :] @ R(phi) = [[B,G],[A,F]], where A,F are
+        north and B,G east, in the classical perifocal Thiele-Innes
+        convention. For from_classical, phi=-M0. No such rotation is
+        needed for propagation, including at circular eccentricity.
+        """
+        return self.plane_basis()
+
+    def in_plane(self, time_d, *, solver=_DEFAULT_SOLVER) -> tuple[Array, Array]:
+        """Return dimensionless (X,Y) and rates per day on stored f,g axes.
+
+        Both arrays have shape B + time_shape + (2,), exactly as in at.
+        Reuses plane_coordinates, which already has the required units:
+        no division by a and no additional Kepler solve is performed.
+        See linear_map for the circular-safe axes and perifocal rotation.
+        """
+        return self.plane_coordinates(time_d, solver=solver)
+
+    def in_plane_each(self, time_d, *, solver=_DEFAULT_SOLVER) -> tuple[Array, Array]:
+        """Return paired plane position/rate, dimensionless and per day.
+
+        Both arrays have shape broadcast(B,time_shape) + (2,), as in
+        at_each. Reuses that method's single eccentric-longitude solve
+        and stored f,g axes; see linear_map for the axis convention.
+        """
+        return self._plane_coordinates_each(time_d, solver=solver)
+
     def plane_coordinates(
         self, time_d, *, solver=_DEFAULT_SOLVER
     ) -> tuple[Array, Array]:

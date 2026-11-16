@@ -350,3 +350,208 @@ def test_uniform_in_e():
     np.testing.assert_allclose(
         density[1] - density[0], jacobian[1] - jacobian[0], atol=2e-14, rtol=0
     )
+
+
+def test_sky_block_completion():
+    """Fails if completion swaps sky axes or loses face-on/edge-on states.
+
+    Truth: independently constructed orthonormal frames, including exact
+    face-on matrices. 32 eps times a covers the small matrix arithmetic;
+    the branch reflects only the away row and leaves the sky block intact.
+    """
+    from orbix.system import frame_to_sky_block, sky_block_to_frame
+
+    # Rows are east, north, away; columns are the epoch plane axes.
+    bases = jnp.array(
+        [
+            [[0.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
+            [[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]],
+            [[0.6, -0.8], [0.8, 0.6], [0.0, 0.0]],
+            [[0.6, 0.8], [0.8, -0.6], [0.0, 0.0]],
+            [[1.0, 0.0], [0.0, 0.0], [0.0, 1.0]],
+            [[0.6, 0.0], [0.0, 1.0], [0.8, 0.0]],
+        ]
+    )
+    constants = 1.7 * bases[:, [1, 0, 1, 0], [0, 0, 1, 1]]
+    for branch in (-1, 1):
+        a, q = eqx.filter_jit(sky_block_to_frame)(
+            *jnp.moveaxis(constants, -1, 0), branch=branch
+        )
+        actual = frame_to_sky_block(a, q)
+        np.testing.assert_allclose(
+            actual, constants, atol=32 * np.finfo(float).eps * 1.7, rtol=0
+        )
+        f, g = (
+            rotate(q, jnp.array([1.0, 0.0, 0.0])),
+            rotate(q, jnp.array([0.0, 1.0, 0.0])),
+        )
+        expected = np.asarray(bases).copy()
+        expected[:, 2] *= branch
+        np.testing.assert_allclose(
+            jnp.stack([f, g], -1), expected, atol=32 * np.finfo(float).eps, rtol=0
+        )
+        np.testing.assert_allclose(a, 1.7, atol=8 * np.finfo(float).eps, rtol=0)
+
+
+@pytest.mark.parametrize("branch", [-1, 1])
+def test_thiele_innes_round_trip(branch):
+    """Fails if a branch, circular phase, free mu, or batch broadcasting is lost.
+
+    Generic seed-0 blocks have no angle windings; 2e-13 relative/absolute
+    allows x64 rank-one completion and quaternion roundoff. The circular
+    member pins the eccentricity disk origin without a periapsis angle.
+    """
+    from orbix.system import ThieleInnesChart
+
+    chart = ThieleInnesChart(branch=branch)
+    x = jnp.asarray(np.random.default_rng(0).normal(size=(2, 3, 7)))
+    x = x.at[0, 0, 1:3].set(0.0)
+    recovered, original, rebuilt = _round_trip(chart, x)
+    np.testing.assert_allclose(recovered, x, rtol=2e-13, atol=2e-13)
+    np.testing.assert_allclose(rebuilt, original, rtol=2e-13, atol=2e-13)
+    orbit = chart.to_orbit(x, mu_AU3_per_d2=100.0, epoch_d=jnp.array([1.0, 2.0, 3.0]))
+    np.testing.assert_allclose(orbit.mu_AU3_per_d2, chart.implied_mu(x), rtol=8e-15)
+    np.testing.assert_allclose(chart.from_orbit(orbit), x, rtol=2e-13, atol=2e-13)
+    # Independent classical source in the chosen branch, including e=0.
+    source = FrameOrbit.from_classical(
+        1.3,
+        jnp.array([0.0, 0.4, 0.9, 0.3, 0.0]),
+        jnp.array([0.7, 1.57, 2.6, 0.0, np.pi]),
+        0.4,
+        0.7,
+        0.2,
+        mu_AU3_per_d2=0.3,
+        epoch_d=17.0,
+    )
+    q = source.quat
+    f, g = rotate(q, jnp.array([1.0, 0.0, 0.0])), rotate(q, jnp.array([0.0, 1.0, 0.0]))
+    z = jnp.stack([f[:, 2], g[:, 2]], -1)
+    pivot = jnp.take_along_axis(z, jnp.argmax(jnp.abs(z), -1)[:, None], -1)[:, 0]
+    from orbix.system.rotation import from_basis
+
+    sign = branch * jnp.where(pivot < 0, -1.0, 1.0)
+    f, g = f.at[:, 2].multiply(sign), g.at[:, 2].multiply(sign)
+    source = eqx.tree_at(lambda o: o.quat, source, from_basis(f, g, jnp.cross(f, g)))
+    result = chart.to_orbit(chart.from_orbit(source), mu_AU3_per_d2=100.0, epoch_d=17.0)
+    np.testing.assert_allclose(
+        result.at(jnp.array([17.0, 18.0])),
+        source.at(jnp.array([17.0, 18.0])),
+        atol=2e-13,
+        rtol=2e-13,
+    )
+
+
+@pytest.mark.parametrize("branch", [-1, 1])
+def test_thiele_innes_volume(branch):
+    """Fails if sky determinant or the d ln(mu) factor of two is omitted.
+
+    Truth: jacfwd into the already tested ClassicalChart plus ln(mu).
+    Five seed-0 generic points allow 2e-11 absolute for inverse/determinant
+    conditioning, as in the existing chart-volume tests; constants included.
+    """
+    from orbix.system import ThieleInnesChart
+
+    chart = ThieleInnesChart(branch=branch)
+    target = ClassicalChart()
+
+    def phi(x):
+        orbit = chart.to_orbit(x, mu_AU3_per_d2=1.0)
+        return jnp.concatenate(
+            [target.from_orbit(orbit), jnp.log(orbit.mu_AU3_per_d2)[None]]
+        )
+
+    @jax.jit
+    def compare(x):
+        y = jax.vmap(phi)(x)
+        jac = jax.vmap(jax.jacfwd(phi))(x)
+        return chart.log_volume(x) - target.log_volume(y[:, :6]), jnp.linalg.slogdet(
+            jac
+        )[1]
+
+    x = jnp.asarray(np.random.default_rng(0).normal(size=(5, 7)))
+    difference, logdet = compare(x)
+    np.testing.assert_allclose(difference, logdet, atol=2e-11, rtol=0)
+
+
+def test_fit_linear_map_rank_and_masks():
+    """Fails if AU/axis ordering, correlated weighting, or rank fallback is wrong.
+
+    Noiseless truth is propagated astrometry. The whitened design condition
+    number is printed and bounded by 5; 128 eps times a covers QR/SVD and
+    the Kepler/rotation products. Singular covariance means a pseudoinverse
+    on the estimable subspace, verified against NumPy's independent pinv.
+    """
+    from orbix.system import fit_linear_map
+
+    orbit = FrameOrbit.from_classical(1.3, 0.3, 0.7, 0.4, 0.7, 0.2, mu_AU3_per_d2=1.0)
+    time = jnp.arange(8) * orbit.period_d / 8
+    xy = orbit.at(time)[0][:, :2]
+    errors = (jnp.full(8, 0.01), jnp.full(8, 0.02), jnp.full(8, 0.3))
+    fit = eqx.filter_jit(fit_linear_map)
+    block, covariance, chi, rank = fit(orbit, time, xy[:, 0], xy[:, 1], errors)
+    condition = np.sqrt(np.linalg.cond(covariance))
+    print(f"Linear fit whitened-design condition: {condition:.9g}")
+    assert condition < 5 and rank == 4
+    floor = 128 * np.finfo(float).eps * 1.3
+    np.testing.assert_allclose(block, orbit.linear_map[:2], atol=floor, rtol=0)
+    assert chi < (floor / 0.01) ** 2 * 16
+    cov = jnp.array([[0.0001, 0.00006], [0.00006, 0.0004]])
+    masked = fit(
+        orbit, time, xy[:, 0].at[0].set(jnp.nan), xy[:, 1], cov, mask=jnp.arange(8) != 0
+    )
+    np.testing.assert_allclose(masked[0], block, atol=floor, rtol=0)
+    one = fit(orbit, time[:1], xy[:1, 0], xy[:1, 1], cov)
+    coords = np.asarray(orbit.in_plane(time[:1])[0])[0]
+    np.testing.assert_allclose(
+        one[0], np.outer(xy[0], coords) / (coords @ coords), atol=floor, rtol=0
+    )
+    assert one[3] == 2
+    assert all(np.isfinite(value).all() for value in one)
+    X, Y = coords
+    design = np.array([[0.0, X, 0.0, Y], [X, 0.0, Y, 0.0]])
+    whitened = np.linalg.solve(np.linalg.cholesky(cov), design)
+    inverse = np.linalg.pinv(whitened)
+    np.testing.assert_allclose(
+        one[1], inverse @ inverse.T, rtol=128 * np.finfo(float).eps, atol=0
+    )
+    np.testing.assert_allclose(one[0] @ coords, xy[0], atol=floor, rtol=0)
+    none = fit(orbit, time, xy[:, 0], xy[:, 1], errors, mask=jnp.zeros(8, dtype=bool))
+    for value in none:
+        np.testing.assert_array_equal(value, np.zeros_like(value))
+    empty = fit(orbit, time[:0], xy[:0, 0], xy[:0, 1], cov)
+    for value in empty:
+        np.testing.assert_array_equal(value, np.zeros_like(value))
+
+
+def test_fit_linear_map_noise_distribution():
+    """Fails if error correlation or covariance normalization biases pulls/chi2.
+
+    512 seed-0 Gaussian draws, eight epochs, four parameters: residual sums
+    have chi2(6144), whitened pull squares chi2(2048), and scaled mean-pull
+    squares chi2(4). Each exact two-sided test has false rejection 1e-6;
+    union bound 3e-6. N=512 resolves mean bias 4/sqrt(N)=0.177 sigma and
+    variance bias 4*sqrt(2/(4*N))=0.125. No fitted noise scale is used.
+    """
+    from orbix.system import fit_linear_map
+
+    orbit = FrameOrbit.from_classical(1.3, 0.3, 0.7, 0.4, 0.7, 0.2, mu_AU3_per_d2=1.0)
+    time = jnp.arange(8) * orbit.period_d / 8
+    xy = orbit.at(time)[0][:, :2]
+    cov = jnp.array([[0.0001, 0.00006], [0.00006, 0.0004]])
+    noise = (
+        np.random.default_rng(0).normal(size=(512, 8, 2)) @ np.linalg.cholesky(cov).T
+    )
+
+    @jax.jit
+    def fits(data):
+        return jax.vmap(
+            lambda rows: fit_linear_map(orbit, time, rows[:, 0], rows[:, 1], cov)
+        )(data)
+
+    blocks, covariance, chis, ranks = fits(xy + noise)
+    delta = np.asarray(blocks - orbit.linear_map[:2])[:, [1, 0, 1, 0], [0, 0, 1, 1]]
+    pulls = np.linalg.solve(np.linalg.cholesky(covariance[0]), delta.T).T
+    statistics = [np.sum(chis), np.sum(pulls**2), 512 * np.sum(pulls.mean(axis=0) ** 2)]
+    for statistic, dof in zip(statistics, [6144, 2048, 4], strict=True):
+        assert chi2.ppf(5e-7, dof) < statistic < chi2.isf(5e-7, dof)
+    np.testing.assert_array_equal(ranks, 4)

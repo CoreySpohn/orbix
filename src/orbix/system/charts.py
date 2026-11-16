@@ -20,6 +20,7 @@ from jaxtyping import Array
 
 from orbix.equations.orbit import mean_motion
 from orbix.system.frame_orbit import FrameOrbit
+from orbix.system.linear import _sky_geometry, frame_to_sky_block, sky_block_to_frame
 from orbix.system.rotation import rotate
 
 
@@ -346,4 +347,95 @@ class ClassicalChart(AbstractChart):
             2 * log_sigmoid(x[..., 1])
             + log_sigmoid(-x[..., 1])
             + _inclination_log_volume(x[..., 2])
+        )
+
+
+class ThieleInnesChart(AbstractChart):
+    """Coordinates (ln n, ux, uy, A, B, F, G), with free implied mass.
+
+    n is in radians/day and (ex,ey)=u/sqrt(1+norm(u)^2). The four constants
+    are in AU on the stored epoch mean-longitude axes f,g, NOT periapsis
+    axes: A,F are north, B,G east, so the sky block is [[B,G],[A,F]].
+    These are the east/north axes of SkyFrame observables. See linear_map
+    on FrameOrbit for the single rotation to classical Thiele-Innes constants.
+
+    There are seven independent coordinates. The phase is already carried
+    by the epoch frame and eccentricity pair: for e>0, M0=atan2(-ey,ex).
+    At e=0 that angle is undefined but the epoch frame still fixes orbital
+    phase. Adding an independent phase to these seven coordinates would
+    create an in-plane rotation gauge, not a bijective chart.
+
+    a is the sky block's largest singular value. mu_AU3_per_d2 is accepted
+    for AbstractChart compatibility but IGNORED, including its shape;
+    mu=n^2*a^3 is implied, available through implied_mu. epoch_d broadcasts
+    against the coordinate batch. Thus orbit round trips preserve the
+    orbit's own rate and mass, irrespective of the passed mu.
+
+    Static branch selects the sign of the largest-magnitude away-row entry
+    (first wins ties), as in sky_block_to_frame. cos(i)=(A*G-B*F)/a^2 is
+    already determined by the sky block; branch selects the remaining
+    line-of-sight reflection, not prograde versus retrograde. On each
+    declared branch this is one-to-one onto bound orbit states, modulo
+    quaternion sign, with zero sky block excluded. An orbit on the other
+    branch is reflected on round trip. The branch has a pivot seam and
+    both sheets meet at face-on. Values remain finite there; derivatives
+    of the inverse and the volume density are singular.
+
+    Reference measure is the other charts' unnormalized Haar*dex*dey*
+    d(ln a), extended by d(ln mu). Write c=cos(i), l=ln(a), and u0 for
+    the angle locating f from the node. The volume derivation is:
+    dnu = dex dey dl dc dW du0 d(ln mu).
+    |d(A,B,F,G)/d(l,c,W,u0)| = a^4*(1-c^2).
+    d(ln mu) = 2*d(ln n)+3*dl, giving a factor 2 in the wedge product.
+    |d(ex,ey)/d(ux,uy)| = (1+ux^2+uy^2)^(-2).
+    log_volume = log(2)-4*log(a)-log(1-c^2)-2*log(1+ux^2+uy^2).
+    No additive constant is omitted relative to ClassicalChart; normalized
+    Haar would subtract log(8*pi^2). At face-on log_volume=+inf, an
+    integrable coordinate singularity, not a finite density approximation.
+    """
+
+    n_coords: ClassVar[int] = 7
+    branch: int = eqx.field(static=True, default=1)
+
+    def __check_init__(self):
+        """Validate the static choice of line-of-sight sheet."""
+        if self.branch not in (-1, 1):
+            raise ValueError("branch must be +1 or -1")
+
+    def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
+        """Build an epoch frame, ignoring mu in favor of the coordinate rate."""
+        x = _coordinates(x, self.n_coords)
+        a, quat = sky_block_to_frame(
+            *jnp.moveaxis(x[..., 3:], -1, 0), branch=self.branch
+        )
+        evec = _disk(x[..., 1:3])
+        a, n, ex, ey, epoch = jnp.broadcast_arrays(
+            a, jnp.exp(x[..., 0]), evec[..., 0], evec[..., 1], jnp.asarray(epoch_d)
+        )
+        return FrameOrbit(a, n, ex, ey, jnp.broadcast_to(quat, (*a.shape, 4)), epoch)
+
+    def from_orbit(self, orbit: FrameOrbit) -> Array:
+        """Project an orbit; inversion reproduces its declared branch only."""
+        return jnp.concatenate(
+            [
+                jnp.log(orbit.n_rad_per_d)[..., None],
+                _plane(jnp.stack([orbit.ex, orbit.ey], -1)),
+                frame_to_sky_block(orbit.a_AU, orbit.quat),
+            ],
+            -1,
+        )
+
+    def implied_mu(self, x) -> Array:
+        """Return n^2*a^3 in AU^3/day^2 with the coordinate batch shape."""
+        x = _coordinates(x, self.n_coords)
+        a, _ = _sky_geometry(*jnp.moveaxis(x[..., 3:], -1, 0))
+        return jnp.exp(2 * x[..., 0]) * a**3
+
+    def log_volume(self, x) -> Array:
+        """Return the density against Haar*dex*dey*d(ln a)*d(ln mu)."""
+        x = _coordinates(x, self.n_coords)
+        a, gap = _sky_geometry(*jnp.moveaxis(x[..., 3:], -1, 0))
+        # gap=a^2*(1-c^2), computed without cancellation near face-on.
+        return (
+            jnp.log(2.0) - 2 * jnp.log(a) - jnp.log(gap) + _disk_log_volume(x[..., 1:3])
         )
