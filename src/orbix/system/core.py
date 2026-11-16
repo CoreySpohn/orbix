@@ -5,6 +5,7 @@ The hierarchy is a set of independent Kepler orbits, not an N-body integrator.
 """
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 from hwoutils.constants import G, Msun2kg
 from hwoutils.epoch import Epoch
@@ -18,31 +19,49 @@ GM_SUN_AU3_PER_D2 = G * Msun2kg
 _DEFAULT_SOLVER = Markley()
 
 
-def enclosed_mu(star_mass_Msun, planet_mass_Msun):
-    """Return Jacobi gravitational parameters, including each planet's mass.
+def _ordered_sum(values):
+    """Return final sum and prefixes along axis zero, in fixed input order."""
 
-    The star mass is scalar; planet masses have shape (K,), ordered inner
-    to outer by the caller. This is the sole mass-to-orbit coupling.
-    """
+    def add(total, value):
+        total = total + value
+        return total, total
+
+    return jax.lax.scan(add, jnp.zeros(values.shape[1:], values.dtype), values)
+
+
+def enclosed_mu(star_mass_Msun, planet_mass_Msun):
+    """Return Jacobi mu for star shape B and inner-to-outer masses B + (K,)."""
+    masses = jnp.asarray(planet_mass_Msun)
+    _, cumulative = _ordered_sum(jnp.moveaxis(masses, -1, 0))
     return GM_SUN_AU3_PER_D2 * (
-        jnp.asarray(star_mass_Msun) + jnp.cumsum(jnp.asarray(planet_mass_Msun), axis=0)
+        jnp.asarray(star_mass_Msun)[..., None] + jnp.moveaxis(cumulative, 0, -1)
     )
 
 
 def jacobi_to_barycentric(relative, star_mass_Msun, planet_mass_Msun):
-    """Map (K,) + time_shape + (3,) relative vectors to K+1 body vectors.
+    """Map B + (K,) + time_shape + (3,) to B + (K+1,) + time_shape + (3,).
 
-    The same linear mass-weighted map applies to positions and velocities.
-    Body zero is the star; a cumulative sum avoids an unrolled planet loop.
+    Both sums run sequentially inner to outer. Appending zero-mass bodies
+    preserves the bits of every preceding body and the stellar reflex.
     """
     relative = jnp.asarray(relative)
     masses = jnp.asarray(planet_mass_Msun)
-    weights = masses / (jnp.asarray(star_mass_Msun) + jnp.cumsum(masses))
-    weighted = relative * weights.reshape(masses.shape + (1,) * (relative.ndim - 1))
-    cumulative = jnp.cumsum(weighted, axis=0)
-    star = -jnp.sum(weighted, axis=0, keepdims=True)
+    axis = masses.ndim - 1
+    _, cumulative_mass = _ordered_sum(jnp.moveaxis(masses, -1, 0))
+    enclosed = jnp.asarray(star_mass_Msun)[..., None] + jnp.moveaxis(
+        cumulative_mass, 0, -1
+    )
+    weights = masses / enclosed
+    weighted = relative * weights.reshape(
+        masses.shape + (1,) * (relative.ndim - masses.ndim)
+    )
+    total, cumulative = _ordered_sum(jnp.moveaxis(weighted, axis, 0))
+    star = -total[None]
     preceding = jnp.concatenate([jnp.zeros_like(star), cumulative], axis=0)[:-1]
-    return jnp.concatenate([star, star + preceding + relative], axis=0)
+    relative = jnp.moveaxis(relative, axis, 0)
+    return jnp.moveaxis(
+        jnp.concatenate([star, star + preceding + relative], axis=0), 0, axis
+    )
 
 
 class Body(eqx.Module):
@@ -96,8 +115,24 @@ class Ephemeris(eqx.Module):
         if isinstance(reference, str):
             if reference != "barycenter":
                 raise ValueError('reference must be a body index or "barycenter"')
-            return values[target]
-        return values[target] - values[reference]
+            return self._body(values, target)
+        target_values = self._body(values, target)
+        reference_values = self._body(values, reference)
+        axis = self.dist_pc.ndim
+        while reference_values.ndim < target_values.ndim:
+            reference_values = jnp.expand_dims(reference_values, axis)
+        while target_values.ndim < reference_values.ndim:
+            target_values = jnp.expand_dims(target_values, axis)
+        return target_values - reference_values
+
+    def _body(self, values, target):
+        axis = self.dist_pc.ndim
+        if jnp.ndim(target) > 1:
+            indices = jnp.asarray(target).reshape(
+                (*jnp.shape(target), *(1,) * (values.ndim - axis - 1))
+            )
+            return jnp.take_along_axis(values, indices, axis=axis)
+        return jnp.take(values, target, axis=axis)
 
     def offset_arcsec(self, target, reference=0):
         """Return east and north angular offsets from the reference."""
@@ -140,8 +175,8 @@ class System(eqx.Module):
     """A Jacobi chain ordered inner to outer by the caller.
 
     Orbit j describes planet j relative to the center of mass of the star
-    and all preceding planets. The star is scalar; masses and orbit batch
-    have shape (K,). Changing masses on a constructed System changes the
+    and all preceding planets. The star and distance have shape B; planet
+    masses and orbit batch have shape B + (K,). Editing masses changes the
     barycentric map only: rebuild to impose dynamically consistent rates.
     """
 
@@ -153,12 +188,14 @@ class System(eqx.Module):
     def __check_init__(self):
         """Validate the body and vector shape contract."""
         if (
-            self.star.mass_Msun.shape != ()
-            or self.planets.mass_Msun.ndim != 1
+            self.planets.mass_Msun.shape[:-1] != self.star.mass_Msun.shape
+            or self.planets.mass_Msun.ndim < 1
+            or self.frame.dist_pc.shape != self.star.mass_Msun.shape
             or self.orbits.a_AU.shape != self.planets.mass_Msun.shape
         ):
             raise ValueError(
-                "System requires a scalar star and (K,) planets and orbits"
+                "System requires star/distance shape B "
+                "and planets/orbits shape B + (K,)"
             )
 
     @classmethod
@@ -180,6 +217,19 @@ class System(eqx.Module):
 
     def solve(self, time_d, *, solver=_DEFAULT_SOLVER):
         """Solve once at all times; return (K+1,) + time_shape + (3,) states."""
+        batch = self.star.mass_Msun.shape
+        if batch:
+            time = jnp.asarray(time_d)
+            paired = time.ndim != 1
+            if paired and time.shape[:-1] != batch:
+                raise ValueError("time_d must have shape (T,) or B + (T,)")
+
+            def solve(system, time):
+                return system.solve(time, solver=solver)
+
+            for _ in batch:
+                solve = jax.vmap(solve, in_axes=(0, 0 if paired else None))
+            return solve(self, time)
         r, v = self.orbits.at(time_d, solver=solver)
         return Ephemeris(
             jacobi_to_barycentric(r, self.star.mass_Msun, self.planets.mass_Msun),

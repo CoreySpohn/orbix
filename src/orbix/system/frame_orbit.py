@@ -1,6 +1,7 @@
 """Non-singular bound-orbit state; Broucke and Cefola (1972), Danby (1988)."""
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 from jaxtyping import Array
 
@@ -211,7 +212,13 @@ class FrameOrbit(eqx.Module):
         basis = self.plane_basis().reshape(
             (*self.a_AU.shape, *(1,) * jnp.ndim(time_d), 3, 2)
         )
-        return (basis @ xy[..., None])[..., 0], (basis @ xy_rate[..., None])[..., 0]
+
+        def apply(coordinates):
+            first = jax.lax.optimization_barrier(basis[..., 0] * coordinates[..., :1])
+            second = jax.lax.optimization_barrier(basis[..., 1] * coordinates[..., 1:])
+            return first + second
+
+        return apply(xy), apply(xy_rate)
 
     def plane_basis(self) -> Array:
         """Return the constant B + (3, 2) plane-to-sky matrix in AU.
@@ -296,7 +303,13 @@ class FrameOrbit(eqx.Module):
         """
         xy, xy_rate = self._plane_coordinates_each(time_d, solver=solver)
         basis = self.plane_basis()
-        return (basis @ xy[..., None])[..., 0], (basis @ xy_rate[..., None])[..., 0]
+
+        def apply(coordinates):
+            first = jax.lax.optimization_barrier(basis[..., 0] * coordinates[..., :1])
+            second = jax.lax.optimization_barrier(basis[..., 1] * coordinates[..., 1:])
+            return first + second
+
+        return apply(xy), apply(xy_rate)
 
     def _plane_coordinates_each(self, time_d, *, solver):
         """Evaluate dimensionless plane position and rate at paired times."""

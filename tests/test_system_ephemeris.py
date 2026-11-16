@@ -289,3 +289,53 @@ def test_host_time_observables_and_solver_trace():
     )
     with pytest.raises(ValueError, match="reference"):
         eph.distance_AU(1, "invalid")
+
+
+@pytest.mark.parametrize("batch_shape", [(), (2, 3)])
+def test_batch_and_massless_tail(batch_shape):
+    """Fails if leading axes couple systems or zeros alter the ordered sum.
+
+    Exact algebra: trailing zero weights must preserve all preceding bits.
+    Batch/vectorized and scalar solves use the same arithmetic (2 ULP floor).
+    """
+    base = _system()
+    batch = jax.tree.map(lambda x: jnp.broadcast_to(x, batch_shape + x.shape), base)
+    times = jnp.array([0.0, 31.0])
+    result = batch.solve(times)
+    truth = base.solve(times)
+    np.testing.assert_array_equal(
+        result.position_AU, np.broadcast_to(truth.position_AU, result.position_AU.shape)
+    )
+    np.testing.assert_array_equal(
+        result.separation_arcsec(1),
+        np.broadcast_to(truth.separation_arcsec(1), (*batch_shape, 2)),
+    )
+    padded = System.from_classical(
+        Body(jnp.ones(batch_shape)),
+        Body(
+            jnp.broadcast_to(
+                jnp.array([0.001, 0.005, 0.0, 0.0, 0.0]), (*batch_shape, 5)
+            )
+        ),
+        SkyFrame(jnp.full(batch_shape, 10.0)),
+        **{
+            name: jnp.broadcast_to(
+                jnp.array([*values, *([1.0 if name == "a_AU" else 0.0] * 3)]),
+                (*batch_shape, 5),
+            )
+            for name, values in ELEMENTS.items()
+        },
+    )
+    extra = padded.solve(times)
+    np.testing.assert_array_equal(extra.position_AU[..., :3, :, :], result.position_AU)
+    np.testing.assert_array_equal(
+        extra.velocity_AU_per_d[..., :3, :, :], result.velocity_AU_per_d
+    )
+    if batch_shape:
+        expected = np.stack([truth.separation_arcsec(i) for i in (1, 2)])
+        np.testing.assert_array_equal(
+            result.separation_arcsec(jnp.array([1, 2])),
+            np.broadcast_to(expected, (*batch_shape, *expected.shape)),
+        )
+        paired = batch.solve(jnp.broadcast_to(times, batch_shape + times.shape))
+        np.testing.assert_array_equal(paired.position_AU, result.position_AU)

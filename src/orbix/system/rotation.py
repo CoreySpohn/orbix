@@ -1,13 +1,27 @@
 """Scalar-first unit quaternions mapping plane vectors into the sky frame."""
 
+import jax
 import jax.numpy as jnp
 
 
+def _cross(left, right):
+    """Cross product with shape-independent rounding of each product."""
+    first = left[..., [1, 2, 0]] * right[..., [2, 0, 1]]
+    second = left[..., [2, 0, 1]] * right[..., [1, 2, 0]]
+    return jax.lax.optimization_barrier(first) - jax.lax.optimization_barrier(second)
+
+
 def rotate(quat, vector):
-    """Rotate last-axis vectors by broadcast unit quaternions (w, x, y, z)."""
+    """Rotate last-axis vectors by broadcast unit quaternions (w, x, y, z).
+
+    Round products before adding so CPU fusion cannot depend on batch length.
+    """
+    vector = jnp.asarray(vector)
     imaginary = quat[..., 1:]
-    twice_cross = 2 * jnp.cross(imaginary, vector)
-    return vector + quat[..., :1] * twice_cross + jnp.cross(imaginary, twice_cross)
+    twice_cross = 2 * _cross(imaginary, vector)
+    first = jax.lax.optimization_barrier(quat[..., :1] * twice_cross)
+    second = _cross(imaginary, twice_cross)
+    return vector + first + second
 
 
 def from_basis(f, g, normal):

@@ -11,7 +11,9 @@ from hwoutils.constants import AU2m, d2s, pc2AU, rad2arcsec
 def offset_arcsec(r_AU, dist_pc):
     """Return east (Delta alpha cos delta) and north offsets in arcseconds."""
     r = jnp.asarray(r_AU)
-    factor = rad2arcsec / (pc2AU * jnp.asarray(dist_pc))
+    distance = jnp.asarray(dist_pc)
+    distance = distance.reshape(distance.shape + (1,) * (r.ndim - 1 - distance.ndim))
+    factor = rad2arcsec / (pc2AU * distance)
     return r[..., 0] * factor, r[..., 1] * factor
 
 
