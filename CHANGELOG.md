@@ -43,6 +43,13 @@
 * The broken predict/pdet functions and the `discrete_e` factory were removed
   (they did not work correctly and had no working callers).
 
+## [4.2.0](https://github.com/CoreySpohn/orbix/compare/v4.1.0...v4.2.0) (2026-11-16)
+
+
+### Features
+
+* **system:** leading batch dimensions on the system, with ordered sums that make trailing zero-mass bodies bitwise inert ([acae82f](https://github.com/CoreySpohn/orbix/commit/acae82fa3df92ebbc57aea41dcb8d81f56ee88fe))
+
 ## [4.1.0](https://github.com/CoreySpohn/orbix/compare/v4.0.0...v4.1.0) (2026-11-16)
 
 
