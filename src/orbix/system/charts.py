@@ -87,7 +87,7 @@ class AbstractChart(eqx.Module):
 class FrameChart(AbstractChart):
     """Coordinates (ln a, ux, uy, vw, vx, vy, vz), with a quaternion gauge.
 
-    The disk map is u/sqrt(1+|u|^2); the quaternion is v/|v|. The inverse
+    The disk map is u/sqrt(1+norm(u)^2); the quaternion is v/norm(v). The inverse
     chooses unit length and makes the largest-magnitude component positive
     (first component wins ties). Thus neither length nor sign is recovered.
 
@@ -97,8 +97,8 @@ class FrameChart(AbstractChart):
     Use nonzero v for differentiable inference; a Gaussian draw is nonzero
     almost surely.
 
-    For positive gauge_sd, with r=|v|, log_volume is
-    -2 log(1+|u|^2) - 0.5*((r-1)/gauge_sd)^2 - 3 log(r).
+    For positive gauge_sd, with r=norm(v), log_volume is
+    -2 log(1+norm(u)^2) - 0.5*((r-1)/gauge_sd)^2 - 3 log(r).
     The additive normalization constant is omitted, including the normal's
     truncation to r>0 (a negligible correction for small gauge_sd); r=0
     has zero density. Since d^4 v=r^3 dr dS3, the r^3 factor cancels:
@@ -106,7 +106,7 @@ class FrameChart(AbstractChart):
     r near one to limit changes in orientation scales during inference.
 
     With gauge_sd=None, log_volume is instead
-    -2 log(1+|u|^2) - |v|^2/2 - 2 log(2*pi), unchanged and normalized.
+    -2 log(1+norm(u)^2) - norm(v)^2/2 - 2 log(2*pi), unchanged and normalized.
     Gaussian four-vector draws then give exact isotropic orientations.
     Both quaternion signs are integrated in either gauge.
     """
@@ -166,13 +166,13 @@ class FrameChart(AbstractChart):
 class EccentricityVectorChart(AbstractChart):
     """Coordinates (ln a, ux, uy, atanh(cos i), W, M0+w).
 
-    u/sqrt(1+|u|^2) gives (e cos w, e sin w). Angles are plain real radians;
+    u/sqrt(1+norm(u)^2) gives (e cos w, e sin w). Angles are plain real radians;
     predictions are periodic in them. Conventions match from_classical on
     FrameOrbit. The inverse remains regular at e=0 but is undefined at
     either inclination pole, which finite coordinates do not reach in exact
     arithmetic.
 
-    log_volume = -2 log(1+|u|^2) + log(sech(z)^2), z=atanh(cos i).
+    log_volume = -2 log(1+norm(u)^2) + log(sech(z)^2), z=atanh(cos i).
     The omitted additive constant is -log(8*pi^2) for normalized Haar
     measure and one 2*pi cell for each angle. Rotation of the eccentricity
     plane by -(M0+w) preserves area, including its coupled phase dependence.
@@ -237,9 +237,9 @@ class CartesianChart(AbstractChart):
     """Epoch position and escape-speed-scaled velocity coordinates (p, w).
 
     With positive scale_AU=s, r=s*p is in (east, north, away) AU and
-    v=sqrt(2*mu/|r|)*w/sqrt(1+|w|^2) is in AU/day. The velocity map is
+    v=sqrt(2*mu/norm(r))*w/sqrt(1+norm(w)^2) is in AU/day. The velocity map is
     smooth and bijective onto the open escape-speed ball, including w=0,
-    with no division by |w| and no clipping.
+    with no division by norm(w) and no clipping.
 
     Nonzero position and nonradial velocity are required by FrameOrbit:
     every finite input has negative energy at r!=0, but exactly radial
@@ -270,19 +270,19 @@ class CartesianChart(AbstractChart):
         return jnp.concatenate([r / self.scale_AU, _plane(v / escape[..., None])], -1)
 
     def log_volume(self, x) -> Array:
-        """Return -3 log(|p|) - 4 log(1+|w|^2), independent of mu and scale.
+        """Return -3 log(norm(p)) - 4 log(1+norm(w)^2), independent of mu and scale.
 
-        Let s=scale_AU, R=s*|p|, b=1+|w|^2, a=R*b/2, and dnu be the
+        Let s=scale_AU, R=s*norm(p), b=1+norm(w)^2, a=R*b/2, and dnu be the
         reference measure e de d(cos i) dW dw dM d(ln a) with unnormalized
         Haar orientation. Delaunay actions L=sqrt(mu*a), G=L*sqrt(1-e^2),
         H=G*cos(i), and J=s^3*(2*mu/R)^(3/2)*b^(-5/2) give:
         d^3r d^3v = dL dG dH dM dw dW = (mu*a)^(3/2)/2 * dnu.
-        dnu/d^6x = 2*J/(mu*a)^(3/2) = 16*|p|^(-3)*b^(-4).
+        dnu/d^6x = 2*J/(mu*a)^(3/2) = 16*norm(p)^(-3)*b^(-4).
 
         The ball Jacobian b^(-5/2) has one radial and two tangential
         eigenvalues b^(-3/2), b^(-1/2), b^(-1/2). Position dependence of
         escape speed leaves the phase-space Jacobian block triangular.
-        Thus escape-speed scaling cancels mu exactly, and R=s*|p| cancels
+        Thus escape-speed scaling cancels mu exactly, and R=s*norm(p) cancels
         s. The omitted additive constant may depend on scale_AU only;
         here it is independent of scale too: log(16) for unnormalized
         Haar, or log(2/pi^2) for normalized Haar.
