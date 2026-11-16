@@ -28,7 +28,8 @@ import jax.numpy as jnp
 import numpy as np
 import eyepiece as ep
 
-from orbix import KeplerianOrbit
+from orbix.system import Body, FrameOrbit, SkyFrame, System, offset_arcsec
+from hwoutils.constants import G, Msun2kg
 from orbix import viz
 
 hwostyle.use("dark")
@@ -59,24 +60,25 @@ functions share one preparation step that propagates the orbit once; the
 one set of tracks.
 
 ```{code-cell} ipython3
-MSUN_KG = 1.988409870698051e30
+MU = G * Msun2kg
 
 # The elements are named because the posterior fan further down is built
 # around this same orbit.
 A_AU, ECC, INC_RAD = 1.3, 0.31, 1.05
 BIG_OMEGA_RAD, SMALL_OMEGA_RAD, M0_RAD = 2.3, -0.7, 0.4
-T0_D = 2460000.0
+T0_D = 0.0
+# Float days from the chosen epoch.
 
 # Kepler's third law for a solar-mass star, so the track spans exactly one
 # period and the ellipse closes instead of stopping in mid-air.
-PERIOD_D = A_AU**1.5 * 365.25
+PERIOD_D = 2 * np.pi * np.sqrt(A_AU**3 / MU)
 PERIAPSIS_D = T0_D - M0_RAD * PERIOD_D / (2.0 * np.pi)
 
-orbit = KeplerianOrbit(
+orbit = FrameOrbit.from_classical(
     a_AU=A_AU, e=ECC, W_rad=BIG_OMEGA_RAD, i_rad=INC_RAD,
-    w_rad=SMALL_OMEGA_RAD, M0_rad=M0_RAD, t0_d=T0_D,
+    w_rad=SMALL_OMEGA_RAD, M0_rad=M0_RAD, mu_AU3_per_d2=MU, epoch_d=T0_D,
 )
-time_jd = jnp.linspace(T0_D, T0_D + PERIOD_D, 240)
+time_d = jnp.linspace(T0_D, T0_D + PERIOD_D, 240)
 
 # A second cast for the 3D views: three near-coplanar planets, the way a
 # planetary system actually sits. Keeping the mutual inclinations small (7 to
@@ -91,29 +93,30 @@ SYS_INC = np.array([0.12, 0.20, 0.28])
 SYS_SMALL_OMEGA = np.array([-0.40, -0.70, 0.90])
 SYS_M0 = np.array([0.00, 2.10, 4.30])
 
-system = KeplerianOrbit(
+system = System.from_classical(
+    Body(1.0), Body(np.zeros(3)), SkyFrame(10.0),
     a_AU=SYS_A_AU, e=SYS_ECC, W_rad=SYS_BIG_OMEGA, i_rad=SYS_INC,
-    w_rad=SYS_SMALL_OMEGA, M0_rad=SYS_M0, t0_d=np.full(3, T0_D),
+    w_rad=SYS_SMALL_OMEGA, M0_rad=SYS_M0, epoch_d=T0_D,
 )
 
 # The same three planets one at a time. plot_orbit applies a single style to
 # every track it is handed -- a fan of draws for one planet is one source -- so
 # giving each planet its own colour means one call per planet.
 one_planet = [
-    KeplerianOrbit(
+    FrameOrbit.from_classical(
         a_AU=SYS_A_AU[k:k + 1], e=SYS_ECC[k:k + 1],
         W_rad=SYS_BIG_OMEGA[k:k + 1], i_rad=SYS_INC[k:k + 1],
         w_rad=SYS_SMALL_OMEGA[k:k + 1], M0_rad=SYS_M0[k:k + 1],
-        t0_d=np.array([T0_D]),
+        mu_AU3_per_d2=MU, epoch_d=T0_D,
     )
     for k in range(3)
 ]
 
-OUTER_PERIOD_D = 2.35**1.5 * 365.25
+OUTER_PERIOD_D = 2 * np.pi * np.sqrt(SYS_A_AU[-1]**3 / MU)
 t_system = jnp.linspace(T0_D, T0_D + OUTER_PERIOD_D, 240)
 
 result = viz.plot_sky_track(
-    orbit, time_jd, Ms_kg=MSUN_KG, dist_pc=10.0,
+    orbit, time_d=time_d, dist_pc=10.0,
     style=styles["planet b"], iwa_arcsec=0.06,
 )
 ```
@@ -124,9 +127,9 @@ cannot see into, in the same arcsecond units as the track.
 ## A posterior fan
 
 A `(K,)`-batched orbit draws as a fan of candidate tracks, faded by
-per-track weights. `KeplerianOrbit.from_period` builds the batch directly
-from the parameterization orbit-fitting code samples, so posterior draws
-become a fan in two calls.
+per-track weights. `FrameOrbit.from_classical` broadcasts the sampled
+elements into a batch. Periods set the semi-major axes through the
+gravitational parameter.
 
 ```{code-cell} ipython3
 rng = np.random.default_rng(7)
@@ -135,34 +138,34 @@ rng = np.random.default_rng(7)
 # measurement error, so the fan and the data describe the same system.
 SIGMA_ARCSEC = 0.008
 t_obs = T0_D + np.array([70.0, 250.0, 430.0])
-ra_true, dec_true = orbit.position_arcsec(
-    time_jd=jnp.asarray(t_obs), Ms_kg=MSUN_KG, dist_pc=10.0
-)
+ra_true, dec_true = offset_arcsec(orbit.at(t_obs)[0], 10.0)
 # Observations are (xy, xerr, yerr): positions shaped (P, 2) and one-sigma
 # errors along RA and Dec.
 epochs = (
     np.column_stack([
-        np.asarray(ra_true)[0] + SIGMA_ARCSEC * rng.standard_normal(3),
-        np.asarray(dec_true)[0] + SIGMA_ARCSEC * rng.standard_normal(3),
+        np.asarray(ra_true) + SIGMA_ARCSEC * rng.standard_normal(3),
+        np.asarray(dec_true) + SIGMA_ARCSEC * rng.standard_normal(3),
     ]),
     np.full(3, SIGMA_ARCSEC),
     np.full(3, SIGMA_ARCSEC),
 )
 
 K = 40
-draws = dict(
-    T_d=PERIOD_D * (1.0 + 0.04 * rng.standard_normal(K)),
+periods_d = PERIOD_D * (1.0 + 0.04 * rng.standard_normal(K))
+periapsis_d = PERIAPSIS_D + 12.0 * rng.standard_normal(K)
+fan = FrameOrbit.from_classical(
+    a_AU=(MU * (periods_d / (2 * np.pi))**2)**(1 / 3),
     e=np.clip(ECC + 0.04 * rng.standard_normal(K), 0.0, 0.9),
-    cos_i=np.clip(np.cos(INC_RAD) + 0.06 * rng.standard_normal(K), -1.0, 1.0),
+    i_rad=np.arccos(np.clip(np.cos(INC_RAD) + 0.06 * rng.standard_normal(K), -1, 1)),
     W_rad=BIG_OMEGA_RAD + 0.08 * rng.standard_normal(K),
-    cos_w=np.cos(SMALL_OMEGA_RAD + 0.15 * rng.standard_normal(K)),
-    sin_w=np.sin(SMALL_OMEGA_RAD + 0.15 * rng.standard_normal(K)),
-    tp_d=PERIAPSIS_D + 12.0 * rng.standard_normal(K),
+    w_rad=SMALL_OMEGA_RAD + 0.15 * rng.standard_normal(K),
+    M0_rad=2 * np.pi * (T0_D - periapsis_d) / periods_d,
+    mu_AU3_per_d2=MU, epoch_d=T0_D,
 )
-fan = KeplerianOrbit.from_period(**draws, Ms_kg=MSUN_KG)
 result = viz.plot_sky_track(
-    fan, time_jd, Ms_kg=MSUN_KG, dist_pc=10.0,
-    style=styles["planet b"], iwa_arcsec=0.06, observations=epochs,
+    fan, time_d=time_d, dist_pc=10.0,
+    style=styles["planet b"], weights=np.full(K, 1 / K),
+    iwa_arcsec=0.06, observations=epochs,
 )
 ```
 
@@ -210,7 +213,7 @@ axsky = fig.add_subplot(gs[1])
 
 for name, planet in zip(PLANETS, one_planet):
     viz.plot_orbit(
-        planet, t_system, Ms_kg=MSUN_KG, ax=ax3d,
+        planet, time_d=t_system, ax=ax3d,
         style=styles[name], marks={"periapsis"},
     )
 
@@ -220,7 +223,7 @@ for name, planet in zip(PLANETS, one_planet):
 # and keeps the scale equal on all three axes; the tick locator keeps the
 # shorter axis from crowding its labels together.
 z_half = 1.15 * float(np.max(np.abs(
-    np.asarray(system.propagate(time_jd=t_system, Ms_kg=MSUN_KG)[0])[:, 2]
+    np.asarray(system.solve(t_system).position_AU)[1:, :, 2]
 )))
 xy_half = ax3d.get_xlim()[1]
 ax3d.set_zlim(-z_half, z_half)
@@ -229,7 +232,7 @@ ax3d.zaxis.set_major_locator(MaxNLocator(3))
 ax3d.set_title("plot_orbit -- star-centric, AU")
 
 viz.plot_sky_track(
-    system, t_system, Ms_kg=MSUN_KG, dist_pc=10.0, ax=axsky,
+    system, time_d=t_system, dist_pc=10.0, ax=axsky,
     colors=[styles[name]["color"] for name in PLANETS], iwa_arcsec=0.06,
     fan_kw={"lw": 1.8},
 )
@@ -276,7 +279,7 @@ from IPython.display import HTML
 t_anim = jnp.linspace(T0_D, T0_D + OUTER_PERIOD_D, 72)
 
 anim = viz.animate_orbit(
-    system, t_anim, Ms_kg=MSUN_KG, kind="3d", history="none",
+    system, time_d=t_anim, kind="3d", history="none",
     base_ms=viz.size_by_radius([1.0, 3.9, 11.2]), fps=15,
     rotate={"azim": (-150.0, -110.0), "elev": (46.0, 46.0)},
 )

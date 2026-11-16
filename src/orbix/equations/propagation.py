@@ -1,7 +1,7 @@
 """Methods to propagate the positions of planets.
 
 With orbix's orbital-element matrices, vectors use the (east, north, away)
-right-handed frame defined in :mod:`orbix.orbit`; positive z points away
+right-handed frame used by :mod:`orbix.system`; positive z points away
 from the observer.
 Positions are in AU and velocities share the frame in AU/day when mean motion
 is in rad/day. dz/dt is the radial velocity of the body relative to the star,

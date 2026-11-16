@@ -43,7 +43,7 @@ from eyepiece.prepared import (
     TrackView,
 )
 
-from orbix.orbit import AbstractOrbit
+from orbix.system import FrameOrbit, System, offset_arcsec
 
 # Stable element IDs of a prepared sky view. Per-track IDs are these
 # prefixes plus the track index (``path/0``, ``head/0``, ``trail/0``).
@@ -113,33 +113,109 @@ def _trail_window(history):
     )
 
 
-def _sky_xy(orbit_or_radec, time_jd, Ms_kg, dist_pc, trig_solver):
-    """Normalize the input to host coordinates of shape ``(K, T, 2)`` arcsec.
+def _resolve_time(time_jd, time_d):
+    """Keep the Julian-day spelling compatible; new inputs use epoch days."""
+    if time_jd is not None and time_d is not None:
+        raise TypeError("pass only one of time_d and time_jd")
+    return time_jd if time_d is None else time_d
 
-    An orbit is propagated with one ``position_arcsec`` call over the
-    whole grid; east (Delta alpha cos delta) and north (Delta delta) offsets
-    are stacked on the device and transferred to the host once. A bare
-    ``(K, T, 2)`` array is borrowed as given (no copy, no
-    dtype promotion); an ``(ra, dec)`` pair is stacked into new storage.
-    """
-    if isinstance(orbit_or_radec, AbstractOrbit):
-        missing = [
-            name
-            for name, value in (
-                ("time_jd", time_jd),
-                ("Ms_kg", Ms_kg),
-                ("dist_pc", dist_pc),
-            )
-            if value is None
-        ]
-        if missing:
-            raise TypeError(
-                "preparing an orbit requires " + ", ".join(missing) + " to propagate it"
-            )
-        ra, dec = orbit_or_radec.position_arcsec(
-            trig_solver, time_jd, Ms_kg=Ms_kg, dist_pc=dist_pc
+
+def _legacy_orbit_arrays(value, times, Ms_kg, dist_pc, trig_solver, angular):
+    """Adapt the angle-field orbit to host tracks and optional mark geometry."""
+    if not hasattr(value, "propagate"):
+        return None
+    from orbix.orbit import AbstractOrbit
+
+    if not isinstance(value, AbstractOrbit):
+        return None
+    missing = [
+        name for name, arg in (("time_jd", times), ("Ms_kg", Ms_kg)) if arg is None
+    ]
+    if angular and dist_pc is None:
+        missing.append("dist_pc")
+    if missing:
+        raise TypeError("preparing an orbit requires " + ", ".join(missing))
+    if angular:
+        ra, dec = value.position_arcsec(
+            trig_solver, times, Ms_kg=Ms_kg, dist_pc=dist_pc
         )
-        return np.asarray(jnp.stack([ra, dec], axis=-1))
+        return np.asarray(jnp.stack([ra, dec], axis=-1)), None
+    r, _, _ = value.propagate(trig_solver, times, Ms_kg=Ms_kg)
+    geometry = None
+    if hasattr(value, "_AB"):
+        A, B = value._AB()
+        geometry = (
+            np.asarray(A),
+            np.asarray(B),
+            np.asarray(value.e),
+            np.asarray(value.w_rad),
+        )
+    return np.moveaxis(np.asarray(r, float), 1, 2), geometry
+
+
+def _frame_geometry(orbit):
+    """Perifocal A, B, eccentricity and node phase; circular periapsis is arbitrary."""
+    basis = np.asarray(orbit.plane_basis()).reshape(-1, 3, 2)
+    e = np.asarray(orbit.e).reshape(-1)
+    phi = np.arctan2(np.asarray(orbit.ey), np.asarray(orbit.ex)).reshape(-1)
+    c, s = np.cos(phi)[:, None], np.sin(phi)[:, None]
+    A = basis[..., 0] * c + basis[..., 1] * s
+    B = (-basis[..., 0] * s + basis[..., 1] * c) * np.sqrt(1 - e**2)[:, None]
+    node_phase = np.arctan2(A[:, 2], B[:, 2] / np.sqrt(1 - e**2))
+    return A.T, B.T, e, node_phase
+
+
+def _orbit_arrays(value, times, Ms_kg, dist_pc, trig_solver, *, angular=False):
+    """Return host tracks and mark geometry, or None for a bare-array input.
+
+    Engine time arguments are float days from the object's epoch. Batch
+    axes are flattened into K tracks; T is the one-dimensional time grid.
+    System tracks are planet positions relative to body zero (the star).
+    """
+    if isinstance(value, (FrameOrbit, System)):
+        if times is None:
+            raise TypeError("preparing an orbit requires time_d")
+        kwargs = {} if trig_solver is None else {"solver": trig_solver}
+        if isinstance(value, System):
+            eph = value.solve(times, **kwargs)
+            axis = value.star.mass_Msun.ndim
+            planets = jnp.arange(1, value.planets.mass_Msun.shape[-1] + 1)
+            r = jnp.take(eph.position_AU, planets, axis=axis) - jnp.take(
+                eph.position_AU, jnp.array([0]), axis=axis
+            )
+            if angular:
+                ra, dec = eph.offset_arcsec(planets)
+            # A massive multi-planet Jacobi path is not a Kepler ellipse
+            # relative to the star; ellipse marks only apply otherwise.
+            geometry = (
+                _frame_geometry(value.orbits)
+                if not angular
+                and (
+                    value.planets.mass_Msun.shape[-1] == 1
+                    or np.all(np.asarray(value.planets.mass_Msun) == 0)
+                )
+                else None
+            )
+        else:
+            if angular and dist_pc is None:
+                raise TypeError("preparing a FrameOrbit requires dist_pc")
+            r, _ = value.at(times, **kwargs)
+            if angular:
+                ra, dec = offset_arcsec(r, dist_pc)
+            geometry = None if angular else _frame_geometry(value)
+        tracks = jnp.stack([ra, dec], -1) if angular else r
+        host = np.asarray(tracks)
+        return host.reshape(-1, host.shape[-2], host.shape[-1]), geometry
+    return _legacy_orbit_arrays(value, times, Ms_kg, dist_pc, trig_solver, angular)
+
+
+def _sky_xy(orbit_or_radec, time_jd, Ms_kg, dist_pc, trig_solver):
+    """Normalize the input to host coordinates of shape ``(K, T, 2)`` arcsec."""
+    prepared = _orbit_arrays(
+        orbit_or_radec, time_jd, Ms_kg, dist_pc, trig_solver, angular=True
+    )
+    if prepared is not None:
+        return prepared[0]
 
     if isinstance(orbit_or_radec, (tuple, list)) and len(orbit_or_radec) == 2:
         ra = np.atleast_2d(np.asarray(orbit_or_radec[0]))
@@ -154,7 +230,7 @@ def _sky_xy(orbit_or_radec, time_jd, Ms_kg, dist_pc, trig_solver):
         tracks = np.asarray(orbit_or_radec)
         if tracks.ndim != 3 or tracks.shape[-1] != 2:
             raise ValueError(
-                "expected an AbstractOrbit, a (K, T, 2) array of arcsec offsets, "
+                "expected an orbit, a (K, T, 2) array of arcsec offsets, "
                 f"or an (ra, dec) pair of (T,) or (K, T) arrays; got shape "
                 f"{tracks.shape}"
             )
@@ -364,7 +440,8 @@ def _clock_format(offsets_d):
 def prepare_sky_track(
     orbit_or_radec,
     *,
-    time_jd,
+    time_jd=None,
+    time_d=None,
     Ms_kg=None,
     dist_pc=None,
     trig_solver=None,
@@ -378,19 +455,22 @@ def prepare_sky_track(
     """Prepare sky-plane tracks once, as a replayable ``Sequence``.
 
     Args:
-        orbit_or_radec: An ``AbstractOrbit`` (propagated here once over
-            ``time_jd``, requiring ``Ms_kg`` and ``dist_pc``), or bare tracks
+        orbit_or_radec: A ``FrameOrbit`` with ``dist_pc``, a ``System``
+            with its stored distance, a legacy orbit with mass and distance,
+            or bare tracks
             in arcsec: an array shaped ``(K, T, 2)`` of (RA, Dec) offsets,
             borrowed as given, or an ``(ra, dec)`` pair of ``(T,)`` or
             ``(K, T)`` arrays. A tuple or list of two is always read as an
             ``(ra, dec)`` pair. A row with a nonfinite coordinate is a gap.
-        time_jd: Sample times in Julian days, shape ``(T,)``, finite and
+        time_d: Float days from the engine object's epoch, shape ``(T,)``.
+        time_jd: Legacy sample times in Julian days, shape ``(T,)``, finite and
             strictly increasing. They time the orbit's propagation and,
             for either door, the sequence samples.
-        Ms_kg: Stellar mass in kg. Orbit door only.
-        dist_pc: Distance to the star in parsecs. Orbit door only.
-        trig_solver: Optional Kepler solver forwarded to the orbit; None
-            uses orbix's default.
+        Ms_kg: Stellar mass in kg, for legacy orbits only.
+        dist_pc: Distance in parsecs for a frame or legacy orbit. A system
+            uses its stored distance.
+        trig_solver: Engine solver strategy, or the legacy solver callable.
+            None uses the input object's default.
         source_ids: The scientific source of each track: None (every track
             is one source, ``"track"``), one name for every track, or K
             names. A name may repeat, so K posterior draws of one planet
@@ -421,7 +501,7 @@ def prepare_sky_track(
         given), ``head/<k>`` (the held sample), ``observations``, ``iwa``,
         ``star``, and ``clock``. RA increases to the left, with equal x
         and y scale. Times are days since the first sample; the first
-        sample's Julian day is the sequence ``epoch``.
+        sample's input time is the sequence ``epoch``.
 
     Raises:
         TypeError: If the orbit door is missing a propagation argument.
@@ -430,6 +510,7 @@ def prepare_sky_track(
             malformed, naming the argument. Time, history, and clock-format
             errors are raised before the orbit is propagated.
     """
+    time_jd = _resolve_time(time_jd, time_d)
     times_jd = _sample_times(time_jd)
     trail, window = _trail_window(history)
     custom_clock = None if clock_fmt is None else Clock(CLOCK_ID, fmt=clock_fmt)
@@ -479,6 +560,7 @@ def prepare_sky_view(
     orbit_or_radec,
     *,
     time_jd=None,
+    time_d=None,
     Ms_kg=None,
     dist_pc=None,
     trig_solver=None,
@@ -494,7 +576,8 @@ def prepare_sky_view(
 
     Args:
         orbit_or_radec: As for ``prepare_sky_track``.
-        time_jd: Times in Julian days, shape ``(T,)``. Orbit door only: bare
+        time_d: Float days from the engine object's epoch, shape ``(T,)``.
+        time_jd: Legacy times in Julian days, shape ``(T,)``. Orbit door only: bare
             tracks are drawn as given.
         Ms_kg: As for ``prepare_sky_track``.
         dist_pc: As for ``prepare_sky_track``.
@@ -513,12 +596,19 @@ def prepare_sky_view(
             ``time_jd`` is given with bare tracks.
         ValueError: As for ``prepare_sky_track``.
     """
-    if time_jd is not None and not isinstance(orbit_or_radec, AbstractOrbit):
-        raise TypeError(
-            "time_jd only applies when propagating an orbit; bare tracks are "
-            "drawn as given"
-        )
-    tracks = _sky_xy(orbit_or_radec, time_jd, Ms_kg, dist_pc, trig_solver)
+    time_jd = _resolve_time(time_jd, time_d)
+    prepared = _orbit_arrays(
+        orbit_or_radec, time_jd, Ms_kg, dist_pc, trig_solver, angular=True
+    )
+    if prepared is None:
+        if time_jd is not None:
+            raise TypeError(
+                "time_jd only applies when propagating an orbit; bare tracks are "
+                "drawn as given"
+            )
+        tracks = _sky_xy(orbit_or_radec, None, Ms_kg, dist_pc, trig_solver)
+    else:
+        tracks = prepared[0]
     return _build_view(
         tracks,
         source_ids=source_ids,

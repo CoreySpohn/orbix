@@ -11,26 +11,34 @@ a pure function, so propagation composes with `jit`, `vmap`, and `grad`.
 
 ```python
 import jax.numpy as jnp
-from orbix import KeplerianOrbit
+from hwoutils.constants import G, Msun2kg
+from orbix.system import Body, FrameOrbit, SkyFrame, System
 
-orbit = KeplerianOrbit(
-    a_AU=1.0, e=0.2, W_rad=0.5, i_rad=1.0, w_rad=0.3, M0_rad=0.0, t0_d=0.0
+orbit = FrameOrbit.from_classical(
+    a_AU=[1.0],
+    e=0.2,
+    W_rad=0.5,
+    i_rad=1.0,
+    w_rad=0.3,
+    M0_rad=0.0,
+    mu_AU3_per_d2=G * Msun2kg,
 )
-r_AU, phase_angle_rad, dist_AU = orbit.propagate(
-    time_jd=jnp.linspace(0.0, 365.0, 100), Ms_kg=1.99e30
-)
+system = System(Body(1.0), Body([0.0]), orbit, SkyFrame(10.0))
+ephemeris = system.solve(jnp.linspace(0.0, 365.0, 100))  # days from system.frame.epoch
+raoff, decoff = ephemeris.offset_arcsec(1)
 ```
 
 ## Sky-coordinate convention
 
 Star-centered orbit vectors use the right-handed **(east, north, away)**
-frame: `r_AU[:, 0]` is east, `r_AU[:, 1]` is north, and `r_AU[:, 2]` is
+frame: `r_AU[..., 0]` is east, `r_AU[..., 1]` is north, and `r_AU[..., 2]` is
 positive away from the observer. Positions are in AU; velocities share the
 frame in AU/day. The component dz/dt is the radial velocity of the body
 relative to the star, positive when receding. `state_vector_to_keplerian`
 accepts position and velocity in this same order.
 
-`position_arcsec` returns `(raoff, decoff)`, each shaped `(K, T)`, where
+`ephemeris.offset_arcsec(target)` returns `(raoff, decoff)`, each shaped
+like the sample times for one target, where
 raoff = Delta alpha cos delta (east) and decoff = Delta delta (north), in
 arcsec. The first component includes cos delta, rather than being the RA
 angle itself. Sky plots display east left and north up.

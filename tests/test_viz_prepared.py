@@ -31,7 +31,7 @@ from eyepiece.prepared import (
 )
 from hwoutils.constants import G, Msun2kg, pc2AU, rad2arcsec
 
-from orbix.orbit import KeplerianOrbit
+from orbix.system import Body, FrameOrbit, SkyFrame, System
 from orbix.viz import prepare_sky_track, prepare_sky_view
 
 DIST_PC = 10.0
@@ -61,14 +61,15 @@ def _circle(n, radius=1.0, turns=1.0, phase=0.0):
 
 def _circular_orbit(K=1):
     """A face-on circular orbit: its sky track is a circle of known radius."""
-    return KeplerianOrbit(
+    return FrameOrbit.from_classical(
         a_AU=jnp.full((K,), 1.0),
         e=jnp.zeros(K),
         W_rad=jnp.zeros(K),
         i_rad=jnp.zeros(K),
         w_rad=jnp.zeros(K),
         M0_rad=jnp.linspace(0.0, 0.5, K),
-        t0_d=jnp.zeros(K),
+        mu_AU3_per_d2=G * Msun2kg,
+        epoch_d=jnp.zeros(K),
     )
 
 
@@ -78,14 +79,15 @@ def _circle_radius_arcsec(a_AU=1.0, dist_pc=DIST_PC):
 
 def _eccentric_orbit(K=1):
     """An eccentric, face-on orbit: projected speed peaks at periapsis."""
-    return KeplerianOrbit(
+    return FrameOrbit.from_classical(
         a_AU=jnp.full((K,), 1.3),
         e=jnp.full((K,), 0.5),
         W_rad=jnp.zeros(K),
         i_rad=jnp.zeros(K),
         w_rad=jnp.zeros(K),
         M0_rad=jnp.zeros(K),
-        t0_d=jnp.zeros(K),
+        mu_AU3_per_d2=G * Msun2kg,
+        epoch_d=jnp.zeros(K),
     )
 
 
@@ -468,13 +470,13 @@ def test_times_must_match_and_increase():
 def test_a_bad_time_grid_is_refused_before_propagating(monkeypatch):
     """Time and history errors are raised before propagation."""
     calls = []
-    original = KeplerianOrbit.position_arcsec
+    original = FrameOrbit.at
 
     def counting(self, *args, **kwargs):
         calls.append(1)
         return original(self, *args, **kwargs)
 
-    monkeypatch.setattr(KeplerianOrbit, "position_arcsec", counting)
+    monkeypatch.setattr(FrameOrbit, "at", counting)
     with pytest.raises(ValueError, match="increasing"):
         prepare_sky_track(
             _circular_orbit(), time_jd=np.array([0.0, 2.0, 1.0]), **STELLAR
@@ -488,9 +490,9 @@ def test_a_bad_time_grid_is_refused_before_propagating(monkeypatch):
 
 def test_the_orbit_door_names_what_is_missing():
     """The orbit door names each missing propagation argument."""
-    with pytest.raises(TypeError, match="Ms_kg, dist_pc"):
+    with pytest.raises(TypeError, match="dist_pc"):
         prepare_sky_track(_circular_orbit(), time_jd=np.arange(3.0))
-    with pytest.raises(TypeError, match="time_jd"):
+    with pytest.raises(TypeError, match="time_d"):
         prepare_sky_view(_circular_orbit(), **STELLAR)
 
 
@@ -557,23 +559,17 @@ def test_orbit_preparation_propagates_once(monkeypatch):
     expected_ra = 0.1 * np.sin(phase)
     expected_dec = 0.1 * np.cos(phase)
 
-    calls = {"position_arcsec": 0, "propagate": 0}
-    original_position = KeplerianOrbit.position_arcsec
-    original_propagate = KeplerianOrbit.propagate
+    calls = []
+    original = FrameOrbit.at
 
-    def counting_position(self, *args, **kwargs):
-        calls["position_arcsec"] += 1
-        return original_position(self, *args, **kwargs)
+    def counting(self, *args, **kwargs):
+        calls.append(1)
+        return original(self, *args, **kwargs)
 
-    def counting_propagate(self, *args, **kwargs):
-        calls["propagate"] += 1
-        return original_propagate(self, *args, **kwargs)
-
-    monkeypatch.setattr(KeplerianOrbit, "position_arcsec", counting_position)
-    monkeypatch.setattr(KeplerianOrbit, "propagate", counting_propagate)
+    monkeypatch.setattr(FrameOrbit, "at", counting)
 
     sequence = prepare_sky_track(orbit, time_jd=time_jd, history=5, **STELLAR)
-    assert calls == {"position_arcsec": 1, "propagate": 1}
+    assert calls == [1]
     for k in range(3):
         path = find_element(sequence.template, f"path/{k}")
         assert isinstance(path.xy, np.ndarray)
@@ -584,8 +580,7 @@ def test_orbit_preparation_propagates_once(monkeypatch):
     def refuse(self, *args, **kwargs):
         raise AssertionError("renderers must not propagate")
 
-    monkeypatch.setattr(KeplerianOrbit, "position_arcsec", refuse)
-    monkeypatch.setattr(KeplerianOrbit, "propagate", refuse)
+    monkeypatch.setattr(FrameOrbit, "at", refuse)
 
     from eyepiece import mpl
 
@@ -690,17 +685,29 @@ def test_static_view_invents_no_timestamps():
 
 
 def test_static_view_from_an_orbit_matches_the_sequence_paths():
-    """The static and sequence views share one builder's paths."""
+    """Fails if frame/system paths disagree or system offsets use the barycenter."""
     orbit = _eccentric_orbit(2)
-    time_jd = np.linspace(0.0, 300.0, 25)
-    view = prepare_sky_view(orbit, time_jd=time_jd, **STELLAR)
-    sequence = prepare_sky_track(orbit, time_jd=time_jd, **STELLAR)
-    for k in range(2):
-        np.testing.assert_array_equal(
-            find_element(view, f"path/{k}").xy,
-            find_element(sequence.template, f"path/{k}").xy,
-        )
-    assert view.axes.x_limits == sequence.template.axes.x_limits
+    system = System(Body(1.0), Body([0.01, 0.02]), orbit, SkyFrame(DIST_PC))
+    time_d = np.linspace(0.0, 300.0, 25)
+    for value in (orbit, system):
+        view = prepare_sky_view(value, time_d=time_d, dist_pc=DIST_PC)
+        sequence = prepare_sky_track(value, time_d=time_d, dist_pc=DIST_PC)
+        if isinstance(value, System):
+            eph = value.solve(time_d)
+            expected = np.stack(eph.offset_arcsec(jnp.array([1, 2])), -1)
+        else:
+            from orbix.system import offset_arcsec
+
+            expected = np.stack(offset_arcsec(value.at(time_d)[0], DIST_PC), -1)
+        for k in range(2):
+            np.testing.assert_array_equal(
+                find_element(view, f"path/{k}").xy,
+                find_element(sequence.template, f"path/{k}").xy,
+            )
+            np.testing.assert_array_equal(
+                find_element(view, f"path/{k}").xy, expected[k]
+            )
+        assert view.axes.x_limits == sequence.template.axes.x_limits
 
 
 # --- Manim places the same data coordinates -------------------------------------

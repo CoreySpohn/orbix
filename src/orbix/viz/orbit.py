@@ -9,7 +9,7 @@ figures drawn here match every other figure built on eyepiece.
 
 Every function that accepts an orbit also accepts bare track arrays, for
 consumers holding precomputed coordinates (a CSV of posterior traces, a
-cached ephemeris) rather than a live ``KeplerianOrbit``. Bare sky tracks
+cached ephemeris) rather than a live orbit. Bare sky tracks
 are arcsec offsets; bare 3D positions are in the caller's units, so no
 axis labels are set on that door.
 """
@@ -19,8 +19,13 @@ from collections.abc import Mapping
 
 import numpy as np
 
-from orbix.orbit import AbstractOrbit
-from orbix.viz._prepare import PATH_PREFIX, prepare_sky_view
+from orbix.system import System
+from orbix.viz._prepare import (
+    PATH_PREFIX,
+    _orbit_arrays,
+    _resolve_time,
+    prepare_sky_view,
+)
 from orbix.viz._require import eyepiece
 
 
@@ -164,6 +169,7 @@ def plot_sky_track(
     orbit_or_radec,
     time_jd=None,
     *,
+    time_d=None,
     Ms_kg=None,
     dist_pc=None,
     trig_solver=None,
@@ -183,7 +189,7 @@ def plot_sky_track(
     """Draw sky-plane orbit tracks: one orbit, or a fan of K candidates.
 
     A ``(K,)``-batched orbit (posterior draws through
-    ``KeplerianOrbit.from_period``, for instance) becomes a fan of K
+    ``FrameOrbit.from_classical``, for instance) becomes a fan of K
     tracks faded by ``weights``; a single orbit becomes one track. The
     tracks are prepared once with ``prepare_sky_view`` and drawn with
     ``eyepiece.mpl.render``, which owns the equal aspect, RA increasing to
@@ -191,15 +197,17 @@ def plot_sky_track(
     the observation error bars.
 
     Args:
-        orbit_or_radec: An ``AbstractOrbit`` (propagated here, requiring
-            ``time_jd``, ``Ms_kg``, ``dist_pc``), or bare arcsec tracks: an
+        orbit_or_radec: A ``FrameOrbit`` (requiring ``dist_pc``), a ``System``
+            (using its stored distance), a legacy orbit, or bare arcsec tracks: an
             array shaped ``(K, T, 2)``, or an ``(ra, dec)`` pair of
             ``(T,)`` or ``(K, T)`` arrays.
+        time_d: Float days from the engine object's epoch, shape ``(T,)``.
         time_jd: Times in Julian Days, shape ``(T,)``. Orbit door only.
-        Ms_kg: Stellar mass in kg. Orbit door only.
-        dist_pc: Distance to the star in parsecs. Orbit door only.
-        trig_solver: Optional Kepler solver forwarded to the orbit; None
-            uses orbix's default.
+        Ms_kg: Stellar mass in kg, for legacy orbits only.
+        dist_pc: Distance in parsecs for a frame or legacy orbit. A system
+            uses its stored distance.
+        trig_solver: Engine solver strategy, or the legacy solver callable.
+            None uses the input object's default.
         ax: Axes to draw into. None creates a new figure and axes. An axes
             that already holds data keeps it in view: the new limits grow
             to cover the old ones.
@@ -246,7 +254,7 @@ def plot_sky_track(
 
     view = prepare_sky_view(
         orbit_or_radec,
-        time_jd=time_jd,
+        time_jd=_resolve_time(time_jd, time_d),
         Ms_kg=Ms_kg,
         dist_pc=dist_pc,
         trig_solver=trig_solver,
@@ -296,18 +304,9 @@ def _positions(orbit_or_xyz, time_jd, Ms_kg, trig_solver):
         mark geometry can be computed from its elements rather than
         re-derived from the sampled track.
     """
-    if isinstance(orbit_or_xyz, AbstractOrbit):
-        missing = [
-            name
-            for name, val in (("time_jd", time_jd), ("Ms_kg", Ms_kg))
-            if val is None
-        ]
-        if missing:
-            raise TypeError(
-                "plotting an orbit requires " + ", ".join(missing) + " to propagate it"
-            )
-        r_AU, _, _ = orbit_or_xyz.propagate(trig_solver, time_jd, Ms_kg=Ms_kg)
-        return np.moveaxis(np.asarray(r_AU, float), 1, 2), orbit_or_xyz
+    prepared = _orbit_arrays(orbit_or_xyz, time_jd, Ms_kg, None, trig_solver)
+    if prepared is not None:
+        return prepared
 
     if time_jd is not None:
         raise TypeError(
@@ -320,7 +319,7 @@ def _positions(orbit_or_xyz, time_jd, Ms_kg, trig_solver):
     if arr.ndim == 3 and arr.shape[-1] == 3:
         return arr, None
     raise ValueError(
-        "expected an AbstractOrbit or an array shaped (T, 3) or (K, T, 3); "
+        "expected an orbit or an array shaped (T, 3) or (K, T, 3); "
         f"got shape {arr.shape}"
     )
 
@@ -347,9 +346,7 @@ def _mark_geometry(orbit):
     Returns:
         ``(periapsis, ascending, descending)``, each ``(K, 3)`` in AU.
     """
-    A, B = (np.asarray(m, float) for m in orbit._AB())
-    e = np.asarray(orbit.e, float)
-    w = np.asarray(orbit.w_rad, float)
+    A, B, e, w = orbit
 
     periapsis = (A * (1.0 - e)).T
 
@@ -370,6 +367,7 @@ def plot_orbit(
     orbit_or_xyz,
     time_jd=None,
     *,
+    time_d=None,
     Ms_kg=None,
     trig_solver=None,
     ax=None,
@@ -397,23 +395,25 @@ def plot_orbit(
     collapses the marker-size depth cue.
 
     Args:
-        orbit_or_xyz: An ``AbstractOrbit`` (propagated here, requiring
-            ``time_jd`` and ``Ms_kg``), or bare positions shaped ``(T, 3)``
+        orbit_or_xyz: A ``FrameOrbit``, a ``System`` (planets relative to its
+            star), a legacy orbit, or bare positions shaped ``(T, 3)``
             or ``(K, T, 3)``. Bare positions are in whatever units the
             caller made them, so no axis labels are set on that door.
+        time_d: Float days from the engine object's epoch, shape ``(T,)``.
         time_jd: Times in Julian Days, shape ``(T,)``. Orbit door only.
-        Ms_kg: Stellar mass in kg. Orbit door only.
-        trig_solver: Optional Kepler solver forwarded to the orbit; None
-            uses orbix's default.
+        Ms_kg: Stellar mass in kg, for legacy orbits only.
+        trig_solver: Engine solver strategy, or the legacy solver callable.
+            None uses the input object's default.
         ax: A ``projection="3d"`` axes to draw into. None creates one.
         style: A color, or a ``SourceStyles`` entry (which also sets the
             track marker), applied to every track: solid path and markers
             in that color. None gives the star-chart default -- markers in
             the mode's text color (white dots on a dark background) over
             a transparent dashed gray path.
-        marks: Optional set drawn from ``{"periapsis", "nodes"}``. Orbit
-            door only -- exact mark geometry needs the elements, so bare
-            xyz tracks raise if marks are requested. Periapsis is a
+        marks: Optional set drawn from ``{"periapsis", "nodes"}``. Requires
+            a Kepler ellipse: a frame or legacy orbit, a single-planet
+            system, or a system with all planets massless. Bare xyz and
+            massive multi-planet systems raise if marks are requested. Periapsis is a
             diamond in the track color; the nodes are up/down triangles
             joined by a dashed line of nodes through the origin.
         depth: Forwarded to ``eyepiece.trail``: how the path shows which
@@ -448,15 +448,17 @@ def plot_orbit(
         after the per-track entries.
     """
     ep = eyepiece()
-    positions, orbit = _positions(orbit_or_xyz, time_jd, Ms_kg, trig_solver)
+    positions, orbit = _positions(
+        orbit_or_xyz, _resolve_time(time_jd, time_d), Ms_kg, trig_solver
+    )
     marks = set(marks or ())
     unknown = marks - {"periapsis", "nodes"}
     if unknown:
         raise ValueError(f"unknown marks {sorted(unknown)}; expected periapsis/nodes")
     if marks and orbit is None:
         raise ValueError(
-            "marks need the orbital elements; pass an AbstractOrbit rather "
-            "than bare xyz tracks"
+            "marks need the orbital elements of a Kepler ellipse; "
+            "pass a frame orbit, a single-planet system, or a massless system"
         )
 
     if positions.size == 0:
@@ -506,7 +508,11 @@ def plot_orbit(
     pane_color = ax.get_facecolor()
     for pane_axis in (ax.xaxis, ax.yaxis, ax.zaxis):
         pane_axis.set_pane_color(pane_color)
-    if orbit is not None:
+    if (
+        orbit is not None
+        or isinstance(orbit_or_xyz, System)
+        or hasattr(orbit_or_xyz, "propagate")
+    ):
         ax.set_xlabel("East [AU]")
         ax.set_ylabel("North [AU]")
         ax.set_zlabel("Away [AU]")

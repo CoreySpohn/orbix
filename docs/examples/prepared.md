@@ -36,21 +36,20 @@ eyepiece's
 ```{code-cell} ipython3
 import jax
 
-# Julian days near 2.46 million need double precision to resolve a fraction
-# of a day, and the clock below prints the sampled times.
+# Use double precision for propagation and the sampled-time clock.
 jax.config.update("jax_enable_x64", True)
 
 import hwostyle
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-from hwoutils.constants import Msun2kg
 from IPython.display import HTML
 
 import eyepiece.mpl as mpl
 from eyepiece.prepared import find_element
 from eyepiece.style import SourceCast, snapshot_profile
-from orbix import KeplerianOrbit
+from orbix.system import FrameOrbit, offset_arcsec
+from hwoutils.constants import G, Msun2kg
 from orbix.viz import prepare_sky_track, prepare_sky_view
 
 hwostyle.use("dark")
@@ -79,48 +78,51 @@ errors, and forty posterior draws scattered around it, each with a weight.
 
 ```{code-cell} ipython3
 DIST_PC = 10.0
+MU = G * Msun2kg
 A_AU, ECC, INC_RAD = 1.3, 0.31, 1.05
 BIG_OMEGA_RAD, SMALL_OMEGA_RAD, M0_RAD = 2.3, -0.7, 0.4
-T0_D = 2460000.0
-PERIOD_D = A_AU**1.5 * 365.25
+T0_D = 0.0
+# Float days from the chosen epoch.
+PERIOD_D = 2 * np.pi * np.sqrt(A_AU**3 / MU)
 PERIAPSIS_D = T0_D - M0_RAD * PERIOD_D / (2.0 * np.pi)
 
-orbit = KeplerianOrbit(
+orbit = FrameOrbit.from_classical(
     a_AU=A_AU, e=ECC, W_rad=BIG_OMEGA_RAD, i_rad=INC_RAD,
-    w_rad=SMALL_OMEGA_RAD, M0_rad=M0_RAD, t0_d=T0_D,
+    w_rad=SMALL_OMEGA_RAD, M0_rad=M0_RAD, mu_AU3_per_d2=MU, epoch_d=T0_D,
 )
 rng = np.random.default_rng(0)
 
 # Observed positions: the true orbit at three epochs, perturbed by the error.
 SIGMA_ARCSEC = 0.008
 t_obs = T0_D + np.array([70.0, 250.0, 430.0])
-ra, dec = orbit.position_arcsec(time_jd=t_obs, Ms_kg=Msun2kg, dist_pc=DIST_PC)
-xy_obs = np.column_stack([np.asarray(ra)[0], np.asarray(dec)[0]])
+ra, dec = offset_arcsec(orbit.at(t_obs)[0], DIST_PC)
+xy_obs = np.column_stack([np.asarray(ra), np.asarray(dec)])
 xy_obs = xy_obs + SIGMA_ARCSEC * rng.standard_normal(xy_obs.shape)
 sigma = np.full(len(t_obs), SIGMA_ARCSEC)
 observations = (xy_obs, sigma, sigma)
 
 # Forty posterior draws around the same orbit, and a weight for each.
 K = 40
-fan = KeplerianOrbit.from_period(
-    T_d=PERIOD_D * (1.0 + 0.04 * rng.standard_normal(K)),
+periods_d = PERIOD_D * (1.0 + 0.04 * rng.standard_normal(K))
+periapsis_d = PERIAPSIS_D + 12.0 * rng.standard_normal(K)
+fan = FrameOrbit.from_classical(
+    a_AU=(MU * (periods_d / (2 * np.pi))**2)**(1 / 3),
     e=np.clip(ECC + 0.04 * rng.standard_normal(K), 0.0, 0.9),
-    cos_i=np.clip(np.cos(INC_RAD) + 0.06 * rng.standard_normal(K), -1.0, 1.0),
+    i_rad=np.arccos(np.clip(np.cos(INC_RAD) + 0.06 * rng.standard_normal(K), -1, 1)),
     W_rad=BIG_OMEGA_RAD + 0.08 * rng.standard_normal(K),
-    cos_w=np.cos(SMALL_OMEGA_RAD + 0.15 * rng.standard_normal(K)),
-    sin_w=np.sin(SMALL_OMEGA_RAD + 0.15 * rng.standard_normal(K)),
-    tp_d=PERIAPSIS_D + 12.0 * rng.standard_normal(K),
-    Ms_kg=Msun2kg,
+    w_rad=SMALL_OMEGA_RAD + 0.15 * rng.standard_normal(K),
+    M0_rad=2 * np.pi * (T0_D - periapsis_d) / periods_d,
+    mu_AU3_per_d2=MU, epoch_d=T0_D,
 )
 weights = rng.dirichlet(np.full(K, 3.0))
 
 # One orbital period in 180 steps of about three days.
-time_jd = np.linspace(T0_D, T0_D + PERIOD_D, 181)
+time_d = np.linspace(T0_D, T0_D + PERIOD_D, 181)
 ```
 
 ## A still of the fan
 
-`prepare_sky_view` propagates every draw over `time_jd` and returns one
+`prepare_sky_view` propagates every draw over `time_d` and returns one
 `TrackView`. Each draw is its own `Path` (`path/0` to `path/39`), so every
 draw stays addressable, while `source_ids="planet b"` names the one planet
 they all describe, so they share one color from the cast. The weights become
@@ -132,8 +134,7 @@ part of the view, not options.
 ```{code-cell} ipython3
 view = prepare_sky_view(
     fan,
-    time_jd=time_jd,
-    Ms_kg=Msun2kg,
+    time_d=time_d,
     dist_pc=DIST_PC,
     source_ids="planet b",
     weights=weights,
@@ -161,8 +162,7 @@ keeps a sliding window of that many samples, here about ninety days.
 ```{code-cell} ipython3
 sequence = prepare_sky_track(
     fan,
-    time_jd=time_jd,
-    Ms_kg=Msun2kg,
+    time_d=time_d,
     dist_pc=DIST_PC,
     source_ids="planet b",
     weights=weights,
@@ -170,10 +170,10 @@ sequence = prepare_sky_track(
     iwa_arcsec=0.06,
     history=30,
 )
-print(f"{len(sequence.times)} samples in {sequence.time_unit!r} after JD {sequence.epoch}")
+print(f"{len(sequence.times)} samples in {sequence.time_unit!r} after day {sequence.epoch}")
 ```
 
-Times are days since the first sample, and the first sample's Julian day is
+Times are days since the first sample, and the first sample's epoch-day value is
 the sequence `epoch`. A head never moves along the chord between two
 samples. Asked for a time between samples, the sequence holds the earlier
 one, so a head is always a propagated position. On a sparsely sampled orbit
@@ -302,5 +302,5 @@ behavior.
   err)`.
 - `animate_orbit(kind="sky")` refuses `style=`, `base_ms=`, and `marks=`,
   which apply to `kind="3d"` only; sky colors come from the cast. It needs
-  `time_jd=` for bare tracks too, because the sample times drive its clock and
+  `time_d=` for bare tracks too, because the sample times drive its clock and
   its physical-time playback.

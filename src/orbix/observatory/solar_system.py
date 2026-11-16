@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 
-from orbix.kepler.core import E_solve
+from orbix.kepler import kepler
 
 # ---------------------------------------------------------------------------
 # Time helpers
@@ -280,11 +280,9 @@ def planet_position_ecliptic(body: str, mjd: float) -> jnp.ndarray:
     M = (lM - w_tilde) % (2.0 * jnp.pi)
 
     # Solve Kepler's equation using orbix solver
-    E = E_solve(jnp.atleast_1d(M), e)[0]
+    sinE, cosE = kepler(M, e, 0.0)
 
     # True anomaly from eccentric anomaly
-    sinE = jnp.sin(E)
-    cosE = jnp.cos(E)
     nu = jnp.arctan2(jnp.sqrt(1.0 - e**2) * sinE, cosE - e)
 
     # Distance

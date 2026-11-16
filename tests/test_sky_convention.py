@@ -11,7 +11,14 @@ from hypothesis import strategies as st
 from orbix.equations.orbit import AB_matrices, mean_motion, state_vector_to_keplerian
 from orbix.equations.propagation import single_r, single_r_v, system_r, system_r_v
 from orbix.kepler.markley import solve_trig
-from orbix.orbit import KeplerianOrbit
+from orbix.system import (
+    Body,
+    FrameOrbit,
+    SkyFrame,
+    System,
+    offset_arcsec,
+    position_angle_deg,
+)
 
 jax.config.update("jax_enable_x64", True)
 
@@ -64,15 +71,15 @@ def alpha_cen_orbit():
     period_d = K16_PERIOD_YR * 365.25
     mass_kg = 4.0 * np.pi**2 * a_AU**3 / (G * period_d**2)
     # A common day origin is sufficient; Julian years preserve the tabulated P.
-    orbit = KeplerianOrbit.from_period(
-        T_d=period_d,
+    orbit = FrameOrbit.from_classical(
+        a_AU=[a_AU],
         e=K16_E,
-        cos_i=np.cos(K16_I_RAD),
+        i_rad=K16_I_RAD,
         W_rad=K16_OMEGA_RAD,
-        cos_w=np.cos(K16_W_RAD),
-        sin_w=np.sin(K16_W_RAD),
-        tp_d=(K16_TP_YR - 2000.0) * 365.25,
-        Ms_kg=mass_kg,
+        w_rad=K16_W_RAD,
+        M0_rad=0.0,
+        mu_AU3_per_d2=G * mass_kg,
+        epoch_d=(K16_TP_YR - 2000.0) * 365.25,
     )
     return orbit, dict(Ms_kg=mass_kg, dist_pc=dist_pc)
 
@@ -117,22 +124,21 @@ def test_ascending_node_cardinal_directions(node_deg, expected, expected_pa):
     Omega runs north through east (Green 1985, ch. 17). Allow 1e-12
     arcsec or deg for x64 trigonometric roundoff at cardinal directions.
     """
-    orbit = KeplerianOrbit(
-        a_AU=1.0,
+    orbit = FrameOrbit.from_classical(
+        a_AU=[1.0],
         e=0.0,
         W_rad=np.deg2rad(node_deg),
         i_rad=np.pi / 3,
         w_rad=0.0,
         M0_rad=0.0,
-        t0_d=0.0,
+        mu_AU3_per_d2=G * Msun2kg,
+        epoch_d=0.0,
     )
     # For e=w=M0=0, t=t0 is the ascending node.
-    ra, dec = orbit.position_arcsec(
-        time_jd=jnp.array([0.0]), Ms_kg=Msun2kg, dist_pc=10.0
-    )
+    ra, dec = offset_arcsec(orbit.at(jnp.array([0.0]))[0], 10.0)
     assert ra.shape == dec.shape == (1, 1)
     np.testing.assert_allclose([ra[0, 0], dec[0, 0]], expected, atol=1e-12, rtol=0)
-    pa = orbit.position_angle_deg(time_jd=jnp.array([0.0]), Ms_kg=Msun2kg)
+    pa = position_angle_deg(orbit.at(jnp.array([0.0]))[0])
     assert pa.shape == (1, 1)
     assert np.all((pa >= 0) & (pa < 360))
     np.testing.assert_allclose(pa, expected_pa, atol=1e-12, rtol=0)
@@ -145,38 +151,42 @@ def test_stellar_reflex_signs(mass_ratio):
     At the descending node the planet approaches and the star recedes.
     Signs are strict; allow 2e-15 arcsec for x64 mass-scaled offsets.
     """
-    orbit = KeplerianOrbit(1.0, 0.0, 0.3, np.pi / 3, 0.0, np.pi, 0.0)
-    context = dict(Ms_kg=Msun2kg, Mp_kg=mass_ratio * Msun2kg)
-    times = jnp.array([0.0])
-    relative = np.asarray(
-        orbit.position_arcsec(solve_trig, times, dist_pc=10.0, **context)
+    system = System.from_classical(
+        Body(1.0),
+        Body([mass_ratio]),
+        SkyFrame(10.0),
+        a_AU=1.0,
+        e=0.0,
+        W_rad=0.3,
+        i_rad=np.pi / 3,
+        w_rad=0.0,
+        M0_rad=np.pi,
     )
-    reflex = np.asarray(
-        orbit.reflex_position_arcsec(solve_trig, times, dist_pc=10.0, **context)
-    )
+    eph = system.solve(jnp.array([0.0]))
+    relative = np.asarray(eph.offset_arcsec(1))
+    reflex = np.asarray(eph.offset_arcsec(0, "barycenter"))
     assert np.sum(relative * reflex) < 0
     np.testing.assert_allclose(
         reflex, -mass_ratio / (1 + mass_ratio) * relative, atol=2e-15, rtol=0
     )
-    assert orbit.velocity_AU_d(solve_trig, times, **context)[0, 2, 0] < 0
-    rv = orbit.radial_velocity_m_s(solve_trig, times, **context)
-    assert rv.shape == (1, 1)
-    assert rv[0, 0] > 0
+    assert eph.velocity_AU_per_d[1, 0, 2] < 0
+    assert eph.radial_velocity_m_per_s(0)[0] > 0
 
 
 def test_ascending_node_moves_away():
     """Ascending means positive dz/dt (away); Green (1985), ch. 17."""
-    orbit = KeplerianOrbit(
-        a_AU=1.0,
+    orbit = FrameOrbit.from_classical(
+        a_AU=[1.0],
         e=0.0,
         W_rad=0.0,
         i_rad=np.pi / 3,
         w_rad=0.0,
         M0_rad=0.0,
-        t0_d=0.0,
+        mu_AU3_per_d2=G * Msun2kg,
+        epoch_d=0.0,
     )
-    r, _, _ = orbit.propagate(solve_trig, jnp.array([-0.01, 0.0, 0.01]), Ms_kg=Msun2kg)
-    z = np.asarray(r)[0, 2]
+    r, _ = orbit.at(jnp.array([-0.01, 0.0, 0.01]))
+    z = np.asarray(r)[0, :, 2]
     assert z[0] < 0.0 < z[2]
     assert z[1] == pytest.approx(0.0, abs=1e-14)
     dz_dt = (z[2] - z[0]) / 0.02
@@ -196,8 +206,8 @@ def test_alpha_cen_published_astrometry(alpha_cen_orbit):
     """
     orbit, stellar = alpha_cen_orbit
     epoch, pa_deg, sigma_pa, rho_arcsec, sigma_rho = ALPHA_CEN_ASTROMETRY.T
-    ra, dec = orbit.position_arcsec(
-        time_jd=jnp.asarray((epoch - 2000.0) * 365.25), **stellar
+    ra, dec = offset_arcsec(
+        orbit.at(jnp.asarray((epoch - 2000.0) * 365.25))[0], stellar["dist_pc"]
     )
     delta_pa = (np.rad2deg(np.arctan2(ra[0], dec[0])) - pa_deg + 180.0) % 360.0 - 180.0
     delta_rho = np.hypot(ra[0], dec[0]) - rho_arcsec
@@ -218,29 +228,27 @@ def test_alpha_cen_independent_thiele_innes(alpha_cen_orbit):
         ]
     )
     expected_ra, expected_dec = _numpy_k16_position(epoch)
-    ra, dec = orbit.position_arcsec(
-        solve_trig, jnp.asarray((epoch - 2000.0) * 365.25), **stellar
+    ra, dec = offset_arcsec(
+        orbit.at(jnp.asarray((epoch - 2000.0) * 365.25))[0], stellar["dist_pc"]
     )
     assert ra.shape == dec.shape == (1, epoch.size)
     np.testing.assert_allclose(ra[0], expected_ra, atol=1e-9, rtol=0)
     np.testing.assert_allclose(dec[0], expected_dec, atol=1e-9, rtol=0)
-    r, _, _ = orbit.propagate(
-        solve_trig, jnp.asarray((epoch - 2000.0) * 365.25), Ms_kg=stellar["Ms_kg"]
-    )
+    r, _ = orbit.at(jnp.asarray((epoch - 2000.0) * 365.25))
     # Public raw rows now follow the right-handed east, north, away frame,
     # rather than the classical north-first Thiele-Innes letter ordering.
     np.testing.assert_allclose(
-        r[0, 0] / stellar["dist_pc"], expected_ra, atol=1e-9, rtol=0
+        r[0, :, 0] / stellar["dist_pc"], expected_ra, atol=1e-9, rtol=0
     )
     np.testing.assert_allclose(
-        r[0, 1] / stellar["dist_pc"], expected_dec, atol=1e-9, rtol=0
+        r[0, :, 1] / stellar["dist_pc"], expected_dec, atol=1e-9, rtol=0
     )
 
 
 def _propagated_state(orbit, time_d, mass_kg):
     """Differentiate the public position with respect to time in days."""
     return jax.jvp(
-        lambda t: orbit.propagate(solve_trig, t, Ms_kg=mass_kg)[0][0, :, 0],
+        lambda t: orbit.at(t)[0].reshape(-1, 3)[0],
         (jnp.asarray(time_d),),
         (jnp.asarray(1.0),),
     )
@@ -248,18 +256,17 @@ def _propagated_state(orbit, time_d, mass_kg):
 
 def test_increasing_pa_has_angular_momentum_toward_observer():
     """Perryman (2018), Fig. 2.2: east, north, away is right-handed."""
-    orbit = KeplerianOrbit(
-        a_AU=1.0,
+    orbit = FrameOrbit.from_classical(
+        a_AU=[1.0],
         e=0.2,
         i_rad=1e-3,
         W_rad=0.4,
         w_rad=0.3,
         M0_rad=0.2,
-        t0_d=0.0,
+        mu_AU3_per_d2=G * Msun2kg,
+        epoch_d=0.0,
     )
-    dra, ddec = orbit.position_arcsec(
-        solve_trig, jnp.array([0.0, 1.0]), Ms_kg=Msun2kg, dist_pc=10.0
-    )
+    dra, ddec = offset_arcsec(orbit.at(jnp.array([0.0, 1.0]))[0], 10.0)
     pa = np.unwrap(np.arctan2(dra[0], ddec[0]))
     assert pa[1] > pa[0]
     r, v = _propagated_state(orbit, 0.0, Msun2kg)
@@ -280,15 +287,20 @@ def _angles_away_from_axes(margin):
 @jax.jit
 def _round_trip_state(elements, mass):
     a, e, inc, node, peri, mean = elements
-    orbit = KeplerianOrbit(
-        a_AU=a, e=e, i_rad=inc, W_rad=node, w_rad=peri, M0_rad=mean, t0_d=0.0
+    orbit = FrameOrbit.from_classical(
+        a_AU=a,
+        e=e,
+        i_rad=inc,
+        W_rad=node,
+        w_rad=peri,
+        M0_rad=mean,
+        mu_AU3_per_d2=G * mass,
+        epoch_d=0.0,
     )
     r, v = _propagated_state(orbit, 0.0, mass)
     actual = jnp.array(state_vector_to_keplerian(r, v, G * mass))
     jac = jax.jacfwd(state_vector_to_keplerian, argnums=(0, 1))(r, v, G * mass)
-    dra, ddec = orbit.position_arcsec(
-        solve_trig, jnp.array([0.0]), Ms_kg=mass, dist_pc=1.0
-    )
+    dra, ddec = offset_arcsec(orbit.at(jnp.array([0.0]))[0], 1.0)
     sine, cosine = solve_trig(jnp.atleast_1d(mean), e)
     A, B = AB_matrices(a, e, inc, node, peri)
     n = mean_motion(a, G * mass)
@@ -306,7 +318,7 @@ def _round_trip_state(elements, mass):
         jac,
         r,
         v,
-        jnp.array([dra[0, 0], ddec[0, 0]]),
+        jnp.array([dra[0], ddec[0]]),
         sr[:, 0],
         sv[:, 0],
         br[:, 0, 0],
@@ -438,7 +450,11 @@ def test_state_round_trip_on_anomaly_axes(peri, mean, index):
     """Fails if arccos safety clipping biases valid periapsis or mean anomaly."""
     expected = jnp.array([2.3, 0.31, 0.7, 0.4, peri, mean])
     actual = _round_trip_state(expected, jnp.asarray(Msun2kg))[0]
-    np.testing.assert_allclose(actual[index], expected[index], atol=1e-11, rtol=0)
+    # Quaternion roundoff may approach zero from either side of the wrap.
+    delta = actual[index] - expected[index]
+    np.testing.assert_allclose(
+        jnp.arctan2(jnp.sin(delta), jnp.cos(delta)), 0.0, atol=1e-11, rtol=0
+    )
 
 
 @pytest.mark.parametrize(

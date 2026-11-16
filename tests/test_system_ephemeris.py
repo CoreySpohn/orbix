@@ -9,8 +9,6 @@ from hwoutils.constants import AU2m, G, Msun2kg, d2s
 from hwoutils.epoch import Epoch
 
 from orbix.kepler import Markley
-from orbix.kepler.markley import solve_trig
-from orbix.orbit import KeplerianOrbit
 from orbix.system import Body, FrameOrbit, SkyFrame, System, enclosed_mu, observables
 
 ELEMENTS = dict(
@@ -26,54 +24,6 @@ ELEMENTS = dict(
 def _system(second_mass=0.005):
     return System.from_classical(
         Body(1.0), Body([0.001, second_mass]), SkyFrame(10.0), **ELEMENTS
-    )
-
-
-@pytest.mark.parametrize("e,inc", [(1e-6, 0.7), (0.6, 1.1), (0.2, 2.6)])
-def test_existing_orbit_agreement(e, inc):
-    """Fails if sky convention, epoch, mass, reflex or velocity units change.
-
-    Truth: the existing KeplerianOrbit with explicit Markley (not its grid
-    default), equal star/planet masses and a shared day origin. Its t0_d
-    and new epoch_d both equal 23 days, with M0=.2 at that instant.
-    Allow 3e-13 arcsec, 3e-14 AU/day and 3e-10 m/s: several hundred x64
-    ULPs for independently arranged phase, basis and mass arithmetic.
-    """
-    elements = dict(a_AU=1.7, e=e, i_rad=inc, W_rad=0.4, w_rad=0.7, M0_rad=0.2)
-    sys = System.from_classical(
-        Body(1.2), Body([0.01]), SkyFrame(12.0), **elements, epoch_d=23.0
-    )
-    old = KeplerianOrbit(**elements, t0_d=23.0)
-    times = jnp.array([-100.0, 23.0, 200.0, 700.0])
-    context = dict(Ms_kg=1.2 * Msun2kg, Mp_kg=0.01 * Msun2kg)
-    eph = sys.solve(times)
-    offsets = np.asarray(eph.offset_arcsec(1))
-    old_offsets = np.asarray(
-        old.position_arcsec(solve_trig, times, **context, dist_pc=12.0)
-    )[:, 0]
-    reflex = np.asarray(eph.offset_arcsec(0, "barycenter"))
-    old_reflex = np.asarray(
-        old.reflex_position_arcsec(solve_trig, times, **context, dist_pc=12.0)
-    )[:, 0]
-    rv = eph.radial_velocity_m_per_s(0)
-    old_rv = old.radial_velocity_m_s(solve_trig, times, **context)[0]
-    velocity = eph.velocity_AU_per_d[1] - eph.velocity_AU_per_d[0]
-    old_velocity = old.velocity_AU_d(solve_trig, times, **context)[0].T
-    np.testing.assert_allclose(offsets, old_offsets, atol=3e-13, rtol=0)
-    np.testing.assert_allclose(reflex, old_reflex, atol=3e-13, rtol=0)
-    np.testing.assert_allclose(rv, old_rv, atol=3e-10, rtol=0)
-    np.testing.assert_allclose(velocity, old_velocity, atol=3e-14, rtol=0)
-    print(
-        "parity max (offset, reflex, RV, velocity):",
-        *(
-            float(np.max(np.abs(a - b)))
-            for a, b in [
-                (offsets, old_offsets),
-                (reflex, old_reflex),
-                (rv, old_rv),
-                (velocity, old_velocity),
-            ]
-        ),
     )
 
 

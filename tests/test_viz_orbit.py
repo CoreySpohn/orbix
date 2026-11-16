@@ -9,7 +9,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
-from hwoutils.constants import Msun2kg
+from hwoutils.constants import G, Msun2kg
 
 matplotlib.use("Agg")
 
@@ -25,17 +25,18 @@ def _close_figures():
 
 def _orbit(K=1):
     """An eccentric, inclined, rotated orbit; K > 1 spreads the elements."""
-    from orbix.orbit import KeplerianOrbit
+    from orbix.system import FrameOrbit
 
     spread = jnp.linspace(0.0, 0.2, K)
-    return KeplerianOrbit(
+    return FrameOrbit.from_classical(
         a_AU=1.3 + spread,
         e=0.31 + 0.1 * spread,
         W_rad=2.3 + spread,
         i_rad=1.05 + 0.3 * spread,
         w_rad=-0.7 + spread,
         M0_rad=0.4 + spread,
-        t0_d=jnp.full((K,), 2460000.0),
+        mu_AU3_per_d2=G * Msun2kg,
+        epoch_d=jnp.full((K,), 2460000.0),
     )
 
 
@@ -49,7 +50,7 @@ def test_plot_sky_track_single_orbit_contract():
 
     from orbix.viz import plot_sky_track
 
-    result = plot_sky_track(_orbit(), T_JD, **STELLAR)
+    result = plot_sky_track(_orbit(), time_d=T_JD, **STELLAR)
     assert isinstance(result, MplResult)
     assert "path/0" in result.parts and "star" in result.parts
     assert "path/1" not in result.parts
@@ -116,17 +117,17 @@ def test_plot_sky_track_legacy_data_iwa_style_and_fan_kw():
 
 def test_plot_sky_track_propagates_once(monkeypatch):
     """The static plot prepares the tracks with one propagation."""
-    from orbix.orbit import KeplerianOrbit
+    from orbix.system import FrameOrbit
     from orbix.viz import plot_sky_track
 
     calls = []
-    original = KeplerianOrbit.propagate
+    original = FrameOrbit.at
 
     def counting(self, *args, **kwargs):
         calls.append(1)
         return original(self, *args, **kwargs)
 
-    monkeypatch.setattr(KeplerianOrbit, "propagate", counting)
+    monkeypatch.setattr(FrameOrbit, "at", counting)
     plot_sky_track(_orbit(3), T_JD, **STELLAR)
     assert len(calls) == 1
 
@@ -165,7 +166,7 @@ def test_plot_sky_track_missing_propagation_args_named():
     """Omitting the stellar context names exactly what is missing."""
     from orbix.viz import plot_sky_track
 
-    with pytest.raises(TypeError, match="Ms_kg, dist_pc"):
+    with pytest.raises(TypeError, match="dist_pc"):
         plot_sky_track(_orbit(), T_JD)
 
 
@@ -243,10 +244,11 @@ def test_plot_orbit_bare_arrays_door():
 
 def test_plot_orbit_mark_geometry_is_exact():
     """Periapsis sits at a(1-e) and both nodes sit in the sky plane."""
+    from orbix.viz._prepare import _frame_geometry
     from orbix.viz.orbit import _mark_geometry
 
     orbit = _orbit(3)
-    periapsis, ascending, descending = _mark_geometry(orbit)
+    periapsis, ascending, descending = _mark_geometry(_frame_geometry(orbit))
     np.testing.assert_allclose(
         np.linalg.norm(periapsis, axis=-1),
         np.asarray(orbit.a_AU) * (1.0 - np.asarray(orbit.e)),
@@ -259,7 +261,13 @@ def test_plot_orbit_mark_geometry_is_exact():
     direction = ascending[:, :2] / np.linalg.norm(ascending[:, :2], axis=1)[:, None]
     np.testing.assert_allclose(
         direction,
-        np.stack([np.sin(orbit.W_rad), np.cos(orbit.W_rad)], axis=1),
+        np.stack(
+            [
+                np.sin(orbit.to_classical()["W_rad"]),
+                np.cos(orbit.to_classical()["W_rad"]),
+            ],
+            axis=1,
+        ),
         atol=1e-12,
         rtol=0,
     )
@@ -299,14 +307,15 @@ def test_observer_3d_view_matches_sky_panel():
 
 def test_plot_orbit_ascending_node_rises():
     """Z increases through the ascending node along the propagated track."""
+    from orbix.viz._prepare import _frame_geometry
     from orbix.viz.orbit import _mark_geometry
 
     orbit = _orbit()
-    _, ascending, _ = _mark_geometry(orbit)
+    _, ascending, _ = _mark_geometry(_frame_geometry(orbit))
 
     t_dense = jnp.linspace(2460000.0, 2460900.0, 4000)
-    r_AU, _, _ = orbit.propagate(time_jd=t_dense, Ms_kg=STELLAR["Ms_kg"])
-    xyz = np.moveaxis(np.asarray(r_AU), 1, 2)[0]
+    r_AU, _ = orbit.at(t_dense)
+    xyz = np.asarray(r_AU)[0]
     nearest = np.argmin(np.linalg.norm(xyz - ascending[0], axis=-1))
     assert 0 < nearest < len(xyz) - 1
     assert xyz[nearest + 1, 2] > xyz[nearest - 1, 2]

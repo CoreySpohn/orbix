@@ -29,7 +29,8 @@ import numpy as np
 import eyepiece as ep
 from eyepiece.style import SourceCast
 
-from orbix import KeplerianOrbit
+from orbix.system import Body, FrameOrbit, SkyFrame, System, offset_arcsec
+from hwoutils.constants import G, Msun2kg
 from orbix import viz
 
 hwostyle.use("dark")
@@ -44,25 +45,26 @@ matplotlib.rcParams["font.sans-serif"] = list(
 ) + ["DejaVu Sans"]
 matplotlib.rcParams["figure.dpi"] = 160
 
-MSUN_KG = 1.988409870698051e30
+MU = G * Msun2kg
 styles = ep.SourceStyles(["planet b", "planet c", "planet d"])
 
 # One eccentric, inclined orbit carries most of this page. Its elements are
 # named here because the posterior fan further down is built around them.
 A_AU, ECC, INC_RAD = 1.3, 0.31, 1.05
 BIG_OMEGA_RAD, SMALL_OMEGA_RAD, M0_RAD = 2.3, -0.7, 0.4
-T0_D = 2460000.0
+T0_D = 0.0
+# Float days from the chosen epoch.
 
 # Kepler's third law for a solar-mass star, so the track below can span
 # exactly one period and close on itself.
-PERIOD_D = A_AU**1.5 * 365.25
+PERIOD_D = 2 * np.pi * np.sqrt(A_AU**3 / MU)
 PERIAPSIS_D = T0_D - M0_RAD * PERIOD_D / (2.0 * np.pi)
 
-orbit = KeplerianOrbit(
+orbit = FrameOrbit.from_classical(
     a_AU=A_AU, e=ECC, W_rad=BIG_OMEGA_RAD, i_rad=INC_RAD,
-    w_rad=SMALL_OMEGA_RAD, M0_rad=M0_RAD, t0_d=T0_D,
+    w_rad=SMALL_OMEGA_RAD, M0_rad=M0_RAD, mu_AU3_per_d2=MU, epoch_d=T0_D,
 )
-time_jd = jnp.linspace(T0_D, T0_D + PERIOD_D, 240)
+time_d = jnp.linspace(T0_D, T0_D + PERIOD_D, 240)
 
 # A second cast for the 3D views: three near-coplanar planets, the way a
 # planetary system actually sits. Keeping the mutual inclinations small (7 to
@@ -77,25 +79,26 @@ SYS_INC = np.array([0.12, 0.20, 0.28])
 SYS_SMALL_OMEGA = np.array([-0.40, -0.70, 0.90])
 SYS_M0 = np.array([0.00, 2.10, 4.30])
 
-system = KeplerianOrbit(
+system = System.from_classical(
+    Body(1.0), Body(np.zeros(3)), SkyFrame(10.0),
     a_AU=SYS_A_AU, e=SYS_ECC, W_rad=SYS_BIG_OMEGA, i_rad=SYS_INC,
-    w_rad=SYS_SMALL_OMEGA, M0_rad=SYS_M0, t0_d=np.full(3, T0_D),
+    w_rad=SYS_SMALL_OMEGA, M0_rad=SYS_M0, epoch_d=T0_D,
 )
 
 # The same three planets one at a time. plot_orbit applies a single style to
 # every track it is handed -- a fan of draws for one planet is one source -- so
 # giving each planet its own colour means one call per planet.
 one_planet = [
-    KeplerianOrbit(
+    FrameOrbit.from_classical(
         a_AU=SYS_A_AU[k:k + 1], e=SYS_ECC[k:k + 1],
         W_rad=SYS_BIG_OMEGA[k:k + 1], i_rad=SYS_INC[k:k + 1],
         w_rad=SYS_SMALL_OMEGA[k:k + 1], M0_rad=SYS_M0[k:k + 1],
-        t0_d=np.array([T0_D]),
+        mu_AU3_per_d2=MU, epoch_d=T0_D,
     )
     for k in range(3)
 ]
 
-OUTER_PERIOD_D = 2.35**1.5 * 365.25
+OUTER_PERIOD_D = 2 * np.pi * np.sqrt(SYS_A_AU[-1]**3 / MU)
 t_system = jnp.linspace(T0_D, T0_D + OUTER_PERIOD_D, 240)
 ```
 
@@ -109,7 +112,7 @@ cannot see into.
 
 ```{code-cell} ipython3
 result = viz.plot_sky_track(
-    orbit, time_jd, Ms_kg=MSUN_KG, dist_pc=10.0,
+    orbit, time_d=time_d, dist_pc=10.0,
     style=styles["planet b"], iwa_arcsec=0.06,
 )
 ```
@@ -126,13 +129,11 @@ rng = np.random.default_rng(11)
 # with, which is exactly the thing a fan is supposed to rule out.
 SIGMA_ARCSEC = 0.008
 t_obs = T0_D + np.array([70.0, 250.0, 430.0])
-ra_true, dec_true = orbit.position_arcsec(
-    time_jd=jnp.asarray(t_obs), Ms_kg=MSUN_KG, dist_pc=10.0
-)
+ra_true, dec_true = offset_arcsec(orbit.at(t_obs)[0], 10.0)
 epochs = (
     np.column_stack([
-        np.asarray(ra_true)[0] + SIGMA_ARCSEC * rng.standard_normal(3),
-        np.asarray(dec_true)[0] + SIGMA_ARCSEC * rng.standard_normal(3),
+        np.asarray(ra_true) + SIGMA_ARCSEC * rng.standard_normal(3),
+        np.asarray(dec_true) + SIGMA_ARCSEC * rng.standard_normal(3),
     ]),
     np.full(3, SIGMA_ARCSEC),
     np.full(3, SIGMA_ARCSEC),
@@ -140,19 +141,20 @@ epochs = (
 
 # ... and the fan is a posterior scattered around that same orbit.
 K = 60
-fan = KeplerianOrbit.from_period(
-    T_d=PERIOD_D * (1.0 + 0.04 * rng.standard_normal(K)),
+periods_d = PERIOD_D * (1.0 + 0.04 * rng.standard_normal(K))
+periapsis_d = PERIAPSIS_D + 12.0 * rng.standard_normal(K)
+fan = FrameOrbit.from_classical(
+    a_AU=(MU * (periods_d / (2 * np.pi))**2)**(1 / 3),
     e=np.clip(ECC + 0.04 * rng.standard_normal(K), 0.0, 0.9),
-    cos_i=np.clip(np.cos(INC_RAD) + 0.06 * rng.standard_normal(K), -1.0, 1.0),
+    i_rad=np.arccos(np.clip(np.cos(INC_RAD) + 0.06 * rng.standard_normal(K), -1, 1)),
     W_rad=BIG_OMEGA_RAD + 0.08 * rng.standard_normal(K),
-    cos_w=np.cos(SMALL_OMEGA_RAD + 0.15 * rng.standard_normal(K)),
-    sin_w=np.sin(SMALL_OMEGA_RAD + 0.15 * rng.standard_normal(K)),
-    tp_d=PERIAPSIS_D + 12.0 * rng.standard_normal(K),
-    Ms_kg=MSUN_KG,
+    w_rad=SMALL_OMEGA_RAD + 0.15 * rng.standard_normal(K),
+    M0_rad=2 * np.pi * (T0_D - periapsis_d) / periods_d,
+    mu_AU3_per_d2=MU, epoch_d=T0_D,
 )
 weights = rng.dirichlet(np.full(K, 3.0))
 result = viz.plot_sky_track(
-    fan, time_jd, Ms_kg=MSUN_KG, dist_pc=10.0,
+    fan, time_d=time_d, dist_pc=10.0,
     style=styles["planet b"], weights=weights, iwa_arcsec=0.06,
     observations=epochs,
 )
@@ -208,7 +210,7 @@ axsky = fig.add_subplot(gs[1])
 
 for name, planet in zip(PLANETS, one_planet):
     viz.plot_orbit(
-        planet, t_system, Ms_kg=MSUN_KG, ax=ax3d,
+        planet, time_d=t_system, ax=ax3d,
         style=styles[name], marks={"periapsis"},
     )
 
@@ -218,7 +220,7 @@ for name, planet in zip(PLANETS, one_planet):
 # and keeps the scale equal on all three axes; the tick locator keeps the
 # shorter axis from crowding its labels together.
 z_half = 1.15 * float(np.max(np.abs(
-    np.asarray(system.propagate(time_jd=t_system, Ms_kg=MSUN_KG)[0])[:, 2]
+    np.asarray(system.solve(t_system).position_AU)[1:, :, 2]
 )))
 xy_half = ax3d.get_xlim()[1]
 ax3d.set_zlim(-z_half, z_half)
@@ -227,7 +229,7 @@ ax3d.zaxis.set_major_locator(MaxNLocator(3))
 ax3d.set_title("plot_orbit -- star-centric, AU")
 
 viz.plot_sky_track(
-    system, t_system, Ms_kg=MSUN_KG, dist_pc=10.0, ax=axsky,
+    system, time_d=t_system, dist_pc=10.0, ax=axsky,
     colors=[styles[name]["color"] for name in PLANETS], iwa_arcsec=0.06,
     fan_kw={"lw": 1.8},
 )
@@ -273,7 +275,7 @@ from IPython.display import HTML
 t_anim = jnp.linspace(T0_D, T0_D + OUTER_PERIOD_D, 72)
 
 anim = viz.animate_orbit(
-    system, t_anim, Ms_kg=MSUN_KG, kind="3d", history="none",
+    system, time_d=t_anim, kind="3d", history="none",
     base_ms=viz.size_by_radius([1.0, 3.9, 11.2]), fps=15,
     rotate={"azim": (-150.0, -110.0), "elev": (46.0, 46.0)},
 )
@@ -299,11 +301,11 @@ from eyepiece.style import snapshot_profile
 from matplotlib.font_manager import FontProperties
 
 view = viz.prepare_sky_view(
-    fan, time_jd=time_jd, Ms_kg=MSUN_KG, dist_pc=10.0, source_ids="planet b",
+    fan, time_d=time_d, dist_pc=10.0, source_ids="planet b",
     weights=weights, observations=epochs, iwa_arcsec=0.06,
 )
 sequence = viz.prepare_sky_track(
-    orbit, time_jd=time_jd, Ms_kg=MSUN_KG, dist_pc=10.0, source_ids="planet b",
+    orbit, time_d=time_d, dist_pc=10.0, source_ids="planet b",
     observations=epochs, iwa_arcsec=0.06, history=60,
 )
 cast = SourceCast(["planet b"])
@@ -354,7 +356,7 @@ variants = [
 fig, axes = plt.subplots(2, 3, figsize=(12.0, 7.4), layout="constrained")
 for ax, (label, kw) in zip(axes.ravel(), variants):
     viz.plot_sky_track(
-        fan, time_jd, Ms_kg=MSUN_KG, dist_pc=10.0, ax=ax,
+        fan, time_d=time_d, dist_pc=10.0, ax=ax,
         **{"style": styles["planet b"], **kw},
     )
     ax.set_title(label, fontsize=10.5)
@@ -384,7 +386,7 @@ orbit_variants = [
 ]
 for ax, (label, kw) in zip(axes, orbit_variants):
     ax.view_init(elev=42.0, azim=-130.0)
-    viz.plot_orbit(system, t_system, Ms_kg=MSUN_KG, ax=ax, **kw)
+    viz.plot_orbit(system, time_d=t_system, ax=ax, **kw)
     ax.set_title(label, fontsize=10.5)
 ```
 
@@ -403,7 +405,7 @@ import io
 frames = []
 for history in ["all", 15, "none"]:
     anim = viz.animate_orbit(
-        system, t_system[::4], Ms_kg=MSUN_KG, kind="3d", history=history,
+        system, time_d=t_system[::4], kind="3d", history=history,
         rotate=None, style=styles["planet b"],
         base_ms=viz.size_by_radius([1.0, 3.9, 11.2]),
     )
@@ -453,11 +455,11 @@ their own artist. `depth_scale` turns positions and a camera into a factor
 in `[0, 1]` -- 0 at the far side of the orbit, 1 at the near side.
 `depth_size` maps that factor onto a marker-diameter multiplier.
 
-Positions are `(N, 3)`, one row per point, while `propagate` returns
-`(K, 3, N)`; transpose one orbit out of the batch to feed it.
+Positions are `(N, 3)`, one row per point, exactly as returned by an
+unbatched `FrameOrbit.at`.
 
 ```{code-cell} ipython3
-xyz = np.asarray(orbit.propagate(time_jd=time_jd, Ms_kg=MSUN_KG)[0][0]).T
+xyz = np.asarray(orbit.at(time_d)[0])
 depth = viz.depth_scale(xyz, azim_deg=-50.0, elev_deg=25.0)
 mult = viz.depth_size(depth)
 

@@ -1,5 +1,6 @@
 """Non-singular orbit frames, Jacobi systems, and solve-once ephemerides."""
 
+from orbix.kepler import AbstractKeplerSolver, Grid, Halley, Markley, kepler
 from orbix.system.charts import (
     AbstractChart,
     CartesianChart,
@@ -22,6 +23,7 @@ from orbix.system.observables import (
 
 __all__ = [
     "AbstractChart",
+    "AbstractKeplerSolver",
     "Body",
     "CartesianChart",
     "ClassicalChart",
@@ -29,6 +31,9 @@ __all__ = [
     "Ephemeris",
     "FrameChart",
     "FrameOrbit",
+    "Grid",
+    "Halley",
+    "Markley",
     "SkyFrame",
     "System",
     "ThieleInnesChart",
@@ -36,6 +41,7 @@ __all__ = [
     "enclosed_mu",
     "fit_linear_map",
     "frame_to_sky_block",
+    "kepler",
     "offset_arcsec",
     "phase_angle_rad",
     "position_angle_deg",

@@ -8,7 +8,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
-from hwoutils.constants import Msun2kg
+from hwoutils.constants import G, Msun2kg
 
 matplotlib.use("Agg")
 
@@ -24,17 +24,18 @@ def _close_figures():
 
 def _orbit(K=1):
     """An eccentric, inclined, rotated orbit; K > 1 spreads the elements."""
-    from orbix.orbit import KeplerianOrbit
+    from orbix.system import FrameOrbit
 
     spread = jnp.linspace(0.0, 0.2, K)
-    return KeplerianOrbit(
+    return FrameOrbit.from_classical(
         a_AU=1.3 + spread,
         e=0.31 + 0.1 * spread,
         W_rad=2.3 + spread,
         i_rad=1.05 + 0.3 * spread,
         w_rad=-0.7 + spread,
         M0_rad=0.4 + spread,
-        t0_d=jnp.full((K,), 2460000.0),
+        mu_AU3_per_d2=G * Msun2kg,
+        epoch_d=jnp.full((K,), 2460000.0),
     )
 
 
@@ -47,7 +48,7 @@ def test_animate_orbit_returns_lazy_animation_with_frame_count():
 
     from orbix.viz import animate_orbit
 
-    anim = animate_orbit(_orbit(), T_JD, Ms_kg=MSUN_KG, dist_pc=10.0)
+    anim = animate_orbit(_orbit(), time_d=T_JD, Ms_kg=MSUN_KG, dist_pc=10.0)
     assert isinstance(anim, ep.Animation)
     assert anim.n_frames == len(T_JD)
     assert anim.fps == 10
@@ -111,10 +112,12 @@ def test_animate_orbit_3d_with_marks_and_batch():
 
 @pytest.mark.parametrize("kind", ["sky", "3d"])
 def test_animate_orbit_time_label_advances(kind):
-    """The elapsed-time label tracks the epoch being drawn."""
+    """Fails if a system animation loses its clock or star-relative unit labels."""
+    from orbix.system import Body, SkyFrame, System
     from orbix.viz import animate_orbit
 
-    anim = animate_orbit(_orbit(), T_JD, Ms_kg=MSUN_KG, dist_pc=10.0, kind=kind)
+    system = System(Body(1.0), Body([0.01]), _orbit(), SkyFrame(10.0))
+    anim = animate_orbit(system, time_d=T_JD, kind=kind)
     ax = anim.fig.axes[0]
     anim.draw(anim.fig, 0)
     # Preserve the full artist scan and IndexError if the time label is absent.
@@ -122,6 +125,8 @@ def test_animate_orbit_time_label_advances(kind):
     assert label.get_text() == "t = +0 d"
     anim.draw(anim.fig, len(T_JD) - 1)
     assert label.get_text() == "t = +400 d"
+    if kind == "3d":
+        assert ax.get_xlabel() == "East [AU]"
 
 
 def test_animate_orbit_bare_tracks_door():
@@ -136,6 +141,9 @@ def test_animate_orbit_bare_tracks_door():
     anim.draw(anim.fig, 1)
 
     xyz = np.column_stack([ra, dec, np.zeros_like(ra)])
+    labeled = animate_orbit(jnp.asarray(xyz), time_d=np.arange(15.0), kind="3d")
+    labeled.draw(labeled.fig, 1)
+    assert any(t.get_text() == "t = +1 d" for t in labeled.fig.axes[0].texts)
     unlabeled = animate_orbit(xyz, kind="3d")
     unlabeled.draw(unlabeled.fig, 1)
     assert not any(
@@ -150,17 +158,17 @@ def test_animate_orbit_bare_tracks_door():
 
 def test_animate_orbit_sky_propagates_once(monkeypatch):
     """The sky animation prepares its tracks once and never propagates in draw."""
-    from orbix.orbit import KeplerianOrbit
+    from orbix.system import FrameOrbit
     from orbix.viz import animate_orbit
 
     calls = []
-    original = KeplerianOrbit.propagate
+    original = FrameOrbit.at
 
     def counting(self, *args, **kwargs):
         calls.append(1)
         return original(self, *args, **kwargs)
 
-    monkeypatch.setattr(KeplerianOrbit, "propagate", counting)
+    monkeypatch.setattr(FrameOrbit, "at", counting)
     anim = animate_orbit(_orbit(3), T_JD, Ms_kg=MSUN_KG, dist_pc=10.0)
     for i in range(anim.n_frames):
         anim.draw(anim.fig, i)
@@ -372,15 +380,22 @@ def test_auto_sweep_keeps_the_drawn_size_fixed():
     orbit's drawn area by a factor of about six, which reads as a change
     in the orbit. A cone about the orbit normal holds it constant.
     """
-    from orbix import KeplerianOrbit
+    from orbix.system import FrameOrbit
     from orbix.viz.anim import _auto_camera
 
-    orbit = KeplerianOrbit(
-        a_AU=1.3, e=0.31, W_rad=2.3, i_rad=1.05, w_rad=-0.7, M0_rad=0.4, t0_d=0.0
+    orbit = FrameOrbit.from_classical(
+        a_AU=1.3,
+        e=0.31,
+        W_rad=2.3,
+        i_rad=1.05,
+        w_rad=-0.7,
+        M0_rad=0.4,
+        mu_AU3_per_d2=G * Msun2kg,
+        epoch_d=0.0,
     )
     t = np.linspace(0.0, 541.4, 400)
-    xyz, _, _ = orbit.propagate(time_jd=t, Ms_kg=np.atleast_1d(MSUN_KG))
-    track = np.moveaxis(np.asarray(xyz), 1, 2)[0]
+    xyz, _ = orbit.at(t)
+    track = np.asarray(xyz)
 
     camera = _auto_camera(track[None, ...], 60, roll_deg=0.0)
     areas = np.array(
@@ -399,15 +414,22 @@ def test_auto_sweep_keeps_the_drawn_size_fixed():
 
 def test_auto_sweep_avoids_edge_on_and_face_on():
     """The tilt is held off both degenerate views for the whole sweep."""
-    from orbix import KeplerianOrbit
+    from orbix.system import FrameOrbit
     from orbix.viz.anim import _auto_camera
 
-    orbit = KeplerianOrbit(
-        a_AU=1.3, e=0.31, W_rad=2.3, i_rad=1.05, w_rad=-0.7, M0_rad=0.4, t0_d=0.0
+    orbit = FrameOrbit.from_classical(
+        a_AU=1.3,
+        e=0.31,
+        W_rad=2.3,
+        i_rad=1.05,
+        w_rad=-0.7,
+        M0_rad=0.4,
+        mu_AU3_per_d2=G * Msun2kg,
+        epoch_d=0.0,
     )
     t = np.linspace(0.0, 541.4, 400)
-    xyz, _, _ = orbit.propagate(time_jd=t, Ms_kg=np.atleast_1d(MSUN_KG))
-    track = np.moveaxis(np.asarray(xyz), 1, 2)[0]
+    xyz, _ = orbit.at(t)
+    track = np.asarray(xyz)
 
     camera = _auto_camera(track[None, ...], 40, roll_deg=0.0)
     centered = track - track.mean(axis=0)

@@ -21,8 +21,8 @@ first epoch, an int keeps a trailing window of that many frames, and
 
 import numpy as np
 
-from orbix.orbit import AbstractOrbit
-from orbix.viz._prepare import prepare_sky_track
+from orbix.system import FrameOrbit, System
+from orbix.viz._prepare import _resolve_time, prepare_sky_track
 from orbix.viz._require import eyepiece
 from orbix.viz.orbit import (
     _orbit_look,
@@ -151,6 +151,7 @@ def animate_orbit(
     orbit_or_tracks,
     time_jd=None,
     *,
+    time_d=None,
     Ms_kg=None,
     dist_pc=None,
     trig_solver=None,
@@ -176,18 +177,21 @@ def animate_orbit(
     and the test path never needs ffmpeg.
 
     Args:
-        orbit_or_tracks: An ``AbstractOrbit``, or bare tracks: for
+        orbit_or_tracks: A ``FrameOrbit`` or ``System``, or bare tracks: for
             ``kind="sky"`` the arcsec forms ``prepare_sky_track`` accepts
             (``(K, T, 2)`` or an ``(ra, dec)`` pair); for ``kind="3d"``
             ``(T, 3)`` / ``(K, T, 3)`` positions.
+        time_d: Float days from the engine object's epoch, shape ``(T,)``.
         time_jd: Times in Julian Days, shape ``(T,)``. Required for
             ``kind="sky"``, where the samples' physical times drive the
             playback clock, and on the 3D orbit door; on the 3D bare-track
             door it is optional and used only for the elapsed-time label
             (length must match the track).
-        Ms_kg: Stellar mass in kg. Orbit door only.
-        dist_pc: Distance in parsecs. Orbit door with ``kind="sky"`` only.
-        trig_solver: Optional Kepler solver; None uses orbix's default.
+        Ms_kg: Stellar mass in kg, for legacy orbits only.
+        dist_pc: Distance in parsecs for frame or legacy sky orbits.
+            A system uses its stored distance.
+        trig_solver: Engine solver strategy, or the legacy solver callable.
+            None uses the input object's default.
         kind: ``"sky"`` (sky-plane arcsec: ``prepare_sky_track`` played by
             ``eyepiece.mpl.animate``) or ``"3d"`` (star-centric AU, via
             ``plot_orbit``).
@@ -245,6 +249,7 @@ def animate_orbit(
             documented values, an argument belongs to the other kind, or
             a labeled ``time_jd`` does not match the track length.
     """
+    time_jd = _resolve_time(time_jd, time_d)
     ep = eyepiece()
     if kind not in ("sky", "3d"):
         raise ValueError(f'kind must be "sky" or "3d", got {kind!r}')
@@ -313,8 +318,13 @@ def animate_orbit(
     if base_ms is None:
         base_ms = _DEFAULT_BASE_MS
 
-    from_orbit = isinstance(orbit_or_tracks, AbstractOrbit)
-    base_t = time_jd if from_orbit else None
+    # Bare 3D arrays may carry timestamps for the animation clock only.
+    base_t = (
+        time_jd
+        if isinstance(orbit_or_tracks, (FrameOrbit, System))
+        or hasattr(orbit_or_tracks, "propagate")
+        else None
+    )
 
     # marker_scale=0 keeps the ghost a bare line: the moving head carries
     # the depth cue in an animation, so per-point beads along the whole
