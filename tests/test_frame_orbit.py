@@ -374,3 +374,29 @@ def test_classical_trig_gradients(parameter):
     difference = (evaluate(value + step) - evaluate(value - step)) / (2 * step)
     assert np.isfinite(derivative)
     np.testing.assert_allclose(derivative, difference, rtol=1e-6, atol=1e-11)
+
+
+def test_size_and_period_accessors():
+    """Fails if stored AU/day scales or batch axes are lost through transforms.
+
+    Truth: input semi-major axes and Kepler's third law at different masses.
+    Size is copied exactly; period allows 4*eps relative (8.9e-16 in x64)
+    for the power, square root, and reciprocal rounding, including JIT fusion.
+    """
+    a = jnp.array([[0.3, 1.0, 2.7], [0.7, 1.8, 5.0]])
+    mu = (G * Msun2kg) * jnp.array([[0.5], [1.5]])
+    orbit = FrameOrbit.from_classical(a, 0.2, 0.7, 0.4, 0.3, 0.2, mu_AU3_per_d2=mu)
+
+    def access(o):
+        return o.a_AU, o.period_d
+
+    expected_period = 2 * np.pi * np.sqrt(np.asarray(a) ** 3 / np.asarray(mu))
+    for size, period in (
+        access(orbit),
+        jax.jit(access)(orbit),
+        jax.vmap(access)(orbit),
+    ):
+        np.testing.assert_array_equal(size, a)
+        np.testing.assert_allclose(
+            period, expected_period, rtol=4 * np.finfo(np.float64).eps, atol=0
+        )
