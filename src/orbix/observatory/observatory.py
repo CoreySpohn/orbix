@@ -11,6 +11,7 @@ defaults, no custom __init__.
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from hwoutils.constants import MJD_ZERO_JD
 from hwoutils.epoch import Epoch
 from jaxtyping import Array, ArrayLike
 
@@ -102,7 +103,7 @@ class Observatory(eqx.Module):
         preserves the epoch's time scale, with no time-scale conversion.
         Close over ``epoch`` or mark it static when using ``jax.jit``.
         """
-        mjd0 = epoch.days_between(Epoch(2400000.5, scale=epoch.scale))
+        mjd0 = epoch.days_between(Epoch(MJD_ZERO_JD, scale=epoch.scale))
         return self._is_observable_mjd(ra_rad, dec_rad, mjd0 + jnp.asarray(time_d))
 
     def observability(
@@ -140,7 +141,7 @@ class Observatory(eqx.Module):
         """
         if n_samples < 2:
             raise ValueError("n_samples must be at least 2")
-        mjd0 = epoch.days_between(Epoch(2400000.5, scale=epoch.scale))
+        mjd0 = epoch.days_between(Epoch(MJD_ZERO_JD, scale=epoch.scale))
         time = jnp.linspace(start_d, stop_d, n_samples)
 
         def evaluate(t):

@@ -13,6 +13,8 @@ Reference:
 from __future__ import annotations
 
 import jax.numpy as jnp
+from hwoutils.constants import J2000_JD
+from hwoutils.conversions import jd_to_mjd, years_to_days
 
 from orbix.kepler import kepler
 
@@ -20,16 +22,10 @@ from orbix.kepler import kepler
 # Time helpers
 # ---------------------------------------------------------------------------
 
-# J2000 epoch in JD and MJD
-_J2000_JD = 2451545.0
-_J2000_MJD = 51544.5  # = _J2000_JD - 2400000.5
-
-_JULIAN_CENTURY = 36525.0  # days
-
 
 def _mjd_to_julian_centuries(mjd: float) -> float:
     """Convert MJD to Julian centuries since J2000."""
-    return (mjd - _J2000_MJD) / _JULIAN_CENTURY
+    return (mjd - jd_to_mjd(J2000_JD)) / years_to_days(100.0)
 
 
 # ---------------------------------------------------------------------------

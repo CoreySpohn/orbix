@@ -16,6 +16,7 @@ import equinox as eqx
 import interpax
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.conversions import days_to_years
 
 from orbix.observatory.solar_system import (
     earth_position_ecliptic,
@@ -63,7 +64,6 @@ class ObservatoryL2Halo(eqx.Module):
     _mu: float  # mass ratio
     _equinox_mjd: float  # reference equinox (MJD)
     _halo_start_yr: float  # offset into halo at mission start (years)
-    _d2yr: float = 1.0 / 365.25  # days to years conversion
 
     @classmethod
     def from_default(
@@ -91,7 +91,7 @@ class ObservatoryL2Halo(eqx.Module):
             _L2_dist_AU=float(data["L2_dist_AU"]),
             _mu=float(data["mu"]),
             _equinox_mjd=equinox_mjd,
-            _halo_start_yr=halo_start_day / 365.25,
+            _halo_start_yr=days_to_years(halo_start_day),
         )
 
     @classmethod
@@ -122,7 +122,7 @@ class ObservatoryL2Halo(eqx.Module):
             _L2_dist_AU=float(data["L2_dist_AU"]),
             _mu=float(data["mu"]),
             _equinox_mjd=equinox_mjd,
-            _halo_start_yr=halo_start_day / 365.25,
+            _halo_start_yr=days_to_years(halo_start_day),
         )
 
     @property
@@ -137,7 +137,7 @@ class ObservatoryL2Halo(eqx.Module):
 
     def _halo_time(self, mjd: float) -> float:
         """Convert MJD to periodic halo time in years."""
-        dt_yr = (mjd - self._equinox_mjd) * self._d2yr + self._halo_start_yr
+        dt_yr = days_to_years(mjd - self._equinox_mjd) + self._halo_start_yr
         return dt_yr % self._period_yr
 
     def position_ecliptic(self, mjd: float) -> jnp.ndarray:
