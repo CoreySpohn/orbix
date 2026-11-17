@@ -11,6 +11,18 @@ def _cross(left, right):
     return jax.lax.optimization_barrier(first) - jax.lax.optimization_barrier(second)
 
 
+def from_axis_angle(axis, angle_rad):
+    """Return a scalar-first unit quaternion about a supplied unit axis.
+
+    axis has final dimension 3; angle_rad broadcasts over its leading shape.
+    The positive rotation follows the right-hand rule.
+    """
+    half = jnp.asarray(angle_rad) / 2
+    imaginary = jnp.sin(half)[..., None] * jnp.asarray(axis)
+    real = jnp.broadcast_to(jnp.cos(half)[..., None], (*imaginary.shape[:-1], 1))
+    return jnp.concatenate([real, imaginary], axis=-1)
+
+
 def rotate(quat, vector):
     """Rotate last-axis vectors by broadcast unit quaternions (w, x, y, z).
 

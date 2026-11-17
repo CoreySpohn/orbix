@@ -16,9 +16,6 @@ __all__ = [  # noqa: RUF022 - Preserve the public export order grouped by topic.
     # Lambert boundary-value problem
     "lambert_solve",
     "lambert_tof_min",
-    # Phase functions
-    "lambert_phase_exact",
-    "lambert_phase_poly",
 ]
 
 from .lambert import lambert_solve, lambert_tof_min
@@ -35,4 +32,3 @@ from .orbit import (
     thiele_innes_constants,
     thiele_innes_constants_reduced,
 )
-from .phase import lambert_phase_exact, lambert_phase_poly
