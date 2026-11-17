@@ -23,9 +23,6 @@ __all__ = [  # noqa: RUF022 - Preserve the public export order grouped by topic.
     "system_r",
     "single_r",
     "single_r_v",
-    # Phase functions
-    "lambert_phase_exact",
-    "lambert_phase_poly",
 ]
 
 from .lambert import lambert_solve, lambert_tof_min
@@ -44,5 +41,4 @@ from .orbit import (
     thiele_innes_constants,
     thiele_innes_constants_reduced,
 )
-from .phase import lambert_phase_exact, lambert_phase_poly
 from .propagation import single_r, single_r_v, system_r, system_r_v
