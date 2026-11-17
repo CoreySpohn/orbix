@@ -176,6 +176,68 @@ def thiele_innes_constants(W, i, w):
     return thiele_innes_constants_reduced(sinW, cosW, sinw, cosw, sinwcosi, coswcosi)
 
 
+def thiele_innes_to_elements(A, B, F, G):
+    """Invert classical Thiele-Innes constants to reduced Campbell elements.
+
+    Inputs broadcast over arbitrary batch shapes. A,F are north and B,G east,
+    with all four constants multiplied by the same positive semi-major axis.
+    F,G must NOT include sqrt(1-e^2); divide it out before calling if needed.
+    The output is (a, cos_i, W, w), retaining cos_i to avoid the singular
+    derivative of arccos at face-on inclinations.
+
+    Angles are radians: W is the ascending (receding) node position angle,
+    north through east, and w runs from that node in the direction of motion.
+    Both are returned in [0, 2*pi). The principal atan2 values of W+w and W-w
+    select one of the two sky-identical mirrors; adding pi to both W and w
+    selects the other. This branch has angular seams.
+
+    At i=0 only W+w is identifiable; at i=pi only W-w is identifiable.
+    Choose W=0 and put the identifiable angle in w in either case. Components
+    within 8 eps times a of these singularities use that gauge. At e=0 the
+    input constants still fix a reference direction, but w is not a physical
+    periapsis; preserve that direction and its caller-supplied phase together.
+    A zero block returns (0, 0, 0, 0), with orientation unidentified.
+    JIT and autodiff are supported away from singularities and branch seams;
+    derivatives of the unidentified angles at singularities are not physical.
+
+    Args:
+        A: North coefficient of the first in-plane axis, in length units.
+        B: East coefficient of the first in-plane axis, in length units.
+        F: North coefficient of the second in-plane axis, in length units.
+        G: East coefficient of the second in-plane axis, in length units.
+
+    Returns:
+        Tuple (a, cos_i, W, w), each with the broadcast input shape.
+        a has the same length units as the constants, cos_i is in [-1, 1].
+    """
+    A, B, F, G = jnp.broadcast_arrays(*map(jnp.asarray, (A, B, F, G)))
+    plus_x, plus_y = A + G, B - F
+    minus_x, minus_y = A - G, B + F
+    r_plus = jnp.hypot(plus_x, plus_y)
+    r_minus = jnp.hypot(minus_x, minus_y)
+    total = r_plus + r_minus
+    a = total / 2.0
+    cos_i = (r_plus - r_minus) / jnp.where(total > 0.0, total, 1.0)
+    tol = 8 * jnp.finfo(a.dtype).eps * a
+    prograde = r_minus <= tol
+    retrograde = r_plus <= tol
+    sigma = jnp.arctan2(
+        jnp.where(retrograde, 0.0, plus_y),
+        jnp.where(retrograde, 1.0, plus_x),
+    )
+    phi = jnp.arctan2(
+        jnp.where(prograde, 0.0, minus_y),
+        jnp.where(prograde, 1.0, minus_x),
+    )
+    face_on = prograde | retrograde
+    W = jnp.where(face_on, 0.0, (sigma + phi) / 2.0) % two_pi
+    w = (
+        jnp.where(face_on, jnp.where(prograde, sigma, -phi), (sigma - phi) / 2.0)
+        % two_pi
+    )
+    return a, cos_i, W, w
+
+
 def thiele_innes_constants_reduced(sinW, cosW, sinw, cosw, sinwcosi, coswcosi):
     """Compute the Thiele-Innes constants from the orbital angles.
 

@@ -11,6 +11,7 @@ __all__ = [  # noqa: RUF022 - Preserve the public export order grouped by topic.
     "mean_anomaly_t0",
     "mean_anomaly_tp",
     "thiele_innes_constants",
+    "thiele_innes_to_elements",
     "thiele_innes_constants_reduced",
     "state_vector_to_keplerian",
     # Lambert boundary-value problem
@@ -31,4 +32,5 @@ from .orbit import (
     state_vector_to_keplerian,
     thiele_innes_constants,
     thiele_innes_constants_reduced,
+    thiele_innes_to_elements,
 )
