@@ -20,7 +20,11 @@ from jaxtyping import Array
 
 from orbix.equations.orbit import mean_motion
 from orbix.system.frame_orbit import FrameOrbit
-from orbix.system.linear import _sky_geometry, frame_to_sky_block, sky_block_to_frame
+from orbix.system.linear import (
+    frame_to_sky_block,
+    sky_block_geometry,
+    sky_block_to_frame,
+)
 from orbix.system.rotation import rotate
 
 
@@ -428,13 +432,13 @@ class ThieleInnesChart(AbstractChart):
     def implied_mu(self, x) -> Array:
         """Return n^2*a^3 in AU^3/day^2 with the coordinate batch shape."""
         x = _coordinates(x, self.n_coords)
-        a, _ = _sky_geometry(*jnp.moveaxis(x[..., 3:], -1, 0))
+        a, _ = sky_block_geometry(*jnp.moveaxis(x[..., 3:], -1, 0))
         return jnp.exp(2 * x[..., 0]) * a**3
 
     def log_volume(self, x) -> Array:
         """Return the density against Haar*dex*dey*d(ln a)*d(ln mu)."""
         x = _coordinates(x, self.n_coords)
-        a, gap = _sky_geometry(*jnp.moveaxis(x[..., 3:], -1, 0))
+        a, gap = sky_block_geometry(*jnp.moveaxis(x[..., 3:], -1, 0))
         # gap=a^2*(1-c^2), computed without cancellation near face-on.
         return (
             jnp.log(2.0) - 2 * jnp.log(a) - jnp.log(gap) + _disk_log_volume(x[..., 1:3])

@@ -393,6 +393,40 @@ def test_sky_block_completion():
         np.testing.assert_allclose(a, 1.7, atol=8 * np.finfo(float).eps, rtol=0)
 
 
+def test_sky_block_geometry_of_projected_circular_frames():
+    """Fails if the geometry loses precision or a finite scale derivative.
+
+    A circular frame projects to singular values a and a*abs(cos(i)).
+    Allow 32 float64 eps at the scale of each quantity for projection and
+    norm roundoff. A uniform rescaling gives the directional derivative.
+    """
+    from orbix.system import frame_to_sky_block, sky_block_geometry
+
+    a_true = 1.7
+    cos_i = jnp.array([1.0, 1.0 - 2.0**-35, 0.85, 0.0, -0.75, -1.0])
+    orbit = FrameOrbit.from_classical_trig(
+        a_AU=a_true,
+        e=0.0,
+        cos_i=cos_i,
+        sin_i=jnp.sqrt((1.0 - cos_i) * (1.0 + cos_i)),
+        cos_W=0.6,
+        sin_W=0.8,
+        cos_w=0.8,
+        sin_w=0.6,
+        cos_M0=1.0,
+        sin_M0=0.0,
+        mu_AU3_per_d2=1.0,
+    )
+    block = jnp.moveaxis(frame_to_sky_block(a_true, orbit.quat), -1, 0)
+    (a, gap), (da, dgap) = jax.jvp(sky_block_geometry, tuple(block), tuple(block))
+    gap_true = a_true**2 * (1.0 - cos_i**2)
+    eps = np.finfo(float).eps
+    np.testing.assert_allclose(a, a_true, atol=32 * eps * a_true, rtol=0)
+    np.testing.assert_allclose(gap, gap_true, atol=32 * eps * a_true**2, rtol=0)
+    np.testing.assert_allclose(da, a_true, atol=32 * eps * a_true, rtol=0)
+    np.testing.assert_allclose(dgap, 2 * gap_true, atol=64 * eps * a_true**2, rtol=0)
+
+
 @pytest.mark.parametrize("branch", [-1, 1])
 def test_thiele_innes_round_trip(branch):
     """Fails if a branch, circular phase, free mu, or batch broadcasting is lost.

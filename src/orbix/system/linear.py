@@ -8,12 +8,26 @@ from orbix.system.frame_orbit import FrameOrbit
 from orbix.system.rotation import from_basis
 
 
-def _sky_geometry(A, B, F, G):
-    """Return scale and squared-singular-value gap of a nonzero sky block."""
+def _hypot_with_zero_gradient(x, y):
+    # Select the zero subgradient at the origin. Guard the inputs to hypot
+    # as well as its output so a masked derivative cannot propagate NaNs.
+    zero = (x == 0) & (y == 0)
+    return jnp.where(zero, 0.0, jnp.hypot(jnp.where(zero, 1.0, x), y))
+
+
+def sky_block_geometry(A, B, F, G) -> tuple[Array, Array]:
+    """Return the largest singular value and the squared-singular-value gap.
+
+    The sky matrix is [[B,G],[A,F]], with A,F north and B,G east. Inputs
+    broadcast. For a projected orbit of semimajor axis a and inclination i,
+    the results are a and a^2*(1 - cos(i)^2) in the input length units and
+    their square. At face-on, the vanishing norm uses a zero subgradient.
+    """
+    A, B, F, G = map(jnp.asarray, (A, B, F, G))
     # Sum/difference norms avoid subtracting nearly equal squared singular
     # values. For a projected frame they are a*(1+cos i), a*(1-cos i).
-    plus = jnp.hypot(A + G, B - F)
-    minus = jnp.hypot(A - G, B + F)
+    plus = _hypot_with_zero_gradient(A + G, B - F)
+    minus = _hypot_with_zero_gradient(A - G, B + F)
     return (plus + minus) / 2, plus * minus
 
 
@@ -46,7 +60,7 @@ def sky_block_to_frame(A, B, F, G, *, branch=1) -> tuple[Array, Array]:
         jnp.maximum(jnp.abs(A), jnp.abs(B)), jnp.maximum(jnp.abs(F), jnp.abs(G))
     )
     A, B, F, G = (value / scale for value in (A, B, F, G))
-    a, gap = _sky_geometry(A, B, F, G)
+    a, gap = sky_block_geometry(A, B, F, G)
     # Products of conformal/anticonformal parts vanish exactly at face-on;
     # subtracting squared column norms would manufacture an O(sqrt(eps)) tilt.
     plus_a, plus_b, minus_a, minus_b = A + G, B - F, A - G, B + F
