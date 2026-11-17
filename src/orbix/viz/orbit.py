@@ -43,21 +43,6 @@ def _resolve_color(ep, style):
     return ep.SourceStyles(["track"])["track"]["color"]
 
 
-def _neutral(level):
-    """A tone ``level`` of the way from the axes facecolor to the text color.
-
-    Resolved from the active rcParams at call time, so the same level is a
-    light gray on a dark background and a dark gray on a light one -- the
-    scenery inverts with the mode instead of freezing one gray for both.
-    """
-    import matplotlib as mpl
-    from matplotlib.colors import to_rgb
-
-    face = np.asarray(to_rgb(mpl.rcParams["axes.facecolor"]))
-    text = np.asarray(to_rgb(mpl.rcParams["text.color"]))
-    return tuple(face + level * (text - face))
-
-
 def _orbit_look(style, ep, depth):
     """The 3D orbit rendering defaults: marker color and path-line kwargs.
 
@@ -70,12 +55,10 @@ def _orbit_look(style, ep, depth):
     into that source's color either way.
     """
     if style is None:
-        import matplotlib as mpl
-
-        marker_color = mpl.rcParams["text.color"]
+        marker_color = ep.neutral(1.0)
         if depth == "markers":
             return marker_color, {
-                "color": _neutral(0.55),
+                "color": ep.neutral(0.55),
                 "linestyle": "--",
                 "alpha": 0.5,
             }
