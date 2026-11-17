@@ -43,13 +43,13 @@ T_JD = jnp.linspace(2460000.0, 2460400.0, 12)
 
 
 def test_animate_orbit_returns_lazy_animation_with_frame_count():
-    """The result is an eyepiece.Animation with one frame per epoch."""
+    """The result is an eyepiece.render.Animation with one frame per epoch."""
     import eyepiece as ep
 
     from orbix.viz import animate_orbit
 
     anim = animate_orbit(_orbit(), time_d=T_JD, dist_pc=10.0)
-    assert isinstance(anim, ep.Animation)
+    assert isinstance(anim, ep.render.Animation)
     assert anim.n_frames == len(T_JD)
     assert anim.fps == 10
 
@@ -58,7 +58,7 @@ def test_animate_orbit_update_mode_creates_no_artists_per_frame():
     """Walking frames mutates artists; the line count never grows."""
     from orbix.viz import animate_orbit
 
-    anim = animate_orbit(_orbit(), T_JD, dist_pc=10.0)
+    anim = animate_orbit(_orbit(), time_d=T_JD, dist_pc=10.0)
     ax = anim.fig.axes[0]
     n_before = len(ax.lines)
     for i in range(3):
@@ -72,20 +72,20 @@ def test_animate_orbit_history_modes():
 
     orbit, kwargs = _orbit(), dict(dist_pc=10.0)
 
-    grown = animate_orbit(orbit, T_JD, **kwargs, history="all")
+    grown = animate_orbit(orbit, time_d=T_JD, **kwargs, history="all")
     grown.draw(grown.fig, 7)
     ghost_and_trail = [
         line for line in grown.fig.axes[0].lines if len(line.get_xdata()) == 8
     ]
     assert ghost_and_trail, "history='all' trail should hold frames 0..7"
 
-    windowed = animate_orbit(orbit, T_JD, **kwargs, history=3)
+    windowed = animate_orbit(orbit, time_d=T_JD, **kwargs, history=3)
     windowed.draw(windowed.fig, 7)
     assert any(len(line.get_xdata()) == 3 for line in windowed.fig.axes[0].lines), (
         "history=3 trail should hold exactly 3 frames"
     )
 
-    headless = animate_orbit(orbit, T_JD, **kwargs, history="none")
+    headless = animate_orbit(orbit, time_d=T_JD, **kwargs, history="none")
     headless.draw(headless.fig, 7)
     n_lines_none = len(headless.fig.axes[0].lines)
     with_trail = len(grown.fig.axes[0].lines)
@@ -98,7 +98,7 @@ def test_animate_orbit_3d_with_marks_and_batch():
 
     anim = animate_orbit(
         _orbit(3),
-        T_JD,
+        time_d=T_JD,
         kind="3d",
         marks={"periapsis"},
         weights=[1.0, 0.4, 0.1],
@@ -135,7 +135,7 @@ def test_animate_orbit_bare_tracks_door():
     theta = np.linspace(0.0, 2.0 * np.pi, 15)
     ra, dec = 0.3 * np.cos(theta), 0.2 * np.sin(theta)
 
-    anim = animate_orbit((ra, dec), np.linspace(0.0, 140.0, 15))
+    anim = animate_orbit((ra, dec), time_d=np.linspace(0.0, 140.0, 15))
     assert anim.n_frames == 15
     anim.draw(anim.fig, 1)
 
@@ -149,10 +149,10 @@ def test_animate_orbit_bare_tracks_door():
         text.get_text().startswith("t = ") for text in unlabeled.fig.axes[0].texts
     )
 
-    with pytest.raises(TypeError, match="time_jd"):
+    with pytest.raises(TypeError, match="time_d"):
         animate_orbit((ra, dec))
-    with pytest.raises(ValueError, match="time_jd has 4"):
-        animate_orbit((ra, dec), np.linspace(0.0, 1.0, 4))
+    with pytest.raises(ValueError, match="time_d has 4"):
+        animate_orbit((ra, dec), time_d=np.linspace(0.0, 1.0, 4))
 
 
 def test_animate_orbit_sky_propagates_once(monkeypatch):
@@ -168,7 +168,7 @@ def test_animate_orbit_sky_propagates_once(monkeypatch):
         return original(self, *args, **kwargs)
 
     monkeypatch.setattr(FrameOrbit, "at", counting)
-    anim = animate_orbit(_orbit(3), T_JD, dist_pc=10.0)
+    anim = animate_orbit(_orbit(3), time_d=T_JD, dist_pc=10.0)
     for i in range(anim.n_frames):
         anim.draw(anim.fig, i)
     assert len(calls) == 1
@@ -179,8 +179,8 @@ def test_animate_orbit_sky_heads_follow_the_prepared_samples():
     from orbix.viz import animate_orbit, prepare_sky_track
 
     orbit = _orbit(2)
-    anim = animate_orbit(orbit, T_JD, dist_pc=10.0, history=3)
-    sequence = prepare_sky_track(orbit, time_jd=T_JD, dist_pc=10.0)
+    anim = animate_orbit(orbit, time_d=T_JD, dist_pc=10.0, history=3)
+    sequence = prepare_sky_track(orbit, time_d=T_JD, dist_pc=10.0)
     from eyepiece.prepared import find_element
 
     heads = anim.fig.axes[0].collections[-2:]  # head/0 and head/1 are drawn last
@@ -198,11 +198,11 @@ def test_animate_orbit_kind_specific_arguments_are_refused():
 
     kwargs = dict(dist_pc=10.0)
     with pytest.raises(ValueError, match="kind='3d'"):
-        animate_orbit(_orbit(), T_JD, **kwargs, base_ms=4.0)
+        animate_orbit(_orbit(), time_d=T_JD, **kwargs, base_ms=4.0)
     with pytest.raises(ValueError, match="kind='3d'"):
-        animate_orbit(_orbit(), T_JD, **kwargs, style="#22aabb")
+        animate_orbit(_orbit(), time_d=T_JD, **kwargs, style="#22aabb")
     with pytest.raises(ValueError, match="kind='sky'"):
-        animate_orbit(_orbit(), T_JD, kind="3d", iwa_arcsec=0.1)
+        animate_orbit(_orbit(), time_d=T_JD, kind="3d", iwa_arcsec=0.1)
 
 
 def test_animate_orbit_jshtml_renders():
@@ -210,7 +210,7 @@ def test_animate_orbit_jshtml_renders():
     from orbix.viz import animate_orbit
 
     t_short = jnp.linspace(2460000.0, 2460100.0, 4)
-    anim = animate_orbit(_orbit(), t_short, dist_pc=10.0)
+    anim = animate_orbit(_orbit(), time_d=t_short, dist_pc=10.0)
     html = anim.jshtml(dpi=50)
     assert "animation" in html.lower()
     assert html.count("data:image/png") >= 1
@@ -221,16 +221,16 @@ def test_animate_orbit_argument_errors():
     from orbix.viz import animate_orbit
 
     with pytest.raises(ValueError, match="kind"):
-        animate_orbit(_orbit(), T_JD, dist_pc=10.0, kind="2d")
+        animate_orbit(_orbit(), time_d=T_JD, dist_pc=10.0, kind="2d")
     with pytest.raises(ValueError, match="history"):
-        animate_orbit(_orbit(), T_JD, dist_pc=10.0, history="window")
+        animate_orbit(_orbit(), time_d=T_JD, dist_pc=10.0, history="window")
 
 
 def test_animate_orbit_3d_head_carries_depth_cue():
     """The 3D head marker shrinks on the far side; the ghost has no beads."""
     from orbix.viz import animate_orbit
 
-    anim = animate_orbit(_orbit(), T_JD, kind="3d")
+    anim = animate_orbit(_orbit(), time_d=T_JD, kind="3d")
     ax = anim.fig.axes[0]
 
     sizes = []
@@ -255,7 +255,7 @@ def test_animate_orbit_rotate_sweeps_the_camera():
 
     anim = animate_orbit(
         _orbit(),
-        T_JD,
+        time_d=T_JD,
         kind="3d",
         rotate={"azim": (-80.0, -30.0), "elev": (15.0, 35.0)},
     )
@@ -275,12 +275,12 @@ def test_animate_orbit_rotate_errors():
     with pytest.raises(ValueError, match="3d"):
         animate_orbit(
             _orbit(),
-            T_JD,
+            time_d=T_JD,
             dist_pc=10.0,
             rotate={"azim": (0.0, 30.0)},
         )
     with pytest.raises(ValueError, match="unknown rotate"):
-        animate_orbit(_orbit(), T_JD, kind="3d", rotate={"spin": (0, 1)})
+        animate_orbit(_orbit(), time_d=T_JD, kind="3d", rotate={"spin": (0, 1)})
 
 
 def test_animate_orbit_3d_default_look():
@@ -289,7 +289,7 @@ def test_animate_orbit_3d_default_look():
 
     from orbix.viz import animate_orbit
 
-    anim = animate_orbit(_orbit(3), T_JD, kind="3d")
+    anim = animate_orbit(_orbit(3), time_d=T_JD, kind="3d")
     ax = anim.fig.axes[0]
     anim.draw(anim.fig, 4)
 
@@ -319,7 +319,7 @@ def test_animate_orbit_default_rotation_orbits_the_normal():
     """
     from orbix.viz import animate_orbit
 
-    anim = animate_orbit(_orbit(), T_JD, kind="3d")
+    anim = animate_orbit(_orbit(), time_d=T_JD, kind="3d")
     ax = anim.fig.axes[0]
     anim.draw(anim.fig, 0)
     azim0, elev0 = ax.azim, ax.elev
@@ -327,14 +327,14 @@ def test_animate_orbit_default_rotation_orbits_the_normal():
     assert ax.azim != pytest.approx(azim0)
     assert (ax.azim, ax.elev) != (azim0, elev0)
 
-    still = animate_orbit(_orbit(), T_JD, kind="3d", rotate=None)
+    still = animate_orbit(_orbit(), time_d=T_JD, kind="3d", rotate=None)
     ax = still.fig.axes[0]
     azim_before = ax.azim
     still.draw(still.fig, len(T_JD) - 1)
     assert ax.azim == pytest.approx(azim_before)
 
     with pytest.raises(ValueError, match="rotate must be"):
-        animate_orbit(_orbit(), T_JD, kind="3d", rotate="spin")
+        animate_orbit(_orbit(), time_d=T_JD, kind="3d", rotate="spin")
 
 
 def test_animate_orbit_per_track_base_ms():
@@ -342,7 +342,7 @@ def test_animate_orbit_per_track_base_ms():
     from orbix.viz import animate_orbit
 
     anim = animate_orbit(
-        _orbit(3), T_JD, kind="3d", rotate=None, base_ms=[4.0, 6.0, 8.0]
+        _orbit(3), time_d=T_JD, kind="3d", rotate=None, base_ms=[4.0, 6.0, 8.0]
     )
     ax = anim.fig.axes[0]
     heads = [
@@ -353,7 +353,7 @@ def test_animate_orbit_per_track_base_ms():
     assert [head.get_markersize() for head in heads] == [4.0, 6.0, 8.0]
 
     with pytest.raises(ValueError, match="base_ms has 2"):
-        animate_orbit(_orbit(3), T_JD, kind="3d", base_ms=[4.0, 6.0])
+        animate_orbit(_orbit(3), time_d=T_JD, kind="3d", base_ms=[4.0, 6.0])
 
 
 def _projected_area(points, azim_deg, elev_deg):

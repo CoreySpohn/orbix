@@ -70,7 +70,12 @@ def test_plot_sky_track_fan_with_weights_iwa_observations():
     weights = [1.0, 0.5, 0.2, 0.1]
     obs = (np.array([[0.05, 0.02], [-0.03, 0.06]]), np.full(2, 0.01), np.full(2, 0.01))
     result = plot_sky_track(
-        _orbit(K), T_JD, **STELLAR, weights=weights, iwa_arcsec=0.06, observations=obs
+        _orbit(K),
+        time_d=T_JD,
+        **STELLAR,
+        weights=weights,
+        iwa_arcsec=0.06,
+        observations=obs,
     )
     lines = [result.parts[f"path/{k}"] for k in range(K)]
     assert len({line.get_color() for line in lines}) == 1
@@ -79,40 +84,6 @@ def test_plot_sky_track_fan_with_weights_iwa_observations():
     )
     assert result.parts["iwa"].get_radius() == pytest.approx(0.06)
     assert "observations/xerr" in result.parts
-
-
-def test_plot_sky_track_legacy_data_iwa_style_and_fan_kw():
-    """The pre-prepared keywords convert explicitly onto the prepared view."""
-    from orbix.viz import plot_sky_track
-
-    data = (np.array([0.05, -0.03]), np.array([0.02, 0.06]), np.array([0.01, 0.02]))
-    result = plot_sky_track(
-        _orbit(3),
-        T_JD,
-        **STELLAR,
-        iwa=0.06,
-        data=data,
-        style={"color": "#22aabb", "marker": "o"},
-        fan_kw={"lw": 2.2, "zorder": 5},
-    )
-    np.testing.assert_allclose(
-        result.parts["observations"].get_offsets(), np.stack(data[:2], axis=1)
-    )
-    y_segments = np.asarray(result.parts["observations/yerr"].get_segments())
-    np.testing.assert_allclose(y_segments[:, 1, 1] - y_segments[:, 0, 1], 2 * data[2])
-    assert result.parts["iwa"].get_radius() == pytest.approx(0.06)
-    for k in range(3):
-        line = result.parts[f"path/{k}"]
-        assert line.get_color() == "#22aabb"
-        assert line.get_linewidth() == pytest.approx(2.2)
-        assert line.get_zorder() == 5
-
-    with pytest.raises(ValueError, match="observations or data"):
-        plot_sky_track(
-            _orbit(), T_JD, **STELLAR, data=data, observations=(np.zeros((1, 2)),) * 3
-        )
-    with pytest.raises(ValueError, match="iwa_arcsec or iwa"):
-        plot_sky_track(_orbit(), T_JD, **STELLAR, iwa=0.1, iwa_arcsec=0.1)
 
 
 def test_plot_sky_track_propagates_once(monkeypatch):
@@ -128,7 +99,7 @@ def test_plot_sky_track_propagates_once(monkeypatch):
         return original(self, *args, **kwargs)
 
     monkeypatch.setattr(FrameOrbit, "at", counting)
-    plot_sky_track(_orbit(3), T_JD, **STELLAR)
+    plot_sky_track(_orbit(3), time_d=T_JD, **STELLAR)
     assert len(calls) == 1
 
 
@@ -148,8 +119,8 @@ def test_plot_sky_track_bare_arrays_door():
     assert "path/1" in result.parts
     np.testing.assert_array_equal(result.parts["path/1"].get_xydata(), stacked[1])
 
-    with pytest.raises(TypeError, match="time_jd"):
-        plot_sky_track((ra, dec), T_JD)
+    with pytest.raises(TypeError, match="time_d"):
+        plot_sky_track((ra, dec), time_d=T_JD)
 
 
 def test_plot_sky_track_shape_errors_name_shapes():
@@ -167,16 +138,16 @@ def test_plot_sky_track_missing_propagation_args_named():
     from orbix.viz import plot_sky_track
 
     with pytest.raises(TypeError, match="dist_pc"):
-        plot_sky_track(_orbit(), T_JD)
+        plot_sky_track(_orbit(), time_d=T_JD)
 
 
 def test_plot_sky_track_overplot_keeps_ra_inverted_and_both_tracks():
     """A second call on the same axes keeps RA left and widens to both views."""
     from orbix.viz import plot_sky_track
 
-    first = plot_sky_track(_orbit(), T_JD, **STELLAR)
+    first = plot_sky_track(_orbit(), time_d=T_JD, **STELLAR)
     before = sorted(first.ax.get_xlim()), sorted(first.ax.get_ylim())
-    second = plot_sky_track(_orbit(3), T_JD, **STELLAR, ax=first.ax)
+    second = plot_sky_track(_orbit(3), time_d=T_JD, **STELLAR, ax=first.ax)
     assert first.ax.xaxis_inverted()
     after = sorted(first.ax.get_xlim()), sorted(first.ax.get_ylim())
     for (lo0, hi0), (lo1, hi1) in zip(before, after, strict=True):
@@ -192,7 +163,7 @@ def test_plot_sky_track_geometry_stays_in_handed_slot():
     from orbix.viz import plot_sky_track
 
     _fig, axes = plt.subplots(1, 2, layout="constrained")
-    plot_sky_track(_orbit(), T_JD, **STELLAR, ax=axes[0])
+    plot_sky_track(_orbit(), time_d=T_JD, **STELLAR, ax=axes[0])
     w0 = axes[0].get_position(original=True).width
     w1 = axes[1].get_position(original=True).width
     assert w0 == pytest.approx(w1)
@@ -204,7 +175,7 @@ def test_plot_orbit_single_contract():
 
     from orbix.viz import plot_orbit
 
-    result = plot_orbit(_orbit(), T_JD)
+    result = plot_orbit(_orbit(), time_d=T_JD)
     assert isinstance(result, ep.PlotResult)
     assert result.ax.name == "3d"
     assert "line" in result.artists and "scatter" in result.artists
@@ -219,7 +190,7 @@ def test_plot_orbit_batch_returns_lists():
     from orbix.viz import plot_orbit
 
     K = 3
-    result = plot_orbit(_orbit(K), T_JD)
+    result = plot_orbit(_orbit(K), time_d=T_JD)
     assert len(result.artists["lines"]) == K
     assert len(result.artists["scatter"]) == K
 
@@ -283,8 +254,8 @@ def test_observer_3d_view_matches_sky_panel():
     fig = plt.figure()
     ax = fig.add_subplot(projection="3d", proj_type="ortho")
     ax.view_init(elev=-90, azim=90, roll=0)
-    spatial = plot_orbit(orbit, T_JD, ax=ax, depth="none")
-    sky = plot_sky_track(orbit, T_JD, **STELLAR)
+    spatial = plot_orbit(orbit, time_d=T_JD, ax=ax, depth="none")
+    sky = plot_sky_track(orbit, time_d=T_JD, **STELLAR)
     xyz = spatial.artists["lines"][0].get_data_3d()
     projected = np.array(proj3d.proj_transform(*xyz, ax.get_proj()))[:2].T
     origin = np.array(proj3d.proj_transform(0, 0, 0, ax.get_proj()))[:2]
@@ -327,7 +298,7 @@ def test_plot_orbit_marks_smoke_and_errors():
 
     result = plot_orbit(
         _orbit(),
-        T_JD,
+        time_d=T_JD,
         marks={"periapsis", "nodes"},
     )
     assert len(result.artists["scatter"]) == 4
@@ -336,30 +307,7 @@ def test_plot_orbit_marks_smoke_and_errors():
     with pytest.raises(ValueError, match="elements"):
         plot_orbit(np.zeros((10, 3)), marks={"periapsis"})
     with pytest.raises(ValueError, match="unknown marks"):
-        plot_orbit(_orbit(), T_JD, marks={"apoapsis"})
-
-
-def test_plot_sky_track_per_track_colors():
-    """A per-track colors list recolors each path in order and must match K."""
-    from orbix.viz import plot_sky_track
-
-    theta = np.linspace(0.0, 2.0 * np.pi, 30)
-    tracks = np.stack(
-        [
-            np.stack([0.3 * np.cos(theta), 0.2 * np.sin(theta)], -1),
-            np.stack([0.2 * np.cos(theta), 0.3 * np.sin(theta)], -1),
-        ]
-    )
-    result = plot_sky_track(tracks, colors=["#aa3311", "#1133aa"])
-    drawn = [result.parts[f"path/{k}"].get_color() for k in range(2)]
-    assert drawn == ["#aa3311", "#1133aa"]
-
-    # colors win over style, as before
-    result = plot_sky_track(tracks, colors=["#aa3311", "#1133aa"], style="#22aabb")
-    assert result.parts["path/1"].get_color() == "#1133aa"
-
-    with pytest.raises(ValueError, match="colors has 1 entries for 2 tracks"):
-        plot_sky_track(tracks, colors=["#aa3311"])
+        plot_orbit(_orbit(), time_d=T_JD, marks={"apoapsis"})
 
 
 def test_plot_sky_track_sources_color_the_fan():
@@ -392,7 +340,7 @@ def test_plot_orbit_panes_take_the_axes_facecolor():
     """The 3D panes follow the axes facecolor instead of matplotlib gray."""
     from orbix.viz import plot_orbit
 
-    result = plot_orbit(_orbit(), T_JD)
+    result = plot_orbit(_orbit(), time_d=T_JD)
     face = result.ax.get_facecolor()
     for pane_axis in (result.ax.xaxis, result.ax.yaxis, result.ax.zaxis):
         assert tuple(pane_axis.pane.get_facecolor()) == pytest.approx(face)
@@ -404,7 +352,7 @@ def test_plot_orbit_star_chart_look_under_markers():
 
     from orbix.viz import plot_orbit
 
-    result = plot_orbit(_orbit(), T_JD, depth="markers")
+    result = plot_orbit(_orbit(), time_d=T_JD, depth="markers")
     line = result.artists["line"]
     assert line.get_linestyle() == "--"
     assert line.get_alpha() == pytest.approx(0.5)
@@ -412,7 +360,7 @@ def test_plot_orbit_star_chart_look_under_markers():
     scatter_rgba = tuple(result.artists["scatter"].get_facecolor()[0])
     assert scatter_rgba == pytest.approx(text_rgba)
 
-    styled = plot_orbit(_orbit(), T_JD, style="#22aabb", depth="markers")
+    styled = plot_orbit(_orbit(), time_d=T_JD, style="#22aabb", depth="markers")
     assert styled.artists["line"].get_linestyle() == "-"
     assert styled.artists["line"].get_color() == "#22aabb"
 
@@ -428,7 +376,7 @@ def test_plot_orbit_unstyled_path_is_visible_without_markers():
 
     from orbix.viz import plot_orbit
 
-    result = plot_orbit(_orbit(), T_JD)
+    result = plot_orbit(_orbit(), time_d=T_JD)
     text_rgba = matplotlib.colors.to_rgba(mpl.rcParams["text.color"])
     line_rgba = matplotlib.colors.to_rgba(result.artists["line"].get_color())
     assert line_rgba == pytest.approx(text_rgba)
@@ -458,7 +406,7 @@ def test_plot_orbit_per_track_marker_scale():
 
     result = plot_orbit(
         _orbit(2),
-        T_JD,
+        time_d=T_JD,
         marker_scale=[0.0, 20.0],
         depth="markers",
     )
@@ -467,7 +415,7 @@ def test_plot_orbit_per_track_marker_scale():
     assert np.max(second.get_sizes()) > 0.0
 
     with pytest.raises(ValueError, match="marker_scale has 3"):
-        plot_orbit(_orbit(2), T_JD, marker_scale=[1, 2, 3])
+        plot_orbit(_orbit(2), time_d=T_JD, marker_scale=[1, 2, 3])
 
 
 def test_depth_helpers_are_public():

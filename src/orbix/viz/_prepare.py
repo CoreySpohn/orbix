@@ -80,17 +80,15 @@ def _element_id(prefix, k):
 # --- inputs ------------------------------------------------------------------
 
 
-def _sample_times(time_jd):
+def _sample_times(time_d):
     """Validate a time grid for a sequence: 1D, finite, strictly increasing."""
-    times = np.asarray(time_jd, dtype=float)
+    times = np.asarray(time_d, dtype=float)
     if times.ndim != 1 or times.size == 0:
-        raise ValueError(
-            f"time_jd must be a nonempty 1D array, got shape {times.shape}"
-        )
+        raise ValueError(f"time_d must be a nonempty 1D array, got shape {times.shape}")
     if not np.all(np.isfinite(times)):
-        raise ValueError("time_jd must be finite")
+        raise ValueError("time_d must be finite")
     if times.size > 1 and not np.all(np.diff(times) > 0):
-        raise ValueError("time_jd must be strictly increasing")
+        raise ValueError("time_d must be strictly increasing")
     return times
 
 
@@ -111,13 +109,6 @@ def _trail_window(history):
     raise ValueError(
         f'history must be None, "all", or a positive int window, got {history!r}'
     )
-
-
-def _resolve_time(time_jd, time_d):
-    """Keep the Julian-day spelling compatible; new inputs use epoch days."""
-    if time_jd is not None and time_d is not None:
-        raise TypeError("pass only one of time_d and time_jd")
-    return time_jd if time_d is None else time_d
 
 
 def _frame_geometry(orbit):
@@ -176,11 +167,9 @@ def _orbit_arrays(value, times, dist_pc, trig_solver, *, angular=False):
     return None
 
 
-def _sky_xy(orbit_or_radec, time_jd, dist_pc, trig_solver):
+def _sky_xy(orbit_or_radec, time_d, dist_pc, trig_solver):
     """Normalize the input to host coordinates of shape ``(K, T, 2)`` arcsec."""
-    prepared = _orbit_arrays(
-        orbit_or_radec, time_jd, dist_pc, trig_solver, angular=True
-    )
+    prepared = _orbit_arrays(orbit_or_radec, time_d, dist_pc, trig_solver, angular=True)
     if prepared is not None:
         return prepared[0]
 
@@ -407,7 +396,6 @@ def _clock_format(offsets_d):
 def prepare_sky_track(
     orbit_or_radec,
     *,
-    time_jd=None,
     time_d=None,
     dist_pc=None,
     trig_solver=None,
@@ -429,8 +417,6 @@ def prepare_sky_track(
             ``(K, T)`` arrays. A tuple or list of two is always read as an
             ``(ra, dec)`` pair. A row with a nonfinite coordinate is a gap.
         time_d: Float days from the engine object's epoch, shape ``(T,)``.
-        time_jd: Compatibility alias for ``time_d``, shape ``(T,)``, finite and
-            strictly increasing. Values use the same epoch as the orbit.
         dist_pc: Distance in parsecs for a frame orbit. A system
             uses its stored distance.
         trig_solver: Engine solver strategy (Markley, Halley, or Grid).
@@ -474,17 +460,16 @@ def prepare_sky_track(
             malformed, naming the argument. Time, history, and clock-format
             errors are raised before the orbit is propagated.
     """
-    time_jd = _resolve_time(time_jd, time_d)
-    times_jd = _sample_times(time_jd)
+    times_d = _sample_times(time_d)
     trail, window = _trail_window(history)
     custom_clock = None if clock_fmt is None else Clock(CLOCK_ID, fmt=clock_fmt)
-    tracks = _sky_xy(orbit_or_radec, time_jd, dist_pc, trig_solver)
-    if tracks.shape[1] != times_jd.size:
+    tracks = _sky_xy(orbit_or_radec, time_d, dist_pc, trig_solver)
+    if tracks.shape[1] != times_d.size:
         raise ValueError(
-            f"time_jd has {times_jd.size} entries for a {tracks.shape[1]}-sample track"
+            f"time_d has {times_d.size} entries for a {tracks.shape[1]}-sample track"
         )
 
-    offsets_d = times_jd - times_jd[0]
+    offsets_d = times_d - times_d[0]
     clock = (
         Clock(CLOCK_ID, fmt=_clock_format(offsets_d))
         if custom_clock is None
@@ -516,14 +501,13 @@ def prepare_sky_track(
         offsets_d,
         _TIME_UNIT,
         channels=tuple(channels),
-        epoch=float(times_jd[0]),
+        epoch=float(times_d[0]),
     )
 
 
 def prepare_sky_view(
     orbit_or_radec,
     *,
-    time_jd=None,
     time_d=None,
     dist_pc=None,
     trig_solver=None,
@@ -540,8 +524,7 @@ def prepare_sky_view(
     Args:
         orbit_or_radec: As for ``prepare_sky_track``.
         time_d: Float days from the engine object's epoch, shape ``(T,)``.
-        time_jd: Compatibility alias for ``time_d``, shape ``(T,)``. Orbit door only:
-            bare tracks are drawn as given.
+            Orbit door only; bare tracks are drawn as given.
         dist_pc: As for ``prepare_sky_track``.
         trig_solver: As for ``prepare_sky_track``.
         source_ids: As for ``prepare_sky_track``.
@@ -555,17 +538,14 @@ def prepare_sky_view(
 
     Raises:
         TypeError: If the orbit door is missing a propagation argument, or
-            ``time_jd`` is given with bare tracks.
+            ``time_d`` is given with bare tracks.
         ValueError: As for ``prepare_sky_track``.
     """
-    time_jd = _resolve_time(time_jd, time_d)
-    prepared = _orbit_arrays(
-        orbit_or_radec, time_jd, dist_pc, trig_solver, angular=True
-    )
+    prepared = _orbit_arrays(orbit_or_radec, time_d, dist_pc, trig_solver, angular=True)
     if prepared is None:
-        if time_jd is not None:
+        if time_d is not None:
             raise TypeError(
-                "time_jd only applies when propagating an orbit; bare tracks are "
+                "time_d only applies when propagating an orbit; bare tracks are "
                 "drawn as given"
             )
         tracks = _sky_xy(orbit_or_radec, None, dist_pc, trig_solver)

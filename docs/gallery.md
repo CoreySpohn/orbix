@@ -26,6 +26,7 @@ import hwostyle
 import matplotlib
 import jax.numpy as jnp
 import numpy as np
+from dataclasses import replace
 import eyepiece as ep
 from eyepiece.style import SourceCast
 
@@ -46,7 +47,7 @@ matplotlib.rcParams["font.sans-serif"] = list(
 matplotlib.rcParams["figure.dpi"] = 160
 
 MU = G * Msun2kg
-styles = ep.SourceStyles(["planet b", "planet c", "planet d"])
+styles = ep.style.SourceStyles(["planet b", "planet c", "planet d"])
 
 # One eccentric, inclined orbit carries most of this page. Its elements are
 # named here because the posterior fan further down is built around them.
@@ -61,8 +62,14 @@ PERIOD_D = 2 * np.pi * np.sqrt(A_AU**3 / MU)
 PERIAPSIS_D = T0_D - M0_RAD * PERIOD_D / (2.0 * np.pi)
 
 orbit = FrameOrbit.from_classical(
-    a_AU=A_AU, e=ECC, W_rad=BIG_OMEGA_RAD, i_rad=INC_RAD,
-    w_rad=SMALL_OMEGA_RAD, M0_rad=M0_RAD, mu_AU3_per_d2=MU, epoch_d=T0_D,
+    a_AU=A_AU,
+    e=ECC,
+    W_rad=BIG_OMEGA_RAD,
+    i_rad=INC_RAD,
+    w_rad=SMALL_OMEGA_RAD,
+    M0_rad=M0_RAD,
+    mu_AU3_per_d2=MU,
+    epoch_d=T0_D,
 )
 time_d = jnp.linspace(T0_D, T0_D + PERIOD_D, 240)
 
@@ -80,9 +87,16 @@ SYS_SMALL_OMEGA = np.array([-0.40, -0.70, 0.90])
 SYS_M0 = np.array([0.00, 2.10, 4.30])
 
 system = System.from_classical(
-    Body(1.0), Body(np.zeros(3)), SkyFrame(10.0),
-    a_AU=SYS_A_AU, e=SYS_ECC, W_rad=SYS_BIG_OMEGA, i_rad=SYS_INC,
-    w_rad=SYS_SMALL_OMEGA, M0_rad=SYS_M0, epoch_d=T0_D,
+    Body(1.0),
+    Body(np.zeros(3)),
+    SkyFrame(10.0),
+    a_AU=SYS_A_AU,
+    e=SYS_ECC,
+    W_rad=SYS_BIG_OMEGA,
+    i_rad=SYS_INC,
+    w_rad=SYS_SMALL_OMEGA,
+    M0_rad=SYS_M0,
+    epoch_d=T0_D,
 )
 
 # The same three planets one at a time. plot_orbit applies a single style to
@@ -90,15 +104,19 @@ system = System.from_classical(
 # giving each planet its own colour means one call per planet.
 one_planet = [
     FrameOrbit.from_classical(
-        a_AU=SYS_A_AU[k:k + 1], e=SYS_ECC[k:k + 1],
-        W_rad=SYS_BIG_OMEGA[k:k + 1], i_rad=SYS_INC[k:k + 1],
-        w_rad=SYS_SMALL_OMEGA[k:k + 1], M0_rad=SYS_M0[k:k + 1],
-        mu_AU3_per_d2=MU, epoch_d=T0_D,
+        a_AU=SYS_A_AU[k : k + 1],
+        e=SYS_ECC[k : k + 1],
+        W_rad=SYS_BIG_OMEGA[k : k + 1],
+        i_rad=SYS_INC[k : k + 1],
+        w_rad=SYS_SMALL_OMEGA[k : k + 1],
+        M0_rad=SYS_M0[k : k + 1],
+        mu_AU3_per_d2=MU,
+        epoch_d=T0_D,
     )
     for k in range(3)
 ]
 
-OUTER_PERIOD_D = 2 * np.pi * np.sqrt(SYS_A_AU[-1]**3 / MU)
+OUTER_PERIOD_D = 2 * np.pi * np.sqrt(SYS_A_AU[-1] ** 3 / MU)
 t_system = jnp.linspace(T0_D, T0_D + OUTER_PERIOD_D, 240)
 ```
 
@@ -112,8 +130,12 @@ cannot see into.
 
 ```{code-cell} ipython3
 result = viz.plot_sky_track(
-    orbit, time_d=time_d, dist_pc=10.0,
-    style=styles["planet b"], iwa_arcsec=0.06,
+    orbit,
+    time_d=time_d,
+    dist_pc=10.0,
+    source_ids="planet b",
+    profile=replace(ep.style.snapshot_profile(), colors=(styles["planet b"]["color"],)),
+    iwa_arcsec=0.06,
 )
 ```
 
@@ -131,10 +153,12 @@ SIGMA_ARCSEC = 0.008
 t_obs = T0_D + np.array([70.0, 250.0, 430.0])
 ra_true, dec_true = offset_arcsec(orbit.at(t_obs)[0], 10.0)
 epochs = (
-    np.column_stack([
-        np.asarray(ra_true) + SIGMA_ARCSEC * rng.standard_normal(3),
-        np.asarray(dec_true) + SIGMA_ARCSEC * rng.standard_normal(3),
-    ]),
+    np.column_stack(
+        [
+            np.asarray(ra_true) + SIGMA_ARCSEC * rng.standard_normal(3),
+            np.asarray(dec_true) + SIGMA_ARCSEC * rng.standard_normal(3),
+        ]
+    ),
     np.full(3, SIGMA_ARCSEC),
     np.full(3, SIGMA_ARCSEC),
 )
@@ -144,18 +168,24 @@ K = 60
 periods_d = PERIOD_D * (1.0 + 0.04 * rng.standard_normal(K))
 periapsis_d = PERIAPSIS_D + 12.0 * rng.standard_normal(K)
 fan = FrameOrbit.from_classical(
-    a_AU=(MU * (periods_d / (2 * np.pi))**2)**(1 / 3),
+    a_AU=(MU * (periods_d / (2 * np.pi)) ** 2) ** (1 / 3),
     e=np.clip(ECC + 0.04 * rng.standard_normal(K), 0.0, 0.9),
     i_rad=np.arccos(np.clip(np.cos(INC_RAD) + 0.06 * rng.standard_normal(K), -1, 1)),
     W_rad=BIG_OMEGA_RAD + 0.08 * rng.standard_normal(K),
     w_rad=SMALL_OMEGA_RAD + 0.15 * rng.standard_normal(K),
     M0_rad=2 * np.pi * (T0_D - periapsis_d) / periods_d,
-    mu_AU3_per_d2=MU, epoch_d=T0_D,
+    mu_AU3_per_d2=MU,
+    epoch_d=T0_D,
 )
 weights = rng.dirichlet(np.full(K, 3.0))
 result = viz.plot_sky_track(
-    fan, time_d=time_d, dist_pc=10.0,
-    style=styles["planet b"], weights=weights, iwa_arcsec=0.06,
+    fan,
+    time_d=time_d,
+    dist_pc=10.0,
+    source_ids="planet b",
+    profile=replace(ep.style.snapshot_profile(), colors=(styles["planet b"]["color"],)),
+    weights=weights,
+    iwa_arcsec=0.06,
     observations=epochs,
 )
 ```
@@ -171,7 +201,7 @@ with `ax.view_init(elev=-90, azim=90, roll=0)` looks from the observer
 at -z and shows east left and north up, matching the sky panel.
 Velocities share the frame in AU/day; positive dz/dt means receding.
 
-The star-centric orbits in three dimensions, in AU, through `eyepiece.trail`,
+The star-centric orbits in three dimensions, in AU, through `eyepiece.plot.trail`,
 shown next to the same system on the sky so the two doors can be read against
 each other. `SourceStyles` is what ties them together: each planet keeps its
 colour across both panels, so the yellow ring 2.35 AU out in the left panel is
@@ -210,8 +240,11 @@ axsky = fig.add_subplot(gs[1])
 
 for name, planet in zip(PLANETS, one_planet):
     viz.plot_orbit(
-        planet, time_d=t_system, ax=ax3d,
-        style=styles[name], marks={"periapsis"},
+        planet,
+        time_d=t_system,
+        ax=ax3d,
+        style=styles[name],
+        marks={"periapsis"},
     )
 
 # plot_orbit sizes the 3D box as a cube. That is right for a steep orbit, but a
@@ -219,9 +252,9 @@ for name, planet in zip(PLANETS, one_planet):
 # Shrinking the z limit and the box aspect by the SAME factor fills the frame
 # and keeps the scale equal on all three axes; the tick locator keeps the
 # shorter axis from crowding its labels together.
-z_half = 1.15 * float(np.max(np.abs(
-    np.asarray(system.solve(t_system).position_AU)[1:, :, 2]
-)))
+z_half = 1.15 * float(
+    np.max(np.abs(np.asarray(system.solve(t_system).position_AU)[1:, :, 2]))
+)
 xy_half = ax3d.get_xlim()[1]
 ax3d.set_zlim(-z_half, z_half)
 ax3d.set_box_aspect((1.0, 1.0, z_half / xy_half))
@@ -229,21 +262,32 @@ ax3d.zaxis.set_major_locator(MaxNLocator(3))
 ax3d.set_title("plot_orbit -- star-centric, AU")
 
 viz.plot_sky_track(
-    system, time_d=t_system, dist_pc=10.0, ax=axsky,
-    colors=[styles[name]["color"] for name in PLANETS], iwa_arcsec=0.06,
-    fan_kw={"lw": 1.8},
+    system,
+    time_d=t_system,
+    dist_pc=10.0,
+    ax=axsky,
+    source_ids=PLANETS,
+    profile=replace(
+        ep.style.snapshot_profile(),
+        colors=tuple(styles[name]["color"] for name in PLANETS),
+        stroke_width_pt=1.8,
+    ),
+    iwa_arcsec=0.06,
 )
 axsky.set_title("plot_sky_track -- as seen from Earth")
 axsky.legend(
-    handles=[Line2D([], [], color=styles[n]["color"], lw=2.5, label=n)
-             for n in PLANETS],
-    loc="upper left", frameon=False, fontsize=9,
+    handles=[
+        Line2D([], [], color=styles[n]["color"], lw=2.5, label=n) for n in PLANETS
+    ],
+    loc="upper left",
+    frameon=False,
+    fontsize=9,
 )
 ```
 
 ## `animate_orbit`
 
-Returns a lazy `eyepiece.Animation`: nothing renders until a sink is asked
+Returns a lazy `eyepiece.render.Animation`: nothing renders until a sink is asked
 for, and one animation feeds several sinks in a single draw pass
 (`.save("orbit.mp4", "orbit.gif")`). Here it goes to `jshtml`, which needs
 no ffmpeg and so survives any documentation builder.
@@ -275,8 +319,12 @@ from IPython.display import HTML
 t_anim = jnp.linspace(T0_D, T0_D + OUTER_PERIOD_D, 72)
 
 anim = viz.animate_orbit(
-    system, time_d=t_anim, kind="3d", history="none",
-    base_ms=viz.size_by_radius([1.0, 3.9, 11.2]), fps=15,
+    system,
+    time_d=t_anim,
+    kind="3d",
+    history="none",
+    base_ms=viz.size_by_radius([1.0, 3.9, 11.2]),
+    fps=15,
     rotate={"azim": (-150.0, -110.0), "elev": (46.0, 46.0)},
 )
 HTML(anim.jshtml(dpi=130))
@@ -301,12 +349,22 @@ from eyepiece.style import snapshot_profile
 from matplotlib.font_manager import FontProperties
 
 view = viz.prepare_sky_view(
-    fan, time_d=time_d, dist_pc=10.0, source_ids="planet b",
-    weights=weights, observations=epochs, iwa_arcsec=0.06,
+    fan,
+    time_d=time_d,
+    dist_pc=10.0,
+    source_ids="planet b",
+    weights=weights,
+    observations=epochs,
+    iwa_arcsec=0.06,
 )
 sequence = viz.prepare_sky_track(
-    orbit, time_d=time_d, dist_pc=10.0, source_ids="planet b",
-    observations=epochs, iwa_arcsec=0.06, history=60,
+    orbit,
+    time_d=time_d,
+    dist_pc=10.0,
+    source_ids="planet b",
+    observations=epochs,
+    iwa_arcsec=0.06,
+    history=60,
 )
 cast = SourceCast(["planet b"])
 # A profile names one font family: give it the face Matplotlib finds from the
@@ -334,7 +392,7 @@ own, rather than described.
 ```{code-cell} ipython3
 # Three colours from ONE SourceStyles: a fresh SourceStyles restarts the
 # palette, so asking for three separate ones would give the same colour thrice.
-families = ep.SourceStyles(["alias A", "alias B", "alias C"])
+families = ep.style.SourceStyles(["alias A", "alias B", "alias C"])
 per_track = [families[f"alias {c}"]["color"] for c in "ABC"] * (len(weights) // 3)
 
 # The same three families as sources: the renderer colors each track by its
@@ -356,7 +414,10 @@ variants = [
 fig, axes = plt.subplots(2, 3, figsize=(12.0, 7.4), layout="constrained")
 for ax, (label, kw) in zip(axes.ravel(), variants):
     viz.plot_sky_track(
-        fan, time_d=time_d, dist_pc=10.0, ax=ax,
+        fan,
+        time_d=time_d,
+        dist_pc=10.0,
+        ax=ax,
         **{"style": styles["planet b"], **kw},
     )
     ax.set_title(label, fontsize=10.5)
@@ -375,14 +436,19 @@ markers in the mode's text colour over a transparent dashed grey path -- and
 
 ```{code-cell} ipython3
 fig, axes = plt.subplots(
-    1, 3, figsize=(12.6, 4.2), layout="constrained",
+    1,
+    3,
+    figsize=(12.6, 4.2),
+    layout="constrained",
     subplot_kw={"projection": "3d"},
 )
 orbit_variants = [
     ("star-chart default", {}),
     ("style=", {"style": styles["planet b"]}),
-    ("marks={'periapsis', 'nodes'}",
-     {"style": styles["planet b"], "marks": {"periapsis", "nodes"}}),
+    (
+        "marks={'periapsis', 'nodes'}",
+        {"style": styles["planet b"], "marks": {"periapsis", "nodes"}},
+    ),
 ]
 for ax, (label, kw) in zip(axes, orbit_variants):
     ax.view_init(elev=42.0, azim=-130.0)
@@ -405,8 +471,15 @@ import io
 frames = []
 for history in ["all", 15, "none"]:
     anim = viz.animate_orbit(
-        system, time_d=t_system[::4], kind="3d", history=history,
-        rotate=None, style=styles["planet b"],
+        system,
+        time_d=t_system[::4],
+        kind="3d",
+        history=history,
+        rotate=None,
+        source_ids="planet b",
+        profile=replace(
+            ep.style.snapshot_profile(), colors=(styles["planet b"]["color"],)
+        ),
         base_ms=viz.size_by_radius([1.0, 3.9, 11.2]),
     )
     for i, frame in enumerate(anim.frames):
@@ -420,8 +493,9 @@ for history in ["all", 15, "none"]:
     frames.append(plt.imread(buf))
 
 fig, axes = plt.subplots(1, 3, figsize=(12.6, 4.4), layout="constrained")
-for ax, image, label in zip(axes, frames,
-                            ['history="all"', "history=15", 'history="none"']):
+for ax, image, label in zip(
+    axes, frames, ['history="all"', "history=15", 'history="none"']
+):
     ax.imshow(image)
     ax.set_axis_off()
     ax.set_title(label, fontsize=10.5)

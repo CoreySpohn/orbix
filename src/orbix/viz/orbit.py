@@ -21,9 +21,7 @@ import numpy as np
 
 from orbix.system import System
 from orbix.viz._prepare import (
-    PATH_PREFIX,
     _orbit_arrays,
-    _resolve_time,
     prepare_sky_view,
 )
 from orbix.viz._require import eyepiece
@@ -40,7 +38,7 @@ def _resolve_color(ep, style):
         return style.get("color")
     if style is not None:
         return style
-    return ep.SourceStyles(["track"])["track"]["color"]
+    return ep.style.SourceStyles(["track"])["track"]["color"]
 
 
 def _orbit_look(style, ep, depth):
@@ -55,10 +53,10 @@ def _orbit_look(style, ep, depth):
     into that source's color either way.
     """
     if style is None:
-        marker_color = ep.neutral(1.0)
+        marker_color = ep.style.neutral(1.0)
         if depth == "markers":
             return marker_color, {
-                "color": ep.neutral(0.55),
+                "color": ep.style.neutral(0.55),
                 "linestyle": "--",
                 "alpha": 0.5,
             }
@@ -112,17 +110,6 @@ def _per_track(values, n_tracks, name):
     return arr
 
 
-def _legacy_observations(observations, data):
-    """Convert the pre-prepared ``data=(ra, dec, err)`` to ``observations``."""
-    if data is None:
-        return observations
-    if observations is not None:
-        raise ValueError("pass observations or data, not both")
-    ra, dec, err = (np.asarray(v, float) for v in data)
-    err = np.broadcast_to(err, ra.shape)
-    return np.stack([ra, dec], axis=-1), err, err
-
-
 def _widened(view, ax):
     """``view`` with axis limits grown to cover what ``ax`` already shows.
 
@@ -150,7 +137,6 @@ def _widened(view, ax):
 
 def plot_sky_track(
     orbit_or_radec,
-    time_jd=None,
     *,
     time_d=None,
     dist_pc=None,
@@ -162,11 +148,6 @@ def plot_sky_track(
     iwa_arcsec=None,
     cast=None,
     profile=None,
-    style=None,
-    colors=None,
-    data=None,
-    iwa=None,
-    fan_kw=None,
 ):
     """Draw sky-plane orbit tracks: one orbit, or a fan of K candidates.
 
@@ -184,7 +165,6 @@ def plot_sky_track(
             array shaped ``(K, T, 2)``, or an ``(ra, dec)`` pair of
             ``(T,)`` or ``(K, T)`` arrays.
         time_d: Float days from the engine object's epoch, shape ``(T,)``.
-        time_jd: Compatibility alias for ``time_d``, shape ``(T,)``. Orbit door only.
         dist_pc: Distance in parsecs for a frame orbit. A system
             uses its stored distance.
         trig_solver: Engine solver strategy (Markley, Halley, or Grid).
@@ -204,21 +184,6 @@ def plot_sky_track(
             IDs. None builds one in first-encounter order.
         profile: ``eyepiece.style.RenderProfile``; None snapshots the
             active style.
-        style: Kept for existing callers: a color, or a ``SourceStyles``
-            entry, set on every track after rendering, overriding the
-            cast color.
-        colors: Kept for existing callers: one color per track (length
-            K), set on track k after rendering, overriding ``style`` and
-            the cast colors -- for a fan whose tracks carry distinct
-            meaning, such as period-alias families.
-        data: Kept for existing callers: ``(ra, dec, err)`` observed
-            epochs, converted to ``observations`` with ``err`` on both
-            axes. Exclusive with ``observations``.
-        iwa: Kept for existing callers: the same as ``iwa_arcsec``, with
-            which it is exclusive.
-        fan_kw: Kept for existing callers: ``Line2D`` properties set on
-            every track after rendering, last (an ``"alpha"`` here replaces
-            the weight-derived opacity).
 
     Returns:
         The ``eyepiece.mpl.MplResult``; ``result.parts["path/<k>"]`` is
@@ -227,15 +192,9 @@ def plot_sky_track(
     eyepiece()
     from eyepiece import mpl
 
-    observations = _legacy_observations(observations, data)
-    if iwa is not None:
-        if iwa_arcsec is not None:
-            raise ValueError("pass iwa_arcsec or iwa, not both")
-        iwa_arcsec = iwa
-
     view = prepare_sky_view(
         orbit_or_radec,
-        time_jd=_resolve_time(time_jd, time_d),
+        time_d=time_d,
         dist_pc=dist_pc,
         trig_solver=trig_solver,
         source_ids=source_ids,
@@ -243,37 +202,14 @@ def plot_sky_track(
         observations=observations,
         iwa_arcsec=iwa_arcsec,
     )
-    n_tracks = sum(1 for mark in view.marks if mark.id.startswith(PATH_PREFIX + "/"))
-    track_colors = _track_colors(style, colors, n_tracks)
     if ax is not None:
         view = _widened(view, ax)
     result = mpl.render(view, ax=ax, cast=cast, profile=profile)
 
-    tracks = [result.parts[f"{PATH_PREFIX}/{k}"] for k in range(n_tracks)]
-    if track_colors is not None:
-        for line, color in zip(tracks, track_colors, strict=True):
-            line.set_color(color)
-    for line in tracks:
-        line.set(**(fan_kw or {}))
     return result
 
 
-def _track_colors(style, colors, n_tracks):
-    """Per-track override colors from ``colors`` or ``style``, or None.
-
-    ``colors`` (one per track, length-checked before anything is drawn)
-    wins over ``style`` (one color for every track).
-    """
-    if colors is not None:
-        if len(colors) != n_tracks:
-            raise ValueError(f"colors has {len(colors)} entries for {n_tracks} tracks")
-        return list(colors)
-    if style is not None:
-        return [_resolve_color(eyepiece(), style)] * n_tracks
-    return None
-
-
-def _positions(orbit_or_xyz, time_jd, trig_solver):
+def _positions(orbit_or_xyz, time_d, trig_solver):
     """Normalize the input to positions of shape ``(K, T, 3)``.
 
     Orbit rows already use right-handed (east, north, away); only the
@@ -284,13 +220,13 @@ def _positions(orbit_or_xyz, time_jd, trig_solver):
         mark geometry can be computed from its elements rather than
         re-derived from the sampled track.
     """
-    prepared = _orbit_arrays(orbit_or_xyz, time_jd, None, trig_solver)
+    prepared = _orbit_arrays(orbit_or_xyz, time_d, None, trig_solver)
     if prepared is not None:
         return prepared
 
-    if time_jd is not None:
+    if time_d is not None:
         raise TypeError(
-            "time_jd only applies when propagating an orbit; bare xyz tracks "
+            "time_d only applies when propagating an orbit; bare xyz tracks "
             "are drawn as given"
         )
     arr = np.asarray(orbit_or_xyz, float)
@@ -345,7 +281,6 @@ def _mark_geometry(orbit):
 
 def plot_orbit(
     orbit_or_xyz,
-    time_jd=None,
     *,
     time_d=None,
     trig_solver=None,
@@ -356,7 +291,7 @@ def plot_orbit(
     marker_scale=25.0,
     trail_kw=None,
 ):
-    """Draw one or more orbits in 3D, star-centric AU, via ``eyepiece.trail``.
+    """Draw one or more orbits in 3D, star-centric AU, via ``eyepiece.plot.trail``.
 
     Orbit vectors use right-handed (east, north, away) axes. For the
     observer's east-left, north-up view, set an orthographic camera with
@@ -379,7 +314,6 @@ def plot_orbit(
             or ``(K, T, 3)``. Bare positions are in whatever units the
             caller made them, so no axis labels are set on that door.
         time_d: Float days from the engine object's epoch, shape ``(T,)``.
-        time_jd: Compatibility alias for ``time_d``, shape ``(T,)``. Orbit door only.
         trig_solver: Engine solver strategy (Markley, Halley, or Grid).
             None uses the input object's default.
         ax: A ``projection="3d"`` axes to draw into. None creates one.
@@ -394,7 +328,7 @@ def plot_orbit(
             massive multi-planet systems raise if marks are requested. Periapsis is a
             diamond in the track color; the nodes are up/down triangles
             joined by a dashed line of nodes through the origin.
-        depth: Forwarded to ``eyepiece.trail``: how the path shows which
+        depth: Forwarded to ``eyepiece.plot.trail``: how the path shows which
             half faces the camera. ``None`` takes trail's own default,
             the hidden-line convention -- the whole orbit dashed and dim
             with the near half overdrawn solid. ``"markers"`` restores the
@@ -426,9 +360,7 @@ def plot_orbit(
         after the per-track entries.
     """
     ep = eyepiece()
-    positions, orbit = _positions(
-        orbit_or_xyz, _resolve_time(time_jd, time_d), trig_solver
-    )
+    positions, orbit = _positions(orbit_or_xyz, time_d, trig_solver)
     marks = set(marks or ())
     unknown = marks - {"periapsis", "nodes"}
     if unknown:
@@ -452,7 +384,7 @@ def plot_orbit(
     scales = _per_track(marker_scale, positions.shape[0], "marker_scale")
     lines, scatters = [], []
     for k in range(positions.shape[0]):
-        result = ep.trail(
+        result = ep.plot.trail(
             positions[k],
             ax=ax,
             style=style if style is not None else marker_color,

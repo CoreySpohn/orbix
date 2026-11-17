@@ -22,7 +22,7 @@ first epoch, an int keeps a trailing window of that many frames, and
 import numpy as np
 
 from orbix.system import FrameOrbit, System
-from orbix.viz._prepare import _resolve_time, prepare_sky_track
+from orbix.viz._prepare import prepare_sky_track
 from orbix.viz._require import eyepiece
 from orbix.viz.orbit import (
     _orbit_look,
@@ -119,7 +119,7 @@ def depth_size(depth):
 def depth_scale(positions, azim_deg, elev_deg):
     """Per-point head-marker scale in [0, 1] from the camera geometry.
 
-    The same viewer-angle cue ``eyepiece.trail`` bakes into its per-point
+    The same viewer-angle cue ``eyepiece.plot.trail`` bakes into its per-point
     markers -- ``(1 + cos(angle)) / 2`` between each position vector and
     the position-to-viewer vector, with the viewer far along the camera
     direction -- but here it drives the one moving head marker instead of
@@ -149,7 +149,6 @@ def depth_scale(positions, azim_deg, elev_deg):
 
 def animate_orbit(
     orbit_or_tracks,
-    time_jd=None,
     *,
     time_d=None,
     dist_pc=None,
@@ -169,7 +168,7 @@ def animate_orbit(
     cast=None,
     profile=None,
 ):
-    """Animate one or more orbits and return a lazy ``eyepiece.Animation``.
+    """Animate one or more orbits and return a lazy ``eyepiece.render.Animation``.
 
     Nothing renders until ``.save``, ``.jshtml``, or ``.video`` is called
     on the result, so one animation can go to several sinks in one pass
@@ -180,8 +179,7 @@ def animate_orbit(
             ``kind="sky"`` the arcsec forms ``prepare_sky_track`` accepts
             (``(K, T, 2)`` or an ``(ra, dec)`` pair); for ``kind="3d"``
             ``(T, 3)`` / ``(K, T, 3)`` positions.
-        time_d: Float days from the engine object's epoch, shape ``(T,)``.
-        time_jd: Compatibility alias for ``time_d``, shape ``(T,)``. Required for
+        time_d: Float days from the engine object's epoch, shape ``(T,)``. Required for
             ``kind="sky"``, where the samples' physical times drive the
             playback clock, and on the 3D orbit door; on the 3D bare-track
             door it is optional and used only for the elapsed-time label
@@ -238,16 +236,15 @@ def animate_orbit(
         profile: ``kind="sky"`` only: an ``eyepiece.style.RenderProfile``.
 
     Returns:
-        An ``eyepiece.Animation`` bound to the built figure. A 3D
+        An ``eyepiece.render.Animation`` bound to the built figure. A 3D
         animation has one frame per epoch of the track.
 
     Raises:
-        TypeError: If a sky animation has no ``time_jd``.
+        TypeError: If a sky animation has no ``time_d``.
         ValueError: If ``kind`` or ``history`` is not one of the
             documented values, an argument belongs to the other kind, or
-            a labeled ``time_jd`` does not match the track length.
+            a labeled ``time_d`` does not match the track length.
     """
-    time_jd = _resolve_time(time_jd, time_d)
     ep = eyepiece()
     if kind not in ("sky", "3d"):
         raise ValueError(f'kind must be "sky" or "3d", got {kind!r}')
@@ -284,7 +281,7 @@ def animate_orbit(
             )
         return _animate_sky(
             orbit_or_tracks,
-            time_jd,
+            time_d,
             dist_pc=dist_pc,
             trig_solver=trig_solver,
             history=history,
@@ -317,7 +314,7 @@ def animate_orbit(
 
     # Bare 3D arrays may carry timestamps for the animation clock only.
     base_t = (
-        time_jd
+        time_d
         if isinstance(orbit_or_tracks, (FrameOrbit, System))
         or hasattr(orbit_or_tracks, "propagate")
         else None
@@ -328,7 +325,7 @@ def animate_orbit(
     # path would only be clutter.
     base = plot_orbit(
         orbit_or_tracks,
-        base_t,
+        time_d=base_t,
         trig_solver=trig_solver,
         style=style,
         marks=marks,
@@ -341,11 +338,11 @@ def animate_orbit(
     n_tracks, n_frames = tracks.shape[0], tracks.shape[1]
 
     times = None
-    if time_jd is not None:
-        times = np.asarray(time_jd, float).reshape(-1)
+    if time_d is not None:
+        times = np.asarray(time_d, float).reshape(-1)
         if times.shape[0] != n_frames:
             raise ValueError(
-                f"time_jd has {times.shape[0]} entries for a {n_frames}-epoch track"
+                f"time_d has {times.shape[0]} entries for a {n_frames}-epoch track"
             )
 
     alphas = _track_alphas(n_tracks, weights)
@@ -459,7 +456,7 @@ def animate_orbit(
 
 def _animate_sky(
     orbit_or_tracks,
-    time_jd,
+    time_d,
     *,
     dist_pc,
     trig_solver,
@@ -477,13 +474,13 @@ def _animate_sky(
     eyepiece()
     from eyepiece import mpl
 
-    if time_jd is None:
+    if time_d is None:
         raise TypeError(
-            "a sky animation needs time_jd: the sample times drive its clock"
+            "a sky animation needs time_d: the sample times drive its clock"
         )
     sequence = prepare_sky_track(
         orbit_or_tracks,
-        time_jd=time_jd,
+        time_d=time_d,
         dist_pc=dist_pc,
         trig_solver=trig_solver,
         source_ids=source_ids,

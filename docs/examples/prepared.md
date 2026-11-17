@@ -87,8 +87,14 @@ PERIOD_D = 2 * np.pi * np.sqrt(A_AU**3 / MU)
 PERIAPSIS_D = T0_D - M0_RAD * PERIOD_D / (2.0 * np.pi)
 
 orbit = FrameOrbit.from_classical(
-    a_AU=A_AU, e=ECC, W_rad=BIG_OMEGA_RAD, i_rad=INC_RAD,
-    w_rad=SMALL_OMEGA_RAD, M0_rad=M0_RAD, mu_AU3_per_d2=MU, epoch_d=T0_D,
+    a_AU=A_AU,
+    e=ECC,
+    W_rad=BIG_OMEGA_RAD,
+    i_rad=INC_RAD,
+    w_rad=SMALL_OMEGA_RAD,
+    M0_rad=M0_RAD,
+    mu_AU3_per_d2=MU,
+    epoch_d=T0_D,
 )
 rng = np.random.default_rng(0)
 
@@ -106,13 +112,14 @@ K = 40
 periods_d = PERIOD_D * (1.0 + 0.04 * rng.standard_normal(K))
 periapsis_d = PERIAPSIS_D + 12.0 * rng.standard_normal(K)
 fan = FrameOrbit.from_classical(
-    a_AU=(MU * (periods_d / (2 * np.pi))**2)**(1 / 3),
+    a_AU=(MU * (periods_d / (2 * np.pi)) ** 2) ** (1 / 3),
     e=np.clip(ECC + 0.04 * rng.standard_normal(K), 0.0, 0.9),
     i_rad=np.arccos(np.clip(np.cos(INC_RAD) + 0.06 * rng.standard_normal(K), -1, 1)),
     W_rad=BIG_OMEGA_RAD + 0.08 * rng.standard_normal(K),
     w_rad=SMALL_OMEGA_RAD + 0.15 * rng.standard_normal(K),
     M0_rad=2 * np.pi * (T0_D - periapsis_d) / periods_d,
-    mu_AU3_per_d2=MU, epoch_d=T0_D,
+    mu_AU3_per_d2=MU,
+    epoch_d=T0_D,
 )
 weights = rng.dirichlet(np.full(K, 3.0))
 
@@ -170,7 +177,9 @@ sequence = prepare_sky_track(
     iwa_arcsec=0.06,
     history=30,
 )
-print(f"{len(sequence.times)} samples in {sequence.time_unit!r} after day {sequence.epoch}")
+print(
+    f"{len(sequence.times)} samples in {sequence.time_unit!r} after day {sequence.epoch}"
+)
 ```
 
 Times are days since the first sample, and the first sample's epoch-day value is
@@ -185,7 +194,10 @@ between = 0.5 * (sequence.times[60] + sequence.times[61])
 sample = sequence.at(between)
 held = find_element(sample.view, "head/0").xy[0]
 propagated = find_element(sequence.template, "path/0").xy[60]
-print(f"t = {between:.1f} d holds sample {sample.index}:", np.array_equal(held, propagated))
+print(
+    f"t = {between:.1f} d holds sample {sample.index}:",
+    np.array_equal(held, propagated),
+)
 ```
 
 ## A still and a strip
@@ -212,9 +224,7 @@ quickly near periapsis and slowly near apoapsis.
 
 ```{code-cell} ipython3
 fig, ax = plt.subplots(figsize=(3.6, 3.4), layout="constrained")
-movie = mpl.animate(
-    sequence, run_time=3.0, fps=10, ax=ax, cast=CAST, profile=PROFILE
-)
+movie = mpl.animate(sequence, run_time=3.0, fps=10, ax=ax, cast=CAST, profile=PROFILE)
 html = movie.jshtml(dpi=100)
 plt.close(fig)
 print("output frames:", movie.n_frames)
@@ -274,7 +284,7 @@ covers the parts, reveals, and Manim Slides.
 
 ## Migrating from the earlier sky-track functions
 
-Earlier releases drew sky tracks directly through `eyepiece.sky_fan`.
+Earlier releases drew sky tracks directly through `eyepiece.plot.sky_fan`.
 `plot_sky_track` and `animate_orbit(kind="sky")` now prepare the tracks
 first and render them through eyepiece, which changes the following
 behavior.
