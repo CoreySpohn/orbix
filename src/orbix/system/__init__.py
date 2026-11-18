@@ -8,12 +8,16 @@ from orbix.system.charts import (
     EccentricityVectorChart,
     FrameChart,
     ThieleInnesChart,
+    disk_to_plane,
+    periapsis_chart_shape,
+    plane_to_disk,
 )
 from orbix.system.core import Body, Ephemeris, SkyFrame, System, enclosed_mu
 from orbix.system.frame_orbit import FrameOrbit
 from orbix.system.linear import (
     fit_linear_map,
     frame_to_sky_block,
+    line_of_sight_branch,
     sky_block_geometry,
     sky_block_to_frame,
 )
@@ -42,13 +46,17 @@ __all__ = [
     "SkyFrame",
     "System",
     "ThieleInnesChart",
+    "disk_to_plane",
     "distance_AU",
     "enclosed_mu",
     "fit_linear_map",
     "frame_to_sky_block",
     "kepler",
+    "line_of_sight_branch",
     "offset_arcsec",
+    "periapsis_chart_shape",
     "phase_angle_rad",
+    "plane_to_disk",
     "position_angle_deg",
     "radial_velocity_m_per_s",
     "separation_arcsec",

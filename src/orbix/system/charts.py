@@ -15,6 +15,7 @@ from typing import ClassVar
 
 import equinox as eqx
 import jax.numpy as jnp
+from hwoutils.constants import two_pi
 from jax.nn import log_sigmoid, sigmoid
 from jaxtyping import Array
 
@@ -36,14 +37,34 @@ def _coordinates(x, size):
     return x
 
 
-def _disk(u):
-    """Map the plane smoothly onto the open disk, including its origin."""
+def plane_to_disk(u):
+    """Map the plane smoothly onto the open unit disk, including its origin.
+
+    ``u`` has trailing axis 2 and the result is the eccentricity vector
+    ``(ex, ey) = u / sqrt(1 + |u|^2)`` of the chart coordinates ``u``.
+    """
     return u / jnp.sqrt(1 + jnp.sum(u * u, axis=-1, keepdims=True))
 
 
-def _plane(evec):
-    """Invert the disk map without polar coordinates."""
+def disk_to_plane(evec):
+    """Invert ``plane_to_disk`` without polar coordinates.
+
+    ``evec`` is an eccentricity vector ``(ex, ey)`` with ``|evec| < 1`` on the
+    trailing axis; the result is ``u = evec / sqrt(1 - |evec|^2)``.
+    """
     return evec / jnp.sqrt(1 - jnp.sum(evec * evec, axis=-1, keepdims=True))
+
+
+def periapsis_chart_shape(T_d, e, tp_d, epoch_d=0.0):
+    """Chart shape ``(ln n, ex, ey)`` from period, eccentricity and periapsis time.
+
+    ``(ex, ey) = e (cos M, -sin M)`` on the epoch mean-longitude axes, with
+    ``M = n (epoch_d - tp_d)`` the epoch mean anomaly and ``n = 2 pi / T_d``
+    the mean motion in radians per day. Inputs broadcast.
+    """
+    n = two_pi / jnp.asarray(T_d)
+    phase = n * (epoch_d - tp_d)
+    return jnp.log(n), e * jnp.cos(phase), -e * jnp.sin(phase)
 
 
 def _disk_log_volume(u):
@@ -122,7 +143,7 @@ class FrameChart(AbstractChart):
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
         """Build an epoch frame directly, without eccentricity or node angles."""
         x = _coordinates(x, self.n_coords)
-        evec = _disk(x[..., 1:3])
+        evec = plane_to_disk(x[..., 1:3])
         v = x[..., 3:]
         squared = jnp.sum(v * v, axis=-1, keepdims=True)
         nonzero = squared > 0
@@ -146,7 +167,7 @@ class FrameChart(AbstractChart):
 
     def from_orbit(self, orbit: FrameOrbit) -> Array:
         """Return a canonical representative, also at circular or face-on states."""
-        u = _plane(jnp.stack([orbit.ex, orbit.ey], -1))
+        u = disk_to_plane(jnp.stack([orbit.ex, orbit.ey], -1))
         quat = orbit.quat / jnp.linalg.norm(orbit.quat, axis=-1, keepdims=True)
         pivot = jnp.take_along_axis(
             quat, jnp.argmax(jnp.abs(quat), axis=-1)[..., None], axis=-1
@@ -188,7 +209,7 @@ class EccentricityVectorChart(AbstractChart):
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
         """Build the frame using mean longitude, without a periapsis singularity."""
         x = _coordinates(x, self.n_coords)
-        h, k = jnp.moveaxis(_disk(x[..., 1:3]), -1, 0)
+        h, k = jnp.moveaxis(plane_to_disk(x[..., 1:3]), -1, 0)
         longitude = x[..., 5]
         c, s = jnp.cos(longitude), jnp.sin(longitude)
         frame = FrameOrbit.from_classical(
@@ -220,7 +241,7 @@ class EccentricityVectorChart(AbstractChart):
         tangent = jnp.cross(normal, node_axis)
         longitude = jnp.arctan2(jnp.sum(f * tangent, -1), jnp.sum(f * node_axis, -1))
         c, s = jnp.cos(longitude), jnp.sin(longitude)
-        u = _plane(
+        u = disk_to_plane(
             jnp.stack([orbit.ex * c - orbit.ey * s, orbit.ex * s + orbit.ey * c], -1)
         )
         return jnp.concatenate(
@@ -263,7 +284,7 @@ class CartesianChart(AbstractChart):
         escape = jnp.sqrt(2 * jnp.asarray(mu_AU3_per_d2) / jnp.linalg.norm(r, axis=-1))
         return FrameOrbit.from_cartesian(
             r,
-            escape[..., None] * _disk(x[..., 3:]),
+            escape[..., None] * plane_to_disk(x[..., 3:]),
             mu_AU3_per_d2=mu_AU3_per_d2,
             epoch_d=epoch_d,
         )
@@ -272,7 +293,9 @@ class CartesianChart(AbstractChart):
         """Recover position and inverse-ball velocity at the stored epoch."""
         r, v = orbit.to_cartesian()
         escape = jnp.sqrt(2 * orbit.mu_AU3_per_d2 / jnp.linalg.norm(r, axis=-1))
-        return jnp.concatenate([r / self.scale_AU, _plane(v / escape[..., None])], -1)
+        return jnp.concatenate(
+            [r / self.scale_AU, disk_to_plane(v / escape[..., None])], -1
+        )
 
     def log_volume(self, x) -> Array:
         """Return -3 log(norm(p)) - 4 log(1+norm(w)^2), independent of mu and scale.
@@ -412,7 +435,7 @@ class ThieleInnesChart(AbstractChart):
         a, quat = sky_block_to_frame(
             *jnp.moveaxis(x[..., 3:], -1, 0), branch=self.branch
         )
-        evec = _disk(x[..., 1:3])
+        evec = plane_to_disk(x[..., 1:3])
         a, n, ex, ey, epoch = jnp.broadcast_arrays(
             a, jnp.exp(x[..., 0]), evec[..., 0], evec[..., 1], jnp.asarray(epoch_d)
         )
@@ -423,7 +446,7 @@ class ThieleInnesChart(AbstractChart):
         return jnp.concatenate(
             [
                 jnp.log(orbit.n_rad_per_d)[..., None],
-                _plane(jnp.stack([orbit.ex, orbit.ey], -1)),
+                disk_to_plane(jnp.stack([orbit.ex, orbit.ey], -1)),
                 frame_to_sky_block(orbit.a_AU, orbit.quat),
             ],
             -1,

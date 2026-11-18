@@ -31,6 +31,21 @@ def sky_block_geometry(A, B, F, G) -> tuple[Array, Array]:
     return (plus + minus) / 2, plus * minus
 
 
+def line_of_sight_branch(orbit: FrameOrbit) -> Array:
+    """Return the line-of-sight sheet (+1 or -1) of orbits.
+
+    The sheet is the one ``sky_block_to_frame`` defines: the sign of the
+    largest-magnitude entry of the away row of
+    ``orbit.plane_basis()``; the first entry wins ties and a zero row (face-on)
+    is +1. Orbits reflected through the sky plane share their sky block and
+    differ only in this sign. The result has the orbit's batch shape, dtype int.
+    """
+    away = orbit.plane_basis()[..., 2, :]
+    pivot = jnp.where(jnp.abs(away[..., 0]) >= jnp.abs(away[..., 1]), 0, 1)
+    sign = jnp.sign(jnp.take_along_axis(away, pivot[..., None], axis=-1)[..., 0])
+    return jnp.where(sign == 0, 1, sign).astype(int)
+
+
 def sky_block_to_frame(A, B, F, G, *, branch=1) -> tuple[Array, Array]:
     """Complete a sky block to (a_AU, quat), with broadcast batch shape B.
 

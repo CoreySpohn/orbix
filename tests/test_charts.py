@@ -589,3 +589,70 @@ def test_fit_linear_map_noise_distribution():
     for statistic, dof in zip(statistics, [6144, 2048, 4], strict=True):
         assert chi2.ppf(5e-7, dof) < statistic < chi2.isf(5e-7, dof)
     np.testing.assert_array_equal(ranks, 4)
+
+
+def test_disk_map_round_trip():
+    """Fails if the public disk map and its inverse stop being exact inverses.
+
+    The origin and a near-boundary point are included; 1e-13 allows two roundings.
+    """
+    from orbix.system import disk_to_plane, plane_to_disk
+
+    u = jnp.asarray(np.random.default_rng(0).normal(size=(5, 2)) * 3.0)
+    u = u.at[0].set(0.0)
+    evec = plane_to_disk(u)
+    assert bool(jnp.all(jnp.linalg.norm(evec, axis=-1) < 1.0))
+    np.testing.assert_allclose(disk_to_plane(evec), u, rtol=1e-13, atol=1e-13)
+    np.testing.assert_allclose(
+        jnp.linalg.norm(plane_to_disk(jnp.array([1e3, 0.0]))), 1.0, atol=1e-6
+    )
+
+
+def test_periapsis_chart_shape():
+    """Fails if the periapsis time is not the point where the orbit is at periapsis.
+
+    An orbit built from the shape passes through periapsis at tp: the chart
+    orbit's mean anomaly at the epoch is n*(epoch - tp), and e is recovered.
+    """
+    from orbix.system import ThieleInnesChart, disk_to_plane, periapsis_chart_shape
+
+    T, e, tp, epoch = 400.0, 0.3, 120.0, 50.0
+    ln_n, ex, ey = periapsis_chart_shape(T, e, tp, epoch)
+    n = 2 * np.pi / T
+    np.testing.assert_allclose(jnp.exp(ln_n), n, rtol=1e-14)
+    np.testing.assert_allclose(jnp.hypot(ex, ey), e, rtol=1e-14)
+    # In-plane the orbit reaches periapsis (x = a(1-e) along the periapsis axis,
+    # distance a(1-e)) at tp.
+    chart = ThieleInnesChart()
+    u = disk_to_plane(jnp.stack([ex, ey]))
+    x = jnp.concatenate([ln_n[None], u, jnp.array([1.0, 0.2, -0.3, 0.9])])
+    orbit = chart.to_orbit(x, mu_AU3_per_d2=1.0, epoch_d=epoch)
+    r_peri, _ = orbit.at(jnp.array([tp]))
+    r_other, _ = orbit.at(jnp.array([tp + T / 2]))
+    ratio = jnp.linalg.norm(r_other) / jnp.linalg.norm(r_peri)
+    np.testing.assert_allclose(ratio, (1 + e) / (1 - e), rtol=1e-10)
+    # Broadcasting over a batch of periods.
+    batch = periapsis_chart_shape(jnp.array([100.0, 200.0]), 0.1, 10.0)
+    assert batch[0].shape == (2,)
+
+
+@pytest.mark.parametrize("branch", [-1, 1])
+def test_line_of_sight_branch(branch):
+    """Fails if the branch read back from an orbit differs from the chart's sheet.
+
+    Orbits of a ThieleInnesChart sheet report that sheet, and reflecting an orbit
+    through the sky plane flips the sign while the sky block stays the same.
+    """
+    from orbix.system import ThieleInnesChart, frame_to_sky_block, line_of_sight_branch
+
+    x = jnp.asarray(np.random.default_rng(0).normal(size=(6, 7)))
+    chart = ThieleInnesChart(branch=branch)
+    orbit = chart.to_orbit(x, mu_AU3_per_d2=1.0)
+    np.testing.assert_array_equal(line_of_sight_branch(orbit), branch)
+    other = ThieleInnesChart(branch=-branch).to_orbit(x, mu_AU3_per_d2=1.0)
+    np.testing.assert_array_equal(line_of_sight_branch(other), -branch)
+    np.testing.assert_allclose(
+        frame_to_sky_block(orbit.a_AU, orbit.quat),
+        frame_to_sky_block(other.a_AU, other.quat),
+        atol=1e-13,
+    )
