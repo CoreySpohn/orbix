@@ -7,6 +7,7 @@ from jaxtyping import Array
 
 from orbix.equations.orbit import mean_motion
 from orbix.kepler import Markley, kepler
+from orbix.system.observables import offset_arcsec
 from orbix.system.rotation import from_basis, rotate
 
 _DEFAULT_SOLVER = Markley()
@@ -129,6 +130,56 @@ class FrameOrbit(eqx.Module):
             epoch,
         )
 
+    @classmethod
+    def from_periapsis_time(
+        cls, a_AU, e, cos_i, W_rad, cos_w, sin_w, tp_d, *, mu_AU3_per_d2
+    ):
+        """Build from classical elements with periapsis at tp_d (days).
+
+        Inclination enters as cos_i with sin_i = sqrt(1 - cos_i**2), and the
+        argument of periapsis as (cos_w, sin_w); only the node W_rad is an
+        angle. Equivalent to from_classical_trig with M0 = 0 and epoch tp_d.
+        """
+        cos_i = jnp.asarray(cos_i)
+        return cls.from_classical_trig(
+            a_AU=a_AU,
+            e=e,
+            cos_i=cos_i,
+            sin_i=jnp.sqrt(1.0 - cos_i**2),
+            cos_W=jnp.cos(W_rad),
+            sin_W=jnp.sin(W_rad),
+            cos_w=cos_w,
+            sin_w=sin_w,
+            cos_M0=1.0,
+            sin_M0=0.0,
+            mu_AU3_per_d2=mu_AU3_per_d2,
+            epoch_d=tp_d,
+        )
+
+    @classmethod
+    def unit_plane(cls, e, tp_d, n_rad_per_d):
+        """Build a unit-size orbit for dimensionless perifocal coordinates.
+
+        The semi-major axis is one AU and the periapsis lies on the f axis at
+        tp_d, so plane_coordinates and perifocal_coordinates give the orbit in
+        units of a. Inputs broadcast to one batch shape.
+        """
+        e, tp, n = jnp.broadcast_arrays(e, tp_d, n_rad_per_d)
+        return cls(
+            jnp.ones_like(e),
+            n,
+            e,
+            jnp.zeros_like(e),
+            jnp.broadcast_to(jnp.array([1.0, 0.0, 0.0, 0.0]), (*e.shape, 4)),
+            tp,
+        )
+
+    @classmethod
+    def unit_plane_from_phase(cls, e, ln_period_d, tau, t_ref_d):
+        """Build a unit_plane with periapsis at t_ref_d + tau periods."""
+        period = jnp.exp(ln_period_d)
+        return cls.unit_plane(e, t_ref_d + period * tau, 2 * jnp.pi / period)
+
     def to_classical(self):
         """Return a_AU, e, i_rad, W_rad, w_rad, M0_rad as a dictionary.
 
@@ -219,6 +270,38 @@ class FrameOrbit(eqx.Module):
             return first + second
 
         return apply(xy), apply(xy_rate)
+
+    def offsets_arcsec(self, time_d, dist_pc, *, solver=_DEFAULT_SOLVER):
+        """Return east and north offsets in arcseconds at time_d (days).
+
+        The orbit's batch axes come first, then the time axes; dist_pc
+        broadcasts against the batch axes.
+        """
+        position, _ = self.at(time_d, solver=solver)
+        return offset_arcsec(position, dist_pc)
+
+    def periapsis_rows(self):
+        """Return rows (a, e, cos_i, W, cos_w, sin_w, tp), shape B + (7,).
+
+        The inverse of from_periapsis_time. The time of periapsis is the epoch
+        minus the epoch mean anomaly over the mean motion, so it lies within
+        one period before the epoch. Classical angles are undefined at e=0 and
+        cos_i=+-1; the row is for output only.
+        """
+        elements = self.to_classical()
+        tp = self.epoch_d - elements["M0_rad"] / self.n_rad_per_d
+        return jnp.stack(
+            [
+                elements["a_AU"],
+                elements["e"],
+                jnp.cos(elements["i_rad"]),
+                elements["W_rad"],
+                jnp.cos(elements["w_rad"]),
+                jnp.sin(elements["w_rad"]),
+                tp,
+            ],
+            axis=-1,
+        )
 
     def plane_basis(self) -> Array:
         """Return the constant B + (3, 2) plane-to-sky matrix in AU.

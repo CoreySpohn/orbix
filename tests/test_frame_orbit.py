@@ -475,3 +475,132 @@ def test_linear_factors_stored_leaf_derivatives():
         ).T / 2e-5
         assert np.isfinite(derivative).all()
         np.testing.assert_allclose(derivative, difference, rtol=2e-8, atol=2e-9)
+
+
+# (a_AU, e, cos_i, W, cos_w, sin_w, tp_d, star mass kg)
+PERIAPSIS_CASES = [
+    (1.0, 0.0, 0.3, 0.5, 0.8, 0.6, 10.0, 1.9885e30),
+    (5.2, 0.3, -0.4, 2.0, -0.6, 0.8, -300.0, 1.9885e30),
+    (30.0, 0.7, 0.95, 5.5, 0.1, np.sqrt(0.99), 800.0, 0.5 * 1.9885e30),
+]
+# Offsets in arcsec at TIMES for a star at 12 pc, recorded from the
+# photomancy helpers these methods replaced.
+PERIAPSIS_OFFSETS = [
+    (
+        [
+            0.04555828496813774,
+            -0.005399495363235474,
+            -0.029936254024505615,
+            0.03655170649290085,
+        ],
+        [
+            0.05970922112464905,
+            -0.05229585990309715,
+            -0.07277937978506088,
+            0.019472509622573853,
+        ],
+    ),
+    (
+        [
+            -0.28808972239494324,
+            -0.3155915141105652,
+            -0.30622053146362305,
+            0.08098286390304565,
+        ],
+        [
+            0.14927349984645844,
+            0.12771786749362946,
+            0.0030321627855300903,
+            -0.2661838233470917,
+        ],
+    ),
+    (
+        [
+            0.15568041801452637,
+            0.19422613084316254,
+            0.34402328729629517,
+            0.6611348390579224,
+        ],
+        [
+            0.7387716770172119,
+            0.7201213836669922,
+            0.6323767304420471,
+            0.3328605890274048,
+        ],
+    ),
+]
+TIMES = jnp.array([0.0, 100.0, 500.0, 1500.0])
+
+
+@pytest.mark.parametrize(
+    "case, expected", list(zip(PERIAPSIS_CASES, PERIAPSIS_OFFSETS, strict=True))
+)
+def test_offsets_arcsec_matches_recorded_values(case, expected):
+    """Offsets reproduce values recorded from the helpers these methods replaced."""
+    a, e, cos_i, node, cos_w, sin_w, tp, mass_kg = case
+    orbit = FrameOrbit.from_periapsis_time(
+        a, e, cos_i, node, cos_w, sin_w, tp, mu_AU3_per_d2=G * mass_kg
+    )
+    east, north = orbit.offsets_arcsec(TIMES, 12.0)
+    np.testing.assert_allclose(east, expected[0], rtol=2e-5, atol=1e-7)
+    np.testing.assert_allclose(north, expected[1], rtol=2e-5, atol=1e-7)
+    position, _ = orbit.at(tp)
+    assert float(jnp.linalg.norm(position)) == pytest.approx(a * (1 - e), rel=1e-5)
+
+
+@pytest.mark.parametrize("case", PERIAPSIS_CASES[1:])
+def test_periapsis_rows_round_trip(case):
+    """Rows recover the construction inputs and rebuild the same orbit."""
+    a, e, cos_i, node, cos_w, sin_w, tp, mass_kg = case
+    mu = G * mass_kg
+    orbit = FrameOrbit.from_periapsis_time(
+        a, e, cos_i, node, cos_w, sin_w, tp, mu_AU3_per_d2=mu
+    )
+    rows = orbit.periapsis_rows()
+    assert rows.shape == (7,)
+    np.testing.assert_allclose(
+        rows, [a, e, cos_i, node, cos_w, sin_w, tp], rtol=2e-4, atol=2e-4
+    )
+    rebuilt = FrameOrbit.from_periapsis_time(*rows, mu_AU3_per_d2=mu)
+    for name in ("a_AU", "n_rad_per_d", "ex", "ey", "quat", "epoch_d"):
+        np.testing.assert_allclose(
+            getattr(rebuilt, name), getattr(orbit, name), rtol=1e-4, atol=1e-4
+        )
+
+
+def test_periapsis_rows_batch_shape_and_offsets_broadcast():
+    """Batched orbits give batched rows, and dist_pc broadcasts over the batch."""
+    a, e = jnp.array([1.0, 2.0, 3.0]), jnp.array([0.1, 0.2, 0.3])
+    orbit = FrameOrbit.from_periapsis_time(
+        a, e, 0.4, 1.0, 0.6, 0.8, 5.0, mu_AU3_per_d2=G * Msun2kg
+    )
+    assert orbit.periapsis_rows().shape == (3, 7)
+    east, north = orbit.offsets_arcsec(TIMES, jnp.array([5.0, 10.0, 20.0]))
+    assert east.shape == north.shape == (3, 4)
+    single = FrameOrbit.from_periapsis_time(
+        a[1], e[1], 0.4, 1.0, 0.6, 0.8, 5.0, mu_AU3_per_d2=G * Msun2kg
+    )
+    np.testing.assert_allclose(
+        east[1], single.offsets_arcsec(TIMES, 10.0)[0], rtol=1e-5, atol=1e-8
+    )
+
+
+def test_unit_plane_matches_perifocal_coordinates():
+    """Unit planes put periapsis on the f axis and keep the phase convention."""
+    e, period = 0.3, 400.0
+    n = 2 * jnp.pi / period
+    plane = FrameOrbit.unit_plane(e, 50.0, n)
+    xy, _ = plane.perifocal_coordinates(jnp.array([50.0, 50.0 + period / 2]))
+    np.testing.assert_allclose(xy[0], [1 - e, 0.0], atol=1e-6)
+    np.testing.assert_allclose(xy[1], [-1 - e, 0.0], atol=1e-5)
+    phase = FrameOrbit.unit_plane_from_phase(e, jnp.log(period), 0.2, 50.0)
+    np.testing.assert_allclose(phase.epoch_d, 50.0 + 0.2 * period, rtol=1e-6)
+    np.testing.assert_allclose(phase.n_rad_per_d, n, rtol=1e-6)
+    recorded = [
+        [-0.9446608424186707, -0.7292566895484924],
+        [0.49385738372802734, -0.5800942778587341],
+        [0.49385690689086914, -0.5800948143005371],
+        [-1.2343591451644897, 0.33991971611976624],
+    ]
+    xy, _ = phase.perifocal_coordinates(TIMES)
+    np.testing.assert_allclose(xy, recorded, rtol=2e-4, atol=1e-5)
