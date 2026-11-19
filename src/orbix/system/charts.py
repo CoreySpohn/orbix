@@ -196,6 +196,19 @@ class AbstractChart(eqx.Module):
             raise NotImplementedError(f"{type(self).__name__} must draw its gauge")
         return self.sample_coordinates(None, orbit)
 
+    def exclude(self, x) -> tuple[Array, Array]:
+        """Replace coordinates that have no orbit by a regular point.
+
+        Returns ``(x_safe, excluded)``: ``excluded`` has the batch shape of ``x`` and is
+        true where the chart excludes the coordinates (a measure-zero set where
+        :meth:`to_orbit` is undefined), and ``x_safe`` equals ``x`` elsewhere and is a
+        regular point there, so that densities evaluated at ``x_safe`` are finite and
+        a caller can report no density at ``excluded`` without a NaN or its gradient.
+        Charts without such a set return ``x`` and all false.
+        """
+        x = _coordinates(x, self.n_coords)
+        return x, jnp.zeros(x.shape[:-1], bool)
+
     def constrain(self, y, support) -> tuple[Array, Array]:
         """Map wall-free coordinates ``y`` into the interior of a law's bounds.
 
@@ -533,6 +546,15 @@ class CartesianChart(AbstractChart):
             [r / self.scale_AU, disk_to_plane(v / escape[..., None])], -1
         )
 
+    def exclude(self, x) -> tuple[Array, Array]:
+        """Exclude the origin, where the escape speed is infinite."""
+        x = _coordinates(x, self.n_coords)
+        excluded = jnp.all(x[..., :3] == 0, axis=-1)
+        unit = jnp.array([1.0, 0.0, 0.0])
+        return x.at[..., :3].set(
+            jnp.where(excluded[..., None], unit, x[..., :3])
+        ), excluded
+
     def log_volume(self, x) -> Array:
         """Return -3 log(norm(p)) - 4 log(1+norm(w)^2), independent of mu and scale.
 
@@ -730,6 +752,13 @@ class ThieleInnesChart(AbstractChart):
             ],
             -1,
         )
+
+    def exclude(self, x) -> tuple[Array, Array]:
+        """Exclude the zero sky block, which has no size."""
+        x = _coordinates(x, self.n_coords)
+        excluded = jnp.all(x[..., 3:] == 0, axis=-1)
+        sky = jnp.where(excluded[..., None], 1.0, x[..., 3:])
+        return x.at[..., 3:].set(sky), excluded
 
     def implied_mu(self, x) -> Array:
         """Return n^2*a^3 in AU^3/day^2 with the coordinate batch shape."""

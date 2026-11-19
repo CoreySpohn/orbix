@@ -682,3 +682,15 @@ def test_same_map_ignores_the_law_only():
     assert ti.same_map(_ti_block(P_LAW))
     assert not ti.same_map(_ti_block(rows=(1,)))
     assert not ti.same_map(base)
+
+
+def test_thiele_innes_star_mass_zero_wins_over_an_infinite_enclosed_mass():
+    """Fails if an infinite size gives NaN (``-inf + log inf``) with the guard gone.
+
+    At ``ln n = -1e5`` the implied enclosed mass is infinite, outside the star mass
+    law's support; the block reports ``-inf``.
+    """
+    block, model = _ti_block(rows=(1,)), _system_model()
+    x = {n: jnp.array([0.0]) for n in block.coordinate_names}
+    x["ln_n_rad_per_d"] = jnp.array([-1e5])
+    assert float(block.log_prob(x, model)) == -np.inf

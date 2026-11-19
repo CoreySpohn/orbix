@@ -30,7 +30,7 @@ from orbix.equations.orbit import mean_motion
 from orbix.system.charts import AbstractChart, ThieleInnesChart
 from orbix.system.core import GM_SUN_AU3_PER_D2, enclosed_mu
 from orbix.system.frame_orbit import FrameOrbit
-from orbix.system.laws import AbstractOrbitLaw
+from orbix.system.laws import AbstractOrbitLaw, size_term
 
 
 def _take(orbit: FrameOrbit, rows) -> FrameOrbit:
@@ -170,16 +170,21 @@ class OrbitBlock(AbstractBlock):
         return {self.owns: _splice(_rated(held, mu), self.rows, new)}
 
     def log_prob(self, x, model) -> Array:
-        """Sum over the freed rows of the law and the chart volume."""
+        """Sum over the freed rows of the law and the chart volume.
+
+        Coordinates the chart excludes (:meth:`AbstractChart.exclude`) read ``-inf``.
+        The exactly circular orbit of a disk chart also reads ``-inf`` (see
+        :meth:`OrbitLaw.log_prob`): a set of measure zero that no draw lands on.
+        """
         _, mu, coords, epoch, log_jac = self._freed(x, model)
+        coords, excluded = self.chart.exclude(coords)
         orbit = self.chart.to_orbit(
             coords, mu_AU3_per_d2=mu[..., jnp.asarray(self.rows)], epoch_d=epoch
         )
-        return _no_density_if_overflow(
-            jnp.sum(
-                self.law.log_prob(orbit) + self.chart.log_volume(coords) + log_jac, -1
-            )
+        total = jnp.sum(
+            self.law.log_prob(orbit) + self.chart.log_volume(coords) + log_jac, -1
         )
+        return jnp.where(jnp.any(excluded, -1), -jnp.inf, total)
 
     def sample(self, key, model) -> dict[str, Array]:
         """Draw the freed orbits from the law at the model's mu, as coordinates."""
@@ -352,9 +357,15 @@ class ThieleInnesBlock(AbstractBlock):
         }
 
     def log_prob(self, x, model) -> Array:
-        """Sheet-summed law, star mass law, chart volume and ``log(M_enclosed)``."""
+        """Sheet-summed law, star mass law, chart volume and ``log(M_enclosed)``.
+
+        A zero sky block has no orbit (the chart excludes zero size) and reads ``-inf``.
+        Exactly face-on, the chart volume is ``+inf``: an integrable singularity that no
+        draw lands on.
+        """
         held = resolve(model, self.owns)
         coords, log_jac = self._coords(x)
+        coords, excluded = self.chart.exclude(coords)
         epoch = held.epoch_d[..., jnp.asarray(self.rows)]
         sheets = [
             self.law.log_prob(
@@ -366,13 +377,10 @@ class ThieleInnesBlock(AbstractBlock):
         ]
         enclosed = self._enclosed_mass(coords)
         star_mass = enclosed - self._inner_mass(model)
-        return _no_density_if_overflow(
-            jnp.sum(
-                jnp.logaddexp(*sheets) + self.chart.log_volume(coords) + log_jac, -1
-            )
-            + self.star_mass_Msun.log_prob(star_mass)
-            + jnp.log(enclosed)
-        )
+        total = jnp.sum(
+            jnp.logaddexp(*sheets) + self.chart.log_volume(coords) + log_jac, -1
+        ) + size_term(self.star_mass_Msun.log_prob(star_mass), jnp.log(enclosed))
+        return jnp.where(jnp.any(excluded, -1), -jnp.inf, total)
 
     def sample(self, key, model) -> dict[str, Array]:
         """Draw the star mass, then the orbit at the implied mu, as coordinates."""
@@ -426,17 +434,6 @@ class ThieleInnesBlock(AbstractBlock):
             and other.system == self.system
             and other.wall_free == self.wall_free
         )
-
-
-def _no_density_if_overflow(log_prob) -> Array:
-    """Replace a NaN or ``+inf`` log density by ``-inf``.
-
-    Coordinates far enough out overflow the chart (an infinite size, a saturated
-    eccentricity) and the law turns ``inf - inf`` into NaN or a volume term into
-    ``+inf``; such a point has no density. The gradient at a replaced point is not
-    meaningful.
-    """
-    return jnp.where(jnp.isnan(log_prob) | (log_prob == jnp.inf), -jnp.inf, log_prob)
 
 
 def _chart_support(chart, bounds, mu) -> dict:

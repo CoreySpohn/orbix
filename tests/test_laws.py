@@ -1,5 +1,6 @@
 """Orbit laws: closed-form densities, the period law, draws and the one-size rule."""
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -101,3 +102,37 @@ def test_sample_coordinates_invert_to_the_drawn_orbit(chart):
     np.testing.assert_allclose(rebuilt.at(times)[0], orbit.at(times)[0], atol=1e-10)
     if isinstance(chart, ClassicalChart):
         assert jnp.all((coords[..., 3:] >= 0) & (coords[..., 3:] < 2 * np.pi))
+
+
+@pytest.mark.parametrize(
+    "law",
+    [
+        OrbitLaw(priorities.Uniform(0.0, 0.8), a_AU=priorities.LogUniform(0.8, 3.0)),
+        OrbitLaw(
+            priorities.Beta(0.867, 3.03), period_d=priorities.LogUniform(300.0, 3000.0)
+        ),
+    ],
+    ids=["a", "period"],
+)
+def test_a_zero_of_the_law_wins_over_a_singular_factor(law):
+    """Fails if a circular orbit reads +inf or an infinite size reads NaN.
+
+    The exactly circular orbit has no density (``-inf``, not ``+inf`` from ``-log 0``),
+    and an orbit of infinite size, where the size law is zero and the volume factor is
+    infinite, has none either (``-inf``, not ``-inf + inf = NaN``).
+    """
+    mu = GM
+    circular = FrameOrbit.from_classical(
+        jnp.array([1.5]), 0.0, 0.7, 0.4, 0.7, 0.2, mu_AU3_per_d2=mu
+    )
+    assert float(law.log_prob(circular)[0]) == -np.inf
+    eccentric = FrameOrbit.from_classical(
+        jnp.array([1.5]), 0.3, 0.7, 0.4, 0.7, 0.2, mu_AU3_per_d2=mu
+    )
+    assert np.isfinite(float(law.log_prob(eccentric)[0]))
+    huge = eqx.tree_at(
+        lambda o: (o.a_AU, o.n_rad_per_d),
+        eccentric,
+        (jnp.array([jnp.inf]), jnp.array([0.0])),
+    )
+    assert float(law.log_prob(huge)[0]) == -np.inf

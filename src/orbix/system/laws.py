@@ -100,6 +100,11 @@ def _draw(dist: priorities.AbstractDistribution, key, batch) -> Array:
     return jnp.broadcast_to(dist.sample(key, lead), batch)
 
 
+def size_term(log_p, log_volume) -> Array:
+    """``log_p + log_volume``; a zero of the law wins over an infinite volume."""
+    return jnp.where(jnp.isneginf(log_p), -jnp.inf, log_p + log_volume)
+
+
 class OrbitLaw(AbstractOrbitLaw):
     """Independent size and eccentricity, isotropic orientation, uniform phase.
 
@@ -132,14 +137,20 @@ class OrbitLaw(AbstractOrbitLaw):
 
         The size term is ``log p_a(a) + log a`` for ``a_AU`` and
         ``log p_P(P) + log P + log(3/2)`` for ``period_d``, with ``P`` from the
-        orbit's own rate.
+        orbit's own rate. The exactly circular orbit has no density here (``-inf``):
+        the eccentricity-vector density ``p_e(e) / (2 pi e)`` is singular there, a set
+        of measure zero that no draw lands on. Where a size law gives zero density the
+        result is ``-inf`` even at an infinite size.
         """
         e = jnp.hypot(orbit.ex, orbit.ey)
-        out = self.eccentricity.log_prob(e) - jnp.log(two_pi * e)
+        safe_e = jnp.where(e > 0, e, 1.0)
+        out = jnp.where(
+            e > 0, self.eccentricity.log_prob(e) - jnp.log(two_pi * safe_e), -jnp.inf
+        )
         if self.a_AU is not None:
-            return out + self.a_AU.log_prob(orbit.a_AU) + jnp.log(orbit.a_AU)
+            return out + size_term(self.a_AU.log_prob(orbit.a_AU), jnp.log(orbit.a_AU))
         period = two_pi / orbit.n_rad_per_d
-        return out + self.period_d.log_prob(period) + jnp.log(1.5 * period)
+        return out + size_term(self.period_d.log_prob(period), jnp.log(1.5 * period))
 
     def sample(self, key, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
         """Draw orbits; orientation and phase are uniform."""
