@@ -7,7 +7,7 @@ import numpy as np
 import priorities
 import pytest
 from hwoutils.blocks import AbstractBlock
-from hwoutils.model_paths import assign
+from hwoutils.model_paths import assign, resolve
 
 from orbix.system import (
     AbstractOrbitLaw,
@@ -94,6 +94,9 @@ def _assign(model, updates):
 E_LAW = priorities.Uniform(0.05, 0.8)
 A_LAW = OrbitLaw(E_LAW, a_AU=priorities.LogUniform(0.8, 3.0))
 P_LAW = OrbitLaw(E_LAW, period_d=priorities.LogUniform(300.0, 3000.0))
+
+
+WIDE_LAW = OrbitLaw(E_LAW, a_AU=priorities.LogUniform(0.1, 100.0))
 
 
 def _block(chart, rows, law=A_LAW, system="dynamics"):
@@ -188,14 +191,33 @@ def test_periods_name_exactly_the_coordinates_the_orbit_repeats_in(chart):
             assert period == 2 * np.pi and gap < 1e-9, (name, gap)
 
 
+def _expected_names(chart):
+    """Chart names with ``logit_`` before the size coordinate a bounded law maps."""
+    names = chart.coordinate_names
+    if chart.size_coordinate is None:
+        return names
+    return (f"logit_{names[0]}", *names[1:])
+
+
 @pytest.mark.parametrize("chart", ALL_CHARTS, ids=_id)
-def test_a_block_reports_the_periods_of_its_chart(chart):
-    """Fails if the block drops the chart's names or periods."""
-    block = (
-        _ti_block() if isinstance(chart, ThieleInnesChart) else _block(chart, (0, 2))
-    )
-    assert block.coordinate_names == chart.coordinate_names
+def test_a_block_reports_the_names_and_periods_of_its_chart(chart):
+    """Fails if a mapped size coordinate keeps the name of the unmapped one.
+
+    A bounded law maps the size coordinate through a logit, so the block calls it
+    ``logit_<name>``; a law with no bound on the size keeps the chart's name. The
+    periods follow the chart.
+    """
+    ti = isinstance(chart, ThieleInnesChart)
+    block = _ti_block(TI_P_LAW) if ti else _block(chart, (0, 2), P_LAW)
+    assert block.coordinate_names == _expected_names(chart)
     assert block.periods == chart.periods
+    open_law = OrbitLaw(priorities.HalfNormal(0.3), a_AU=priorities.LogNormal(0.0, 1.0))
+    open_block = (
+        ThieleInnesBlock(open_law, priorities.Uniform(0.9, 1.3), rows=(0,), system="x")
+        if ti
+        else _block(chart, (0, 2), open_law)
+    )
+    assert open_block.coordinate_names == chart.coordinate_names
 
 
 @pytest.mark.parametrize("chart", CHARTS, ids=_id)
@@ -206,9 +228,9 @@ def test_forward_of_inverse_reproduces_the_orbits(model, chart, rows):
     Positions agree to 1e-10 AU (float64 trigonometry through the chart); a held row
     keeps its geometry bit for bit, and its rate is the one its mass implies.
     """
-    block = _block(chart, rows)
+    block = _block(chart, rows, WIDE_LAW)
     x = block.inverse(model)
-    assert tuple(x) == chart.coordinate_names
+    assert tuple(x) == block.coordinate_names
     assert all(v.shape == (len(rows),) for v in x.values())
     out = block.forward(x, model)
     assert tuple(out) == ("dynamics.orbits",)
@@ -237,7 +259,7 @@ def test_inverse_of_forward_recovers_the_coordinates(model, chart):
     block = _block(chart, (0, 2))
     x = {
         n: jnp.array([0.3 + 0.1 * k, -0.5 + 0.2 * k])
-        for k, n in enumerate(chart.coordinate_names)
+        for k, n in enumerate(block.coordinate_names)
     }
     x["W_rad"] = jnp.array([1.0, 2.0])
     if "w_rad" in x:
@@ -332,9 +354,43 @@ KEY = jax.random.PRNGKey(0)
 LOG_16 = np.log(16.0)
 
 
+def _support_of(block, model):
+    """The chart-coordinate bounds a block maps."""
+    if isinstance(block, ThieleInnesBlock):
+        return block._support()
+    return block._support(block._mu(model)[..., jnp.asarray(block.rows)])
+
+
+def chart_coordinates(block, model, y):
+    """Chart coordinates and ``log |dx/dy|`` of block coordinates ``y``."""
+    return block.chart.constrain(y, _support_of(block, model))
+
+
+def block_coordinates(block, model, x):
+    """Block coordinates and ``log |dx/dy|`` of chart coordinates ``x``."""
+    support = _support_of(block, model)
+    y = block.chart.unconstrain(x, support)
+    return y, block.chart.constrain(y, support)[1]
+
+
+def _weights(block, model, coords, log_q):
+    """``p / q`` of block coordinates, for proposal points in chart coordinates.
+
+    The proposal density ``q`` is in chart coordinates and the block density ``p`` in
+    block coordinates, so the point is carried across (``y``) and ``q`` becomes
+    ``q / |dy/dx|`` there. A point outside the law's bounds has no block coordinates
+    (the map cannot reach it) and weighs zero.
+    """
+    y, log_jac = block_coordinates(block, model, coords)
+    back, _ = chart_coordinates(block, model, y)
+    inside = jnp.all(jnp.abs(back - coords) < 1e-6 * (1 + jnp.abs(coords)), axis=-1)
+    weight = jnp.exp(_log_prob(block, model, y) - log_q - log_jac)
+    return jnp.where(inside, weight, 0.0)
+
+
 def _log_prob(block, model, coords):
     """Block log density of a batch of single-row coordinate draws."""
-    names = block.chart.coordinate_names
+    names = block.coordinate_names
     return jax.jit(
         jax.vmap(
             lambda c: block.log_prob(
@@ -347,7 +403,7 @@ def _log_prob(block, model, coords):
 def _draws(block, model, n):
     """Coordinates of ``n`` single-row prior draws, shape ``(n, n_coords)``."""
     out = jax.jit(jax.vmap(lambda k: block.sample(k, model)))(jax.random.split(KEY, n))
-    return jnp.stack([out[name][:, 0] for name in block.chart.coordinate_names], -1)
+    return jnp.stack([out[name][:, 0] for name in block.coordinate_names], -1)
 
 
 def _disk(key, radius, n):
@@ -529,7 +585,7 @@ def test_orbit_block_density_is_normalized_and_matches_its_draws(name):
     model = _system_model()
     block = _block(chart, (1,), law)
     coords, log_q = proposal(KEY, N, _ln_a_range(law, model))
-    weight = jnp.exp(_log_prob(block, model, coords) - log_q)
+    weight = _weights(block, model, coords, log_q)
     _check_unit(weight)
     _check_means(block, model, coords, weight, summary)
 
@@ -546,7 +602,9 @@ def _check_means(block, model, coords, weight, summary):
     values = jax.vmap(summary)(coords)
     by_density = np.asarray(jnp.mean(weight[:, None] * values, 0))
     error_density = np.asarray(jnp.std(weight[:, None] * values, 0) / np.sqrt(N))
-    drawn = jax.vmap(summary)(_draws(block, model, N))
+    drawn = jax.vmap(summary)(
+        chart_coordinates(block, model, _draws(block, model, N))[0]
+    )
     by_draws = np.asarray(jnp.mean(drawn, 0))
     error_draws = np.asarray(jnp.std(drawn, 0) / np.sqrt(N))
     combined = np.sqrt(error_density**2 + error_draws**2)
@@ -596,7 +654,7 @@ def test_thiele_innes_block_density_is_normalized_and_matches_its_draws(name):
     block = _ti_block(law)
     ln_n, cube = _ti_support(TI_P_LAW if name == "period" else TI_A_LAW, model)
     coords, log_q = _thiele_innes(KEY, N, ln_n, cube)
-    weight = jnp.exp(_log_prob(block, model, coords) - log_q)
+    weight = _weights(block, model, coords, log_q)
     _check_unit(weight, max_error=0.04)
     if kind == "symmetric":
         summary = _summaries(_column(0), _squared(1, 3))
@@ -624,7 +682,7 @@ def test_thiele_innes_sheet_sum_is_log_two_for_a_symmetric_law():
     block = _ti_block()
     x = block.inverse(model)
     chart = block.chart
-    coords = jnp.stack([x[n] for n in chart.coordinate_names], -1)
+    coords, log_jac = block._coords(x)
     orbit = chart.to_orbit(
         coords, mu_AU3_per_d2=1.0, epoch_d=model.dynamics.orbits.epoch_d[:1]
     )
@@ -633,6 +691,7 @@ def test_thiele_innes_sheet_sum_is_log_two_for_a_symmetric_law():
     one_sheet = (
         A_LAW.log_prob(orbit)[0]
         + chart.log_volume(coords)[0]
+        + log_jac[0]
         + block.star_mass_Msun.log_prob(star)
         + jnp.log(enclosed)
     )
@@ -669,28 +728,85 @@ def test_a_two_row_block_is_the_sum_of_its_rows(model):
     assert np.isfinite(both.log_prob(draw, model))
 
 
-def test_same_map_ignores_the_law_only():
-    """Fails if a block with another chart, rows or system is taken for the same map."""
+def test_same_map_compares_the_support_and_nothing_else_of_the_law():
+    """Fails if a block with another chart, rows, system or law bounds is the same map.
+
+    The map from coordinates to orbits depends on the bounds the law maps, so the same
+    coordinate reads as another orbit under other bounds (a prior swap that kept the
+    stored coordinates would relabel the posterior). A law that differs only inside the
+    same bounds is the same map.
+    """
     base = _block(ClassicalChart(), (0,))
-    other_law = _block(ClassicalChart(), (0,), P_LAW)
-    assert base.same_map(other_law)
+    same_bounds = OrbitLaw(
+        E_LAW,
+        a_AU=priorities.TruncatedDistribution(
+            priorities.LogNormal(0.0, 0.5), low=0.8, high=3.0
+        ),
+    )
+    assert base.same_map(_block(ClassicalChart(), (0,), same_bounds))
+    assert not base.same_map(_block(ClassicalChart(), (0,), P_LAW))
+    wide = OrbitLaw(E_LAW, a_AU=priorities.LogUniform(0.5, 6.0))
+    assert not base.same_map(_block(ClassicalChart(), (0,), wide))
     assert not base.same_map(_block(FrameChart(), (0,)))
     assert not base.same_map(_block(ClassicalChart(), (1,)))
     assert not base.same_map(_block(ClassicalChart(), (0,), system="other"))
     assert not base.same_map(_ti_block())
     ti = _ti_block()
-    assert ti.same_map(_ti_block(P_LAW))
+    assert ti.same_map(_ti_block(TI_A_LAW))  # the a bound carries no coordinate here
+    assert not ti.same_map(_ti_block(TI_P_LAW))
+    assert not ti.same_map(
+        _ti_block(OrbitLaw(priorities.Uniform(0.05, 0.9), a_AU=A_LAW.a_AU))
+    )
     assert not ti.same_map(_ti_block(rows=(1,)))
     assert not ti.same_map(base)
 
 
-def test_thiele_innes_star_mass_zero_wins_over_an_infinite_enclosed_mass():
-    """Fails if an infinite size gives NaN (``-inf + log inf``) with the guard gone.
+def test_a_prior_swap_that_moves_the_bounds_is_a_different_map():
+    """Fails if one coordinate reads as the same orbit under two sets of bounds.
 
-    At ``ln n = -1e5`` the implied enclosed mass is infinite, outside the star mass
-    law's support; the block reports ``-inf``.
+    The same coordinate reads a = 1.2 AU through ``LogUniform(0.8, 3)`` and another
+    value through ``LogUniform(0.5, 6)``; ``same_map`` reports it, so
+    ``Posterior.with_priors`` refuses the swap instead of reweighting by a ratio of one.
     """
-    block, model = _ti_block(rows=(1,)), _system_model()
-    x = {n: jnp.array([0.0]) for n in block.coordinate_names}
-    x["ln_n_rad_per_d"] = jnp.array([-1e5])
-    assert float(block.log_prob(x, model)) == -np.inf
+    model = _system_model()
+    narrow, wide = (
+        _block(ClassicalChart(), (0,)),
+        _block(
+            ClassicalChart(),
+            (0,),
+            OrbitLaw(E_LAW, a_AU=priorities.LogUniform(0.5, 6.0)),
+        ),
+    )
+    x = narrow.inverse(_assign(model, {"dynamics.orbits": _with_a(model, 1.2)}))
+    a_narrow = narrow.forward(x, model)["dynamics.orbits"].a_AU[0]
+    a_wide = wide.forward(x, model)["dynamics.orbits"].a_AU[0]
+    np.testing.assert_allclose(a_narrow, 1.2, rtol=1e-12)
+    assert abs(float(a_wide) - 1.2) > 0.05
+    assert not narrow.same_map(wide)
+
+
+def _with_a(model, a):
+    orbits = model.dynamics.orbits
+    return eqx.tree_at(lambda o: o.a_AU, orbits, orbits.a_AU.at[0].set(a))
+
+
+def test_a_block_on_a_bare_system_joins_a_fit_path():
+    """Fails if a block at the empty system path owns ``.orbits`` (a malformed path).
+
+    With ``system=""`` the block owns ``orbits`` and reads ``star.mass_Msun`` and
+    ``planets.mass_Msun``, and it runs on a bare ``System`` as the model.
+    """
+    system = _system_model().dynamics
+    block = OrbitBlock(ClassicalChart(), A_LAW, rows=(0,), system="")
+    assert block.owns == "orbits" and block.writes == ("orbits",)
+    assert block.reads == ("star.mass_Msun", "planets.mass_Msun")
+    ti = ThieleInnesBlock(A_LAW, priorities.Uniform(0.9, 1.3), rows=(0,), system="")
+    assert ti.writes == ("orbits", "star.mass_Msun")
+    assert ti.reads == ("planets.mass_Msun",)
+    x = block.sample(KEY, system)
+    out = block.forward(x, system)
+    assert tuple(out) == ("orbits",)
+    for path in (*block.reads, *ti.reads, *block.writes, *ti.writes):
+        resolve(system, path)
+    assert tuple(assign(system, "orbits", out["orbits"]).orbits.a_AU.shape) == (3,)
+    assert np.isfinite(float(block.log_prob(x, system)))

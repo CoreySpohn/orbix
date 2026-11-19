@@ -216,7 +216,8 @@ class AbstractChart(eqx.Module):
         coordinate and ``"e"`` to that of the eccentricity, each optional and an array
         that broadcasts against the batch. A bounded coordinate is reached from the
         real line by a logit on its interval; the disk charts scale the eccentricity
-        disk to radius ``high`` (the lower bound must be zero there). The density in
+        disk to radius ``high`` and ignore ``low``, leaving a disk of radius ``low`` of
+        zero law density around the origin when it is above zero. The density in
         ``y`` then has no wall. An element the chart has no coordinate for is ignored.
 
         Returns:

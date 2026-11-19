@@ -15,6 +15,7 @@ from test_blocks import (
     _system_model,
     _ti_block,
     _TiltedLaw,
+    chart_coordinates,
 )
 
 from orbix.system import (
@@ -78,9 +79,10 @@ def test_from_unit_and_sample_have_one_distribution(name):
 
 def _law_checks(block, model, mapped):
     """The mapped draws against the exact laws behind ``log_prob``, one-sample KS."""
-    names = list(block.coordinate_names)
+    chart_x, _ = chart_coordinates(block, model, jnp.asarray(mapped))
+    names = list(block.chart.coordinate_names)
     law = block.law
-    cols = {n: mapped[:, i] for i, n in enumerate(names)}
+    cols = {n: np.asarray(chart_x[:, i]) for i, n in enumerate(names)}
     checks = []
     if "logit_e" in cols:
         e = 1 / (1 + np.exp(-cols["logit_e"]))
