@@ -70,8 +70,17 @@ class Body(eqx.Module):
     mass_Msun: Array = eqx.field(converter=jnp.asarray)
 
 
+def _optional_array(x):
+    """Keep None, make anything else an array."""
+    return None if x is None else jnp.asarray(x)
+
+
 class SkyFrame(eqx.Module):
-    """Distance and the reference epoch that time offsets are measured from.
+    """Distance, optional sky position and the reference epoch.
+
+    ra_deg and dec_deg are the equatorial ICRS (J2000) position in degrees
+    at the epoch, with no proper motion. Both are given or both are None
+    (unplaced); when given they have the shape of dist_pc.
 
     The epoch is host-only metadata (hwoutils.epoch.Epoch), never a traced
     leaf. time_d converts host dates to offsets before any float32 device
@@ -80,6 +89,20 @@ class SkyFrame(eqx.Module):
 
     dist_pc: Array = eqx.field(converter=jnp.asarray)
     epoch: Epoch = eqx.field(static=True, default=Epoch())
+    ra_deg: Array | None = eqx.field(converter=_optional_array, default=None)
+    dec_deg: Array | None = eqx.field(converter=_optional_array, default=None)
+
+    def __check_init__(self):
+        """Require both or neither sky coordinate, shaped like dist_pc."""
+        if (self.ra_deg is None) != (self.dec_deg is None):
+            raise ValueError("ra_deg and dec_deg must be given together or not at all")
+        if self.ra_deg is not None:
+            shape = jnp.shape(self.dist_pc)
+            if self.ra_deg.shape != shape or self.dec_deg.shape != shape:
+                raise ValueError(
+                    f"ra_deg and dec_deg must have the shape of dist_pc {shape}; "
+                    f"got {self.ra_deg.shape} and {self.dec_deg.shape}"
+                )
 
     def time_d(self, time_jd):
         """Days from the epoch, in NumPy float64 on the host.
