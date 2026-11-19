@@ -122,6 +122,19 @@ def _chi_four_icdf(q):
     return jnp.sqrt(low + high)
 
 
+def _interval(y, low, high):
+    """Map the real line onto ``(low, high)``: the value and its log derivative."""
+    width = high - low
+    return low + width * sigmoid(y), jnp.log(width) + log_sigmoid(y) + log_sigmoid(-y)
+
+
+def _interval_inverse(value, low, high):
+    """Invert :func:`_interval`; the position is held ``eps`` inside the interval."""
+    eps = jnp.finfo(jnp.result_type(value, float)).eps
+    position = jnp.clip((value - low) / (high - low), eps, 1.0 - eps)
+    return jnp.log(position) - jnp.log1p(-position)
+
+
 class AbstractChart(eqx.Module):
     """Static-only orbit coordinates with a free leading batch shape B.
 
@@ -138,6 +151,11 @@ class AbstractChart(eqx.Module):
     n_coords: eqx.AbstractClassVar[int]
     coordinate_names: eqx.AbstractClassVar[tuple[str, ...]]
     periods: eqx.AbstractClassVar[tuple[float | None, ...]]
+    # Which coordinates a law's bounds can map: the size coordinate (the first,
+    # ``"ln_a"`` or ``"ln_n"``) and the eccentricity (``"logit"`` at index 1, or
+    # ``"disk"`` at 1, 2).
+    size_coordinate: ClassVar[str | None] = None
+    eccentricity_coordinate: ClassVar[str | None] = None
     # Unit-cube coordinates a gauge consumes in ``unit_coordinates``.
     gauge_unit_size: ClassVar[int] = 0
 
@@ -177,6 +195,68 @@ class AbstractChart(eqx.Module):
         if self.gauge_unit_size:
             raise NotImplementedError(f"{type(self).__name__} must draw its gauge")
         return self.sample_coordinates(None, orbit)
+
+    def constrain(self, y, support) -> tuple[Array, Array]:
+        """Map wall-free coordinates ``y`` into the interior of a law's bounds.
+
+        ``support`` maps ``"ln_size"`` to the ``(low, high)`` interval of the size
+        coordinate and ``"e"`` to that of the eccentricity, each optional and an array
+        that broadcasts against the batch. A bounded coordinate is reached from the
+        real line by a logit on its interval; the disk charts scale the eccentricity
+        disk to radius ``high`` (the lower bound must be zero there). The density in
+        ``y`` then has no wall. An element the chart has no coordinate for is ignored.
+
+        Returns:
+            The chart coordinates ``x`` (the argument of :meth:`to_orbit`) and
+            ``log |dx/dy|``, one per batch element: ``y`` itself and zero when
+            ``support`` is empty.
+        """
+        y = _coordinates(y, self.n_coords)
+        x, log_jac = y, jnp.zeros(y.shape[:-1], y.dtype)
+        if self.size_coordinate is not None and "ln_size" in support:
+            value, log_d = _interval(y[..., 0], *support["ln_size"])
+            x, log_jac = x.at[..., 0].set(value), log_jac + log_d
+        if self.eccentricity_coordinate is not None and "e" in support:
+            low, high = support["e"]
+            if self.eccentricity_coordinate == "logit":
+                width, t = high - low, y[..., 1]
+                log_e = jnp.logaddexp(jnp.log(low), jnp.log(width) + log_sigmoid(t))
+                log_rest = jnp.logaddexp(
+                    jnp.log1p(-high), jnp.log(width) + log_sigmoid(-t)
+                )
+                log_d = (
+                    jnp.log(width) + log_sigmoid(t) + log_sigmoid(-t) - log_e - log_rest
+                )
+                x = x.at[..., 1].set(log_e - log_rest)
+            else:
+                k = 1 - high**2
+                r2 = jnp.sum(y[..., 1:3] ** 2, axis=-1)
+                scale = high / jnp.sqrt(1 + k * r2)
+                x = x.at[..., 1:3].set(scale[..., None] * y[..., 1:3])
+                log_d = 2 * jnp.log(high) - 2 * jnp.log1p(k * r2)
+            log_jac = log_jac + log_d
+        return x, log_jac
+
+    def unconstrain(self, x, support) -> Array:
+        """Invert :meth:`constrain`: wall-free coordinates of chart coordinates ``x``.
+
+        A coordinate within one rounding of its bound is held ``eps`` inside it, so
+        the result is finite.
+        """
+        x = _coordinates(x, self.n_coords)
+        y = x
+        if self.size_coordinate is not None and "ln_size" in support:
+            y = y.at[..., 0].set(_interval_inverse(x[..., 0], *support["ln_size"]))
+        if self.eccentricity_coordinate is not None and "e" in support:
+            low, high = support["e"]
+            if self.eccentricity_coordinate == "logit":
+                y = y.at[..., 1].set(_interval_inverse(sigmoid(x[..., 1]), low, high))
+            else:
+                k = 1 - high**2
+                u2 = jnp.sum(x[..., 1:3] ** 2, axis=-1)
+                denom = jnp.sqrt(jnp.maximum(high**2 - k * u2, jnp.finfo(x.dtype).tiny))
+                y = y.at[..., 1:3].set(x[..., 1:3] / denom[..., None])
+        return y
 
 
 class FrameChart(AbstractChart):
@@ -218,6 +298,8 @@ class FrameChart(AbstractChart):
         "vy",
         "vz",
     )
+    size_coordinate: ClassVar[str | None] = "ln_a"
+    eccentricity_coordinate: ClassVar[str | None] = "disk"
     periods: ClassVar[tuple[float | None, ...]] = (None,) * 7
     gauge_unit_size: ClassVar[int] = 2
     gauge_sd: float | None = eqx.field(static=True, default=0.1)
@@ -339,6 +421,8 @@ class EccentricityVectorChart(AbstractChart):
         "W_rad",
         "M0_plus_w_rad",
     )
+    size_coordinate: ClassVar[str | None] = "ln_a"
+    eccentricity_coordinate: ClassVar[str | None] = "disk"
     periods: ClassVar[tuple[float | None, ...]] = (
         None,
         None,
@@ -502,6 +586,8 @@ class ClassicalChart(AbstractChart):
         "w_rad",
         "M0_rad",
     )
+    size_coordinate: ClassVar[str | None] = "ln_a"
+    eccentricity_coordinate: ClassVar[str | None] = "logit"
     periods: ClassVar[tuple[float | None, ...]] = (
         None,
         None,
@@ -612,6 +698,8 @@ class ThieleInnesChart(AbstractChart):
         "F_AU",
         "G_AU",
     )
+    size_coordinate: ClassVar[str | None] = "ln_n"
+    eccentricity_coordinate: ClassVar[str | None] = "disk"
     periods: ClassVar[tuple[float | None, ...]] = (None,) * 7
     branch: int = eqx.field(static=True, default=1)
 

@@ -22,6 +22,7 @@ import jax
 import jax.numpy as jnp
 import priorities
 from hwoutils.blocks import AbstractBlock
+from hwoutils.constants import two_pi
 from hwoutils.model_paths import resolve
 from jaxtyping import Array
 
@@ -83,12 +84,19 @@ class OrbitBlock(AbstractBlock):
             Parameters broadcast over the freed rows.
         rows: The freed Jacobi indices.
         system: Path of the :class:`System` in the model.
+        wall_free: When true, an element the law bounds to a finite interval (see
+            :meth:`AbstractOrbitLaw.support`) gets a coordinate on the whole real line
+            through a logit on that interval, so a gradient sampler meets no wall; the
+            density gains the log derivative of that map. Default false: coordinates
+            are the chart's own, with the law's walls. With a disk-valued
+            eccentricity chart the eccentricity law must start at zero.
     """
 
     chart: AbstractChart = eqx.field(static=True)
     law: AbstractOrbitLaw
     rows: tuple[int, ...] = eqx.field(static=True)
     system: str = eqx.field(static=True)
+    wall_free: bool = eqx.field(static=True, default=False)
 
     def __check_init__(self):
         """Validate the static choice of chart and rows."""
@@ -97,6 +105,7 @@ class OrbitBlock(AbstractBlock):
                 "ThieleInnesChart implies the star mass; use ThieleInnesBlock"
             )
         _check_rows(self.rows)
+        _check_wall_free(self)
 
     @property
     def coordinate_names(self) -> tuple[str, ...]:
@@ -136,20 +145,25 @@ class OrbitBlock(AbstractBlock):
             resolve(model, self._star_mass), resolve(model, self._planet_masses)
         )
 
+    def _support(self, mu) -> dict:
+        """Chart-coordinate bounds of the law at the freed rows' mu; empty if walled."""
+        if not self.wall_free:
+            return {}
+        return _chart_support(self.chart, self.law.support(), mu)
+
     def _freed(self, x, model):
-        """The held orbits, all rows' mu, the stacked coordinates and freed epochs."""
+        """Held orbits, all rows' mu, chart coordinates, freed epochs, log Jacobian."""
         held = resolve(model, self.owns)
         rows = jnp.asarray(self.rows)
-        return (
-            held,
-            self._mu(model),
-            _stack(self.chart, self.rows, x),
-            held.epoch_d[..., rows],
+        mu = self._mu(model)
+        coords, log_jac = self.chart.constrain(
+            _stack(self.chart, self.rows, x), self._support(mu[..., rows])
         )
+        return held, mu, coords, held.epoch_d[..., rows], log_jac
 
     def forward(self, x, model) -> dict[str, FrameOrbit]:
         """Build the freed rows; held rows keep geometry and take the model's rate."""
-        held, mu, coords, epoch = self._freed(x, model)
+        held, mu, coords, epoch, _ = self._freed(x, model)
         new = self.chart.to_orbit(
             coords, mu_AU3_per_d2=mu[..., jnp.asarray(self.rows)], epoch_d=epoch
         )
@@ -157,28 +171,33 @@ class OrbitBlock(AbstractBlock):
 
     def log_prob(self, x, model) -> Array:
         """Sum over the freed rows of the law and the chart volume."""
-        _, mu, coords, epoch = self._freed(x, model)
+        _, mu, coords, epoch, log_jac = self._freed(x, model)
         orbit = self.chart.to_orbit(
             coords, mu_AU3_per_d2=mu[..., jnp.asarray(self.rows)], epoch_d=epoch
         )
-        return jnp.sum(self.law.log_prob(orbit) + self.chart.log_volume(coords), -1)
+        return _no_density_if_overflow(
+            jnp.sum(
+                self.law.log_prob(orbit) + self.chart.log_volume(coords) + log_jac, -1
+            )
+        )
 
     def sample(self, key, model) -> dict[str, Array]:
         """Draw the freed orbits from the law at the model's mu, as coordinates."""
         held = resolve(model, self.owns)
         rows = jnp.asarray(self.rows)
         k_law, k_chart = jax.random.split(key)
+        mu = self._mu(model)[..., rows]
         orbit = self.law.sample(
-            k_law,
-            mu_AU3_per_d2=self._mu(model)[..., rows],
-            epoch_d=held.epoch_d[..., rows],
+            k_law, mu_AU3_per_d2=mu, epoch_d=held.epoch_d[..., rows]
         )
-        return _unstack(self.chart, self.chart.sample_coordinates(k_chart, orbit))
+        coords = self.chart.sample_coordinates(k_chart, orbit)
+        return _unstack(self.chart, self.chart.unconstrain(coords, self._support(mu)))
 
     def inverse(self, model) -> dict[str, Array]:
         """Coordinates of the freed rows of the model's orbits."""
         coords = self.chart.from_orbit(_take(resolve(model, self.owns), self.rows))
-        return _unstack(self.chart, coords)
+        mu = self._mu(model)[..., jnp.asarray(self.rows)]
+        return _unstack(self.chart, self.chart.unconstrain(coords, self._support(mu)))
 
     @property
     def unit_size(self) -> int | None:
@@ -199,20 +218,21 @@ class OrbitBlock(AbstractBlock):
         held = resolve(model, self.owns)
         rows = jnp.asarray(self.rows)
         n_law = self.law.unit_size
+        mu = self._mu(model)[..., rows]
         orbit = self.law.from_unit(
-            c[:, :n_law],
-            mu_AU3_per_d2=self._mu(model)[..., rows],
-            epoch_d=held.epoch_d[..., rows],
+            c[:, :n_law], mu_AU3_per_d2=mu, epoch_d=held.epoch_d[..., rows]
         )
-        return _unstack(self.chart, self.chart.unit_coordinates(c[:, n_law:], orbit))
+        coords = self.chart.unit_coordinates(c[:, n_law:], orbit)
+        return _unstack(self.chart, self.chart.unconstrain(coords, self._support(mu)))
 
     def same_map(self, other) -> bool:
-        """Whether ``other`` has this chart, rows and system; only the law differs."""
+        """Whether ``other`` matches in chart, rows, system and coordinates."""
         return (
             type(other) is type(self)
             and other.chart == self.chart
             and other.rows == self.rows
             and other.system == self.system
+            and other.wall_free == self.wall_free
         )
 
 
@@ -246,6 +266,9 @@ class ThieleInnesBlock(AbstractBlock):
         rows: The freed row; exactly one.
         system: Path of the :class:`System` in the model.
         chart: The Thiele-Innes chart; its branch sets the sheet ``forward`` builds.
+        wall_free: As for :class:`OrbitBlock`; the size coordinate ``ln n`` is bounded
+            by a period law (an ``a_AU`` law bounds no coordinate here), and the
+            eccentricity law must start at zero.
     """
 
     law: AbstractOrbitLaw
@@ -253,10 +276,12 @@ class ThieleInnesBlock(AbstractBlock):
     rows: tuple[int, ...] = eqx.field(static=True)
     system: str = eqx.field(static=True)
     chart: ThieleInnesChart = eqx.field(static=True, default=ThieleInnesChart())
+    wall_free: bool = eqx.field(static=True, default=False)
 
     def __check_init__(self):
         """Validate the static rows; one row only."""
         _check_rows(self.rows)
+        _check_wall_free(self)
         if len(self.rows) != 1:
             raise ValueError("ThieleInnesBlock frees exactly one row (one star mass)")
 
@@ -300,10 +325,20 @@ class ThieleInnesBlock(AbstractBlock):
     def _enclosed_mass(self, coords) -> Array:
         return self.chart.implied_mu(coords)[..., 0] / GM_SUN_AU3_PER_D2
 
+    def _support(self) -> dict:
+        """Chart-coordinate bounds of the law; empty unless ``wall_free``."""
+        if not self.wall_free:
+            return {}
+        return _chart_support(self.chart, self.law.support(), None)
+
+    def _coords(self, x):
+        """Chart coordinates of wall-free ``x`` and the log Jacobian of the map."""
+        return self.chart.constrain(_stack(self.chart, self.rows, x), self._support())
+
     def forward(self, x, model) -> dict[str, object]:
         """Build the row and return it with the star mass it implies."""
         held = resolve(model, self.owns)
-        coords = _stack(self.chart, self.rows, x)
+        coords, _ = self._coords(x)
         new = self.chart.to_orbit(
             coords,
             mu_AU3_per_d2=1.0,
@@ -319,7 +354,7 @@ class ThieleInnesBlock(AbstractBlock):
     def log_prob(self, x, model) -> Array:
         """Sheet-summed law, star mass law, chart volume and ``log(M_enclosed)``."""
         held = resolve(model, self.owns)
-        coords = _stack(self.chart, self.rows, x)
+        coords, log_jac = self._coords(x)
         epoch = held.epoch_d[..., jnp.asarray(self.rows)]
         sheets = [
             self.law.log_prob(
@@ -331,8 +366,10 @@ class ThieleInnesBlock(AbstractBlock):
         ]
         enclosed = self._enclosed_mass(coords)
         star_mass = enclosed - self._inner_mass(model)
-        return (
-            jnp.sum(jnp.logaddexp(*sheets) + self.chart.log_volume(coords), -1)
+        return _no_density_if_overflow(
+            jnp.sum(
+                jnp.logaddexp(*sheets) + self.chart.log_volume(coords) + log_jac, -1
+            )
             + self.star_mass_Msun.log_prob(star_mass)
             + jnp.log(enclosed)
         )
@@ -347,12 +384,13 @@ class ThieleInnesBlock(AbstractBlock):
             mu_AU3_per_d2=jnp.reshape(GM_SUN_AU3_PER_D2 * enclosed, (1,)),
             epoch_d=held.epoch_d[..., jnp.asarray(self.rows)],
         )
-        return _unstack(self.chart, self.chart.sample_coordinates(k_chart, orbit))
+        coords = self.chart.sample_coordinates(k_chart, orbit)
+        return _unstack(self.chart, self.chart.unconstrain(coords, self._support()))
 
     def inverse(self, model) -> dict[str, Array]:
         """Coordinates of the freed row of the model's orbits."""
         coords = self.chart.from_orbit(_take(resolve(model, self.owns), self.rows))
-        return _unstack(self.chart, coords)
+        return _unstack(self.chart, self.chart.unconstrain(coords, self._support()))
 
     @property
     def unit_size(self) -> int | None:
@@ -376,15 +414,68 @@ class ThieleInnesBlock(AbstractBlock):
             mu_AU3_per_d2=jnp.reshape(GM_SUN_AU3_PER_D2 * enclosed, (1,)),
             epoch_d=held.epoch_d[..., jnp.asarray(self.rows)],
         )
-        return _unstack(self.chart, self.chart.unit_coordinates(c[:, :0], orbit))
+        coords = self.chart.unit_coordinates(c[:, :0], orbit)
+        return _unstack(self.chart, self.chart.unconstrain(coords, self._support()))
 
     def same_map(self, other) -> bool:
-        """Whether ``other`` has this chart, rows and system; only laws differ."""
+        """Whether ``other`` matches in chart, rows, system and coordinates."""
         return (
             type(other) is type(self)
             and other.chart == self.chart
             and other.rows == self.rows
             and other.system == self.system
+            and other.wall_free == self.wall_free
+        )
+
+
+def _no_density_if_overflow(log_prob) -> Array:
+    """Replace a NaN or ``+inf`` log density by ``-inf``.
+
+    Coordinates far enough out overflow the chart (an infinite size, a saturated
+    eccentricity) and the law turns ``inf - inf`` into NaN or a volume term into
+    ``+inf``; such a point has no density. The gradient at a replaced point is not
+    meaningful.
+    """
+    return jnp.where(jnp.isnan(log_prob) | (log_prob == jnp.inf), -jnp.inf, log_prob)
+
+
+def _chart_support(chart, bounds, mu) -> dict:
+    """Chart-coordinate bounds from a law's bounds; ``mu`` is the freed rows' rate.
+
+    The eccentricity bound passes through. The size bound becomes a bound on ``ln a``
+    (from an ``a_AU`` law, or from a period law at the given rate) or on ``ln n`` (from
+    a period law only: ``n = 2 pi / P``, independent of the masses).
+    """
+    out = {}
+    if "e" in bounds and chart.eccentricity_coordinate is not None:
+        out["e"] = bounds["e"]
+    if chart.size_coordinate == "ln_a":
+        if "a_AU" in bounds:
+            out["ln_size"] = tuple(jnp.log(b) for b in bounds["a_AU"])
+        elif "period_d" in bounds:
+            out["ln_size"] = tuple(
+                (jnp.log(mu) + 2 * (jnp.log(b) - jnp.log(two_pi))) / 3
+                for b in bounds["period_d"]
+            )
+    elif chart.size_coordinate == "ln_n" and "period_d" in bounds:
+        low, high = bounds["period_d"]
+        out["ln_size"] = (jnp.log(two_pi / high), jnp.log(two_pi / low))
+    return out
+
+
+def _check_wall_free(block) -> None:
+    """A disk eccentricity chart maps only an interval that starts at zero."""
+    if not block.wall_free or block.chart.eccentricity_coordinate != "disk":
+        return
+    low = block.law.support().get("e", (None,))[0]
+    if (
+        low is not None
+        and not isinstance(low, jax.core.Tracer)
+        and bool(jnp.any(low != 0))
+    ):
+        raise ValueError(
+            "a wall-free block on a disk eccentricity chart needs an eccentricity "
+            "law that starts at zero; use ClassicalChart for a lower bound"
         )
 
 

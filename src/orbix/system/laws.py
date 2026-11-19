@@ -38,6 +38,18 @@ class AbstractOrbitLaw(eqx.Module):
         The batch shape is the broadcast of ``mu_AU3_per_d2`` and the law's parameters.
         """
 
+    def support(self) -> dict[str, tuple[Array, Array]]:
+        """Bounds of the scalar elements the law confines to a finite interval.
+
+        The keys are ``"e"`` (eccentricity) and ``"a_AU"`` or ``"period_d"`` (the
+        size element), present only for an element with a bounded interval; the set of
+        keys is fixed by the law's static structure. Each value is ``(low, high)``,
+        arrays that broadcast against the law's parameters. A block that frees
+        coordinates uses these to give its coordinates no hard wall. The default
+        reports no bound.
+        """
+        return {}
+
     @property
     def unit_size(self) -> int | None:
         """Unit-cube length per orbit of :meth:`from_unit`, or ``None``."""
@@ -152,6 +164,25 @@ class OrbitLaw(AbstractOrbitLaw):
             quat,
             epoch,
         )
+
+    def support(self) -> dict[str, tuple[Array, Array]]:
+        """Bounds of the eccentricity and size laws that have a finite interval.
+
+        The eccentricity bounds are clipped to ``[0, 1]``. A half-bounded or
+        unbounded scalar law reports nothing.
+        """
+        out = {}
+        if self.eccentricity.bounds == "interval":
+            low, high = self.eccentricity.support()
+            out["e"] = (jnp.clip(low, 0.0, 1.0), jnp.clip(high, 0.0, 1.0))
+        key, size = (
+            ("a_AU", self.a_AU)
+            if self.a_AU is not None
+            else ("period_d", self.period_d)
+        )
+        if size.bounds == "interval":
+            out[key] = size.support()
+        return out
 
     @property
     def unit_size(self) -> int | None:
