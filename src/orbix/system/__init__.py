@@ -19,8 +19,10 @@ from orbix.system.linear import (
     fit_linear_map,
     frame_to_sky_block,
     line_of_sight_branch,
+    linear_gaussian_conditional,
     sky_block_geometry,
     sky_block_to_frame,
+    sky_design,
 )
 from orbix.system.observables import (
     distance_AU,
@@ -61,6 +63,7 @@ __all__ = [
     "frame_to_sky_block",
     "kepler",
     "line_of_sight_branch",
+    "linear_gaussian_conditional",
     "offset_arcsec",
     "periapsis_chart_shape",
     "phase_angle_rad",
@@ -70,4 +73,5 @@ __all__ = [
     "separation_arcsec",
     "sky_block_geometry",
     "sky_block_to_frame",
+    "sky_design",
 ]

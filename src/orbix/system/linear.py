@@ -1,5 +1,6 @@
 """Sky projection of orbit frames and conditional relative-astrometry fits."""
 
+import jax
 import jax.numpy as jnp
 from jax.scipy.linalg import solve_triangular
 from jaxtyping import Array
@@ -116,6 +117,87 @@ def frame_to_sky_block(a_AU, quat) -> Array:
     return scale[..., None] * jnp.stack([sp + sm, cp + cm, cp - cm, sm - sp], -1)
 
 
+def sky_design(orbit_shape: FrameOrbit, time_d) -> Array:
+    """Design matrix of the sky constants at fixed nonlinear shape, shape ``(T, 2, 4)``.
+
+    The predicted sky offset of a row is linear in the constants ``c = (A, B, F, G)``
+    (AU, ``A``, ``F`` north and ``B``, ``G`` east): ``(x, y) = design @ c`` with
+    ``x`` east and ``y`` north, so each time gives ``[[0, X, 0, Y], [X, 0, Y, 0]]``
+    with ``(X, Y)`` the in-plane position at that time on the epoch mean-longitude
+    axes. ``orbit_shape`` is an unbatched :class:`FrameOrbit`; only ``n_rad_per_d``,
+    ``ex``, ``ey`` and ``epoch_d`` enter. ``time_d`` has shape ``(T,)`` in days.
+    """
+    time = jnp.asarray(time_d)
+    if orbit_shape.a_AU.ndim != 0 or time.ndim != 1:
+        raise ValueError("Use an unbatched orbit and a (T,) time")
+    plane = orbit_shape.in_plane(time)[0]
+    X, Y = plane[:, 0], plane[:, 1]
+    zero = jnp.zeros_like(X)
+    return jnp.stack(
+        [jnp.stack([zero, X, zero, Y], -1), jnp.stack([X, zero, Y, zero], -1)], -2
+    )
+
+
+def linear_gaussian_conditional(
+    design, target, precision, prior_precision
+) -> tuple[Array, Array, Array]:
+    """Gaussian conditional of linear coefficients and the log marginal likelihood.
+
+    The model is ``target_t = design_t @ c + noise_t`` for ``T`` records of ``k``
+    values, with noise precision ``precision_t`` (``k x k``) and prior
+    ``c ~ N(0, prior_precision^-1)`` on ``p`` coefficients. With
+    ``P = prior_precision + sum_t design_t^T precision_t design_t`` and
+    ``b = sum_t design_t^T precision_t target_t`` the conditional is
+    ``N(P^-1 b, P^-1)``, and the data density with ``c`` integrated out is
+
+    ``log Z = -(n/2) log(2 pi) + (1/2) sum_t log det precision_t
+    - (1/2) sum_t target_t^T precision_t target_t
+    + (1/2) log det prior_precision - (1/2) log det P + (1/2) b^T P^-1 b``,
+
+    with ``n`` the number of values of the active records. A record whose precision
+    matrix is zero is inactive: it adds nothing to ``P`` or ``b`` and nothing to the
+    first three terms of ``log Z``, whatever its target (mask a record by zeroing
+    its precision). Everything is differentiable in the design.
+
+    Args:
+        design: Shape ``(T, k, p)``, for example :func:`sky_design` with ``k = 2``,
+            ``p = 4``.
+        target: Shape ``(T, k)``.
+        precision: Shape ``(T, k, k)``, symmetric positive semi-definite per record.
+        prior_precision: Shape ``(p, p)``, ``(p,)`` (diagonal) or a scalar (times the
+            identity); positive definite.
+
+    Returns:
+        ``(mean, chol, log_marginal)``: the mean ``(p,)``, the lower Cholesky factor
+        of ``P`` ``(p, p)`` (draw ``c = mean + solve_triangular(chol.T, z)`` with
+        ``z`` standard normal) and the scalar ``log Z``.
+    """
+    design, target, precision = map(jnp.asarray, (design, target, precision))
+    p = design.shape[-1]
+    prior = jnp.asarray(prior_precision)
+    prior = jnp.diag(jnp.broadcast_to(prior, (p,))) if prior.ndim < 2 else prior
+    weighted = jnp.einsum("tkl,tlp->tkp", precision, design)
+    information = prior + jnp.einsum("tkp,tkq->pq", design, weighted)
+    drive = jnp.einsum("tkp,tk->p", weighted, target)
+    chol = jnp.linalg.cholesky(information)
+    mean = jax.scipy.linalg.cho_solve((chol, True), drive)
+    determinant = jnp.linalg.det(precision)
+    active = determinant > 0
+    n_active = jnp.sum(active) * design.shape[-2]
+    data = 0.5 * jnp.sum(
+        jnp.where(active, jnp.log(jnp.where(active, determinant, 1.0)), 0.0)
+    ) - 0.5 * jnp.einsum("tk,tkl,tl->", target, precision, target)
+    prior_logdet = 2 * jnp.sum(jnp.log(jnp.diag(jnp.linalg.cholesky(prior))))
+    log_marginal = (
+        -0.5 * n_active * jnp.log(2 * jnp.pi)
+        + data
+        + 0.5 * prior_logdet
+        - jnp.sum(jnp.log(jnp.diag(chol)))
+        + 0.5 * drive @ mean
+    )
+    return mean, chol, log_marginal
+
+
 def fit_linear_map(orbit_shape: FrameOrbit, time_d, x, y, cov_or_errors, *, mask=None):
     """Fit the four sky constants at fixed nonlinear shape, with fixed shapes.
 
@@ -178,12 +260,7 @@ def fit_linear_map(orbit_shape: FrameOrbit, time_d, x, y, cov_or_errors, *, mask
     covariance = jnp.where(active[:, None, None], covariance, jnp.eye(2))
     root = jnp.linalg.cholesky(covariance)
     # Sanitizing times as well as data keeps masked NaNs out of the solve.
-    plane = orbit_shape.in_plane(jnp.where(active, time, orbit_shape.epoch_d))[0]
-    X, Y = plane[:, 0], plane[:, 1]
-    zero = jnp.zeros_like(X)
-    design = jnp.stack(
-        [jnp.stack([zero, X, zero, Y], -1), jnp.stack([X, zero, Y, zero], -1)], -2
-    )
+    design = sky_design(orbit_shape, jnp.where(active, time, orbit_shape.epoch_d))
     design = jnp.where(active[:, None, None], design, 0.0)
     data = jnp.where(active[:, None], jnp.stack([x, y], -1), 0.0)
     design = solve_triangular(root, design, lower=True).reshape(2 * count, 4)
