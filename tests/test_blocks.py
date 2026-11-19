@@ -146,6 +146,58 @@ def test_thiele_innes_block_writes_the_star_mass_and_reads_planet_masses():
         _block(ClassicalChart(), (1, 1))
 
 
+ALL_CHARTS = [*CHARTS, ThieleInnesChart()]
+
+PERIODIC = {
+    "ClassicalChart": {"W_rad", "w_rad", "M0_rad"},
+    "EccentricityVectorChart": {"W_rad", "M0_plus_w_rad"},
+}
+
+
+@pytest.mark.parametrize("chart", ALL_CHARTS, ids=_id)
+def test_periods_name_exactly_the_coordinates_the_orbit_repeats_in(chart):
+    """Fails if a declared period is wrong, or a coordinate repeats without one.
+
+    Shifting a coordinate by its declared period must leave the orbit (positions and
+    rate) unchanged to 1e-9 AU; shifting any coordinate declared non-periodic by
+    ``2 pi`` must move it by more than 1e-3 AU, so the declaration cannot be an
+    accidental superset. Frame, Cartesian and Thiele-Innes charts have no angle.
+    """
+    names = chart.coordinate_names
+    assert len(chart.periods) == len(names)
+    expected = PERIODIC.get(type(chart).__name__, set())
+    assert {n for n, p in zip(names, chart.periods, strict=True) if p} == expected
+    x = jnp.array([0.3, 0.2, -0.4, 0.6, 0.5, 0.7, 0.9][: chart.n_coords])
+    if isinstance(chart, ThieleInnesChart):
+        x = jnp.array([-4.0, 0.2, -0.3, 0.4, 0.5, -0.3, 0.45])
+    mu, epoch = 1.2e-3, 3.0
+
+    def state(y):
+        orbit = chart.to_orbit(y, mu_AU3_per_d2=mu, epoch_d=epoch)
+        r, _ = orbit.at(jnp.array([0.0, 40.0]))
+        return jnp.concatenate([jnp.ravel(r), jnp.atleast_1d(orbit.n_rad_per_d)])
+
+    base = state(x)
+    for k, (name, period) in enumerate(zip(names, chart.periods, strict=True)):
+        shift = 2 * np.pi if period is None else period
+        moved = state(x.at[k].add(shift))
+        gap = float(jnp.max(jnp.abs(moved - base)))
+        if period is None:
+            assert gap > 1e-3, name
+        else:
+            assert period == 2 * np.pi and gap < 1e-9, (name, gap)
+
+
+@pytest.mark.parametrize("chart", ALL_CHARTS, ids=_id)
+def test_a_block_reports_the_periods_of_its_chart(chart):
+    """Fails if the block drops the chart's names or periods."""
+    block = (
+        _ti_block() if isinstance(chart, ThieleInnesChart) else _block(chart, (0, 2))
+    )
+    assert block.coordinate_names == chart.coordinate_names
+    assert block.periods == chart.periods
+
+
 @pytest.mark.parametrize("chart", CHARTS, ids=_id)
 @pytest.mark.parametrize("rows", [(1,), (0, 2)])
 def test_forward_of_inverse_reproduces_the_orbits(model, chart, rows):

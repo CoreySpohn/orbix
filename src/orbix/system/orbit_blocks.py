@@ -99,6 +99,16 @@ class OrbitBlock(AbstractBlock):
         _check_rows(self.rows)
 
     @property
+    def coordinate_names(self) -> tuple[str, ...]:
+        """The chart's coordinate names."""
+        return self.chart.coordinate_names
+
+    @property
+    def periods(self) -> tuple[float | None, ...]:
+        """The chart's periods: ``2 pi`` on each plain angle, ``None`` elsewhere."""
+        return self.chart.periods
+
+    @property
     def owns(self) -> str:
         """Path of the stacked orbits."""
         return f"{self.system}.orbits"
@@ -223,6 +233,16 @@ class ThieleInnesBlock(AbstractBlock):
         _check_rows(self.rows)
         if len(self.rows) != 1:
             raise ValueError("ThieleInnesBlock frees exactly one row (one star mass)")
+
+    @property
+    def coordinate_names(self) -> tuple[str, ...]:
+        """The chart's coordinate names."""
+        return self.chart.coordinate_names
+
+    @property
+    def periods(self) -> tuple[float | None, ...]:
+        """The chart's periods: ``2 pi`` on each plain angle, ``None`` elsewhere."""
+        return self.chart.periods
 
     @property
     def owns(self) -> str:

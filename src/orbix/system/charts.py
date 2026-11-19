@@ -109,11 +109,14 @@ class AbstractChart(eqx.Module):
     Inverses use the state's own epoch and cannot recover angle windings.
     ``coordinate_names`` names the trailing axis, in order, with a unit suffix where
     the coordinate has a unit, for hosts that keep coordinates as a dict of named
-    arrays.
+    arrays. ``periods`` is aligned with ``coordinate_names``: the period of each
+    coordinate (the orbit depends on it only modulo the period, and the density is
+    that of one cell), or ``None`` for a coordinate with no period.
     """
 
     n_coords: eqx.AbstractClassVar[int]
     coordinate_names: eqx.AbstractClassVar[tuple[str, ...]]
+    periods: eqx.AbstractClassVar[tuple[float | None, ...]]
 
     @abstractmethod
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
@@ -181,6 +184,7 @@ class FrameChart(AbstractChart):
         "vy",
         "vz",
     )
+    periods: ClassVar[tuple[float | None, ...]] = (None,) * 7
     gauge_sd: float | None = eqx.field(static=True, default=0.1)
 
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
@@ -279,6 +283,14 @@ class EccentricityVectorChart(AbstractChart):
         "W_rad",
         "M0_plus_w_rad",
     )
+    periods: ClassVar[tuple[float | None, ...]] = (
+        None,
+        None,
+        None,
+        None,
+        two_pi,
+        two_pi,
+    )
 
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
         """Build the frame using mean longitude, without a periapsis singularity."""
@@ -358,6 +370,7 @@ class CartesianChart(AbstractChart):
 
     n_coords: ClassVar[int] = 6
     coordinate_names: ClassVar[tuple[str, ...]] = ("px", "py", "pz", "wx", "wy", "wz")
+    periods: ClassVar[tuple[float | None, ...]] = (None,) * 6
     scale_AU: float = eqx.field(static=True, default=1.0)
 
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
@@ -432,6 +445,14 @@ class ClassicalChart(AbstractChart):
         "W_rad",
         "w_rad",
         "M0_rad",
+    )
+    periods: ClassVar[tuple[float | None, ...]] = (
+        None,
+        None,
+        None,
+        two_pi,
+        two_pi,
+        two_pi,
     )
 
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
@@ -535,6 +556,7 @@ class ThieleInnesChart(AbstractChart):
         "F_AU",
         "G_AU",
     )
+    periods: ClassVar[tuple[float | None, ...]] = (None,) * 7
     branch: int = eqx.field(static=True, default=1)
 
     def __check_init__(self):
