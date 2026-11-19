@@ -29,6 +29,7 @@ from orbix.system.observables import (
     radial_velocity_m_per_s,
     separation_arcsec,
 )
+from orbix.system.orientation import IsotropicInclination, isotropic_orientation
 
 __all__ = [
     "AbstractChart",
@@ -42,6 +43,7 @@ __all__ = [
     "FrameOrbit",
     "Grid",
     "Halley",
+    "IsotropicInclination",
     "Markley",
     "SkyFrame",
     "System",
@@ -51,6 +53,7 @@ __all__ = [
     "enclosed_mu",
     "fit_linear_map",
     "frame_to_sky_block",
+    "isotropic_orientation",
     "kepler",
     "line_of_sight_branch",
     "offset_arcsec",
