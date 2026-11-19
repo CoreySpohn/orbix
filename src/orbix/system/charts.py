@@ -8,7 +8,9 @@ also supplies a normalized radial gauge density. Plain real angles have periodic
 predictions; densities are interpreted per fundamental cell of 2 pi.
 
 Transforms do not clip. As with exp and sigmoid, floating-point overflow,
-underflow and rounding to a boundary limit the representable input range.
+underflow and rounding to a boundary limit the representable input range. A
+wall-free inverse (``unconstrain``) of a value outside its interval by more than
+rounding is NaN in the whole row, never a finite coordinate on the wall.
 """
 
 import math
@@ -129,10 +131,17 @@ def _interval(y, low, high):
 
 
 def _interval_inverse(value, low, high):
-    """Invert :func:`_interval`; the position is held ``eps`` inside the interval."""
+    """Invert :func:`_interval`; NaN outside the interval by more than rounding.
+
+    A value within ``sqrt(eps)`` of the width of a bound is held ``eps`` inside it;
+    one further out has no coordinate and returns NaN.
+    """
     eps = jnp.finfo(jnp.result_type(value, float)).eps
-    position = jnp.clip((value - low) / (high - low), eps, 1.0 - eps)
-    return jnp.log(position) - jnp.log1p(-position)
+    position = (value - low) / (high - low)
+    outside = (position < -jnp.sqrt(eps)) | (position > 1.0 + jnp.sqrt(eps))
+    position = jnp.clip(position, eps, 1.0 - eps)
+    inverse = jnp.log(position) - jnp.log1p(-position)
+    return jnp.where(outside, jnp.nan, inverse)
 
 
 class AbstractChart(eqx.Module):
@@ -255,7 +264,9 @@ class AbstractChart(eqx.Module):
         """Invert :meth:`constrain`: wall-free coordinates of chart coordinates ``x``.
 
         A coordinate within one rounding of its bound is held ``eps`` inside it, so
-        the result is finite.
+        the result is finite. One outside by more than ``sqrt(eps)`` of the interval
+        width (of ``high`` for the eccentricity disk) has no wall-free coordinate: the
+        whole row of the result is NaN.
         """
         x = _coordinates(x, self.n_coords)
         y = x
@@ -268,9 +279,20 @@ class AbstractChart(eqx.Module):
             else:
                 k = 1 - high**2
                 u2 = jnp.sum(x[..., 1:3] ** 2, axis=-1)
-                denom = jnp.sqrt(jnp.maximum(high**2 - k * u2, jnp.finfo(x.dtype).tiny))
-                y = y.at[..., 1:3].set(x[..., 1:3] / denom[..., None])
-        return y
+                eps = jnp.finfo(x.dtype).eps
+                e = jnp.sqrt(u2 / (1.0 + u2))
+                outside = e > high * (1.0 + jnp.sqrt(eps))
+                e2 = jnp.minimum(e, high * (1.0 - eps)) ** 2
+                u2_held = e2 / (1.0 - e2)
+                u2_held = jnp.where(e > high * (1.0 - eps), u2_held, u2)
+                denom = jnp.sqrt(high**2 - k * u2_held)
+                hold = jnp.sqrt(u2_held / jnp.where(u2 > 0, u2, 1.0))
+                held = jnp.where(e > high * (1.0 - eps), hold, 1.0)
+                y = y.at[..., 1:3].set(
+                    (x[..., 1:3] * held[..., None]) / denom[..., None]
+                )
+                y = jnp.where(outside[..., None], jnp.nan, y)
+        return jnp.where(jnp.any(jnp.isnan(y), axis=-1, keepdims=True), jnp.nan, y)
 
 
 class FrameChart(AbstractChart):

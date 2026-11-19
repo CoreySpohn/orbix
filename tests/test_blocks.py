@@ -24,6 +24,7 @@ from orbix.system import (
     ThieleInnesChart,
     enclosed_mu,
 )
+from orbix.system.charts import disk_to_plane
 from orbix.system.core import GM_SUN_AU3_PER_D2 as GM
 from orbix.system.rotation import rotate
 
@@ -356,9 +357,7 @@ LOG_16 = np.log(16.0)
 
 def _support_of(block, model):
     """The chart-coordinate bounds a block maps."""
-    if isinstance(block, ThieleInnesBlock):
-        return block._support()
-    return block._support(block._mu(model)[..., jnp.asarray(block.rows)])
+    return block.chart_support(model)
 
 
 def chart_coordinates(block, model, y):
@@ -682,7 +681,7 @@ def test_thiele_innes_sheet_sum_is_log_two_for_a_symmetric_law():
     block = _ti_block()
     x = block.inverse(model)
     chart = block.chart
-    coords, log_jac = block._coords(x)
+    coords, log_jac = block._coords(x, model)
     orbit = chart.to_orbit(
         coords, mu_AU3_per_d2=1.0, epoch_d=model.dynamics.orbits.epoch_d[:1]
     )
@@ -759,6 +758,43 @@ def test_same_map_compares_the_support_and_nothing_else_of_the_law():
     )
     assert not ti.same_map(_ti_block(rows=(1,)))
     assert not ti.same_map(base)
+    assert base.same_layout(_block(ClassicalChart(), (0,), wide))
+    assert base.same_layout(_block(ClassicalChart(), (0,), P_LAW))
+    assert not base.same_layout(_block(FrameChart(), (0,)))
+    assert not base.same_layout(_block(ClassicalChart(), (1,)))
+    assert not base.same_layout(_ti_block())
+    assert ti.same_layout(_ti_block(TI_P_LAW))
+
+
+def test_inverse_is_nan_outside_the_support_and_finite_at_its_edge():
+    """Fails if a model value outside the law bounds keeps a finite wall coordinate.
+
+    Narrowing ``LogUniform(0.8, 3)`` to ``(1.0, 2.0)`` puts a = 0.8 and a = 3 outside;
+    every coordinate of that row is NaN. a on the wall plus one ulp stays finite, so
+    rounding is not a refusal. An eccentricity vector chart refuses the same way.
+    """
+    model = _system_model()
+    narrow = _block(
+        ClassicalChart(), (0,), OrbitLaw(E_LAW, a_AU=priorities.LogUniform(1.0, 2.0))
+    )
+    for a in (0.8, 3.0):
+        x = narrow.inverse(_assign(model, {"dynamics.orbits": _with_a(model, a)}))
+        assert all(np.isnan(np.asarray(v)).all() for v in x.values())
+    for a in (1.0 + 1e-15, 2.0 - 1e-15, 1.5):
+        x = narrow.inverse(_assign(model, {"dynamics.orbits": _with_a(model, a)}))
+        assert all(np.isfinite(np.asarray(v)).all() for v in x.values())
+
+    chart = EccentricityVectorChart()
+    support = {"e": (jnp.asarray(0.0), jnp.asarray(0.8))}
+
+    def unconstrained(radius):
+        plane = disk_to_plane(jnp.asarray([radius, 0.0]))
+        x = jnp.zeros((1, chart.n_coords)).at[:, 1:3].set(plane)
+        return np.asarray(chart.unconstrain(x, support))
+
+    assert np.isfinite(unconstrained(0.5)).all()
+    assert np.isfinite(unconstrained(0.8 * (1 + 1e-12))).all()
+    assert np.isnan(unconstrained(1.2 * 0.8)).all()
 
 
 def test_a_prior_swap_that_moves_the_bounds_is_a_different_map():

@@ -153,8 +153,15 @@ class OrbitBlock(AbstractBlock):
             resolve(model, self._star_mass), resolve(model, self._planet_masses)
         )
 
-    def _support(self, mu) -> dict:
-        """Chart-coordinate bounds of the law at the freed rows' mu."""
+    def chart_support(self, model) -> dict[str, tuple[Array, Array]]:
+        """Bounds of the law in chart coordinates, at the freed rows' rate in ``model``.
+
+        Keys are ``"ln_size"`` (the size coordinate, ``ln a`` or ``ln n``) and ``"e"``
+        (the eccentricity), present for the coordinates the law bounds and the chart
+        maps; each value is ``(low, high)``. The dict is what the chart's
+        ``constrain`` and ``unconstrain`` take.
+        """
+        mu = self._mu(model)[..., jnp.asarray(self.rows)]
         return _chart_support(self.chart, self.law.support(), mu)
 
     def _freed(self, x, model):
@@ -163,7 +170,7 @@ class OrbitBlock(AbstractBlock):
         rows = jnp.asarray(self.rows)
         mu = self._mu(model)
         coords, log_jac = self.chart.constrain(
-            _stack(self.coordinate_names, self.rows, x), self._support(mu[..., rows])
+            _stack(self.coordinate_names, self.rows, x), self.chart_support(model)
         )
         return held, mu, coords, held.epoch_d[..., rows], log_jac
 
@@ -203,15 +210,16 @@ class OrbitBlock(AbstractBlock):
         )
         coords = self.chart.sample_coordinates(k_chart, orbit)
         return _unstack(
-            self.coordinate_names, self.chart.unconstrain(coords, self._support(mu))
+            self.coordinate_names,
+            self.chart.unconstrain(coords, self.chart_support(model)),
         )
 
     def inverse(self, model) -> dict[str, Array]:
         """Coordinates of the freed rows of the model's orbits."""
         coords = self.chart.from_orbit(_take(resolve(model, self.owns), self.rows))
-        mu = self._mu(model)[..., jnp.asarray(self.rows)]
         return _unstack(
-            self.coordinate_names, self.chart.unconstrain(coords, self._support(mu))
+            self.coordinate_names,
+            self.chart.unconstrain(coords, self.chart_support(model)),
         )
 
     @property
@@ -239,26 +247,30 @@ class OrbitBlock(AbstractBlock):
         )
         coords = self.chart.unit_coordinates(c[:, n_law:], orbit)
         return _unstack(
-            self.coordinate_names, self.chart.unconstrain(coords, self._support(mu))
+            self.coordinate_names,
+            self.chart.unconstrain(coords, self.chart_support(model)),
+        )
+
+    def same_layout(self, other) -> bool:
+        """Whether ``other`` matches in type, chart, rows and system; not the law."""
+        return (
+            type(other) is type(self)
+            and other.chart == self.chart
+            and other.rows == self.rows
+            and other.system == self.system
         )
 
     def same_map(self, other) -> bool:
-        """Whether ``other`` matches in chart, rows, system and the bounds it maps.
+        """Whether ``other`` has the same layout and the bounds the chart maps.
 
         The map from coordinates to orbits depends on the law's bounds that the chart
         has a coordinate for, so a law with other such bounds is another map (a traced
         bound counts as different). The shape of the law inside the bounds, and a bound
         no coordinate carries, are not part of the map.
         """
-        return (
-            type(other) is type(self)
-            and other.chart == self.chart
-            and other.rows == self.rows
-            and other.system == self.system
-            and _same_bounds(
-                _map_bounds(self.chart, self.law.support()),
-                _map_bounds(other.chart, other.law.support()),
-            )
+        return self.same_layout(other) and _same_bounds(
+            _map_bounds(self.chart, self.law.support()),
+            _map_bounds(other.chart, other.law.support()),
         )
 
 
@@ -346,20 +358,24 @@ class ThieleInnesBlock(AbstractBlock):
     def _enclosed_mass(self, coords) -> Array:
         return self.chart.implied_mu(coords)[..., 0] / GM_SUN_AU3_PER_D2
 
-    def _support(self) -> dict:
-        """Chart-coordinate bounds of the law."""
+    def chart_support(self, model) -> dict[str, tuple[Array, Array]]:
+        """Bounds of the law in chart coordinates, as :meth:`OrbitBlock.chart_support`.
+
+        The Thiele-Innes size coordinate is ``ln n``, so the bounds do not depend on
+        ``model``; the argument keeps one signature across blocks.
+        """
         return _chart_support(self.chart, self.law.support(), None)
 
-    def _coords(self, x):
+    def _coords(self, x, model):
         """Chart coordinates of block coordinates ``x`` and the map's log Jacobian."""
         return self.chart.constrain(
-            _stack(self.coordinate_names, self.rows, x), self._support()
+            _stack(self.coordinate_names, self.rows, x), self.chart_support(model)
         )
 
     def forward(self, x, model) -> dict[str, object]:
         """Build the row and return it with the star mass it implies."""
         held = resolve(model, self.owns)
-        coords, _ = self._coords(x)
+        coords, _ = self._coords(x, model)
         new = self.chart.to_orbit(
             coords,
             mu_AU3_per_d2=1.0,
@@ -380,7 +396,7 @@ class ThieleInnesBlock(AbstractBlock):
         draw lands on.
         """
         held = resolve(model, self.owns)
-        coords, log_jac = self._coords(x)
+        coords, log_jac = self._coords(x, model)
         coords, excluded = self.chart.exclude(coords)
         epoch = held.epoch_d[..., jnp.asarray(self.rows)]
         sheets = [
@@ -410,14 +426,16 @@ class ThieleInnesBlock(AbstractBlock):
         )
         coords = self.chart.sample_coordinates(k_chart, orbit)
         return _unstack(
-            self.coordinate_names, self.chart.unconstrain(coords, self._support())
+            self.coordinate_names,
+            self.chart.unconstrain(coords, self.chart_support(model)),
         )
 
     def inverse(self, model) -> dict[str, Array]:
         """Coordinates of the freed row of the model's orbits."""
         coords = self.chart.from_orbit(_take(resolve(model, self.owns), self.rows))
         return _unstack(
-            self.coordinate_names, self.chart.unconstrain(coords, self._support())
+            self.coordinate_names,
+            self.chart.unconstrain(coords, self.chart_support(model)),
         )
 
     @property
@@ -444,26 +462,30 @@ class ThieleInnesBlock(AbstractBlock):
         )
         coords = self.chart.unit_coordinates(c[:, :0], orbit)
         return _unstack(
-            self.coordinate_names, self.chart.unconstrain(coords, self._support())
+            self.coordinate_names,
+            self.chart.unconstrain(coords, self.chart_support(model)),
+        )
+
+    def same_layout(self, other) -> bool:
+        """Whether ``other`` matches in type, chart, rows and system; not the law."""
+        return (
+            type(other) is type(self)
+            and other.chart == self.chart
+            and other.rows == self.rows
+            and other.system == self.system
         )
 
     def same_map(self, other) -> bool:
-        """Whether ``other`` matches in chart, rows, system and the bounds it maps.
+        """Whether ``other`` has the same layout and the bounds the chart maps.
 
         The map from coordinates to orbits depends on the law's bounds that the chart
         has a coordinate for, so a law with other such bounds is another map (a traced
         bound counts as different). The shape of the law inside the bounds, and a bound
         no coordinate carries, are not part of the map.
         """
-        return (
-            type(other) is type(self)
-            and other.chart == self.chart
-            and other.rows == self.rows
-            and other.system == self.system
-            and _same_bounds(
-                _map_bounds(self.chart, self.law.support()),
-                _map_bounds(other.chart, other.law.support()),
-            )
+        return self.same_layout(other) and _same_bounds(
+            _map_bounds(self.chart, self.law.support()),
+            _map_bounds(other.chart, other.law.support()),
         )
 
 
