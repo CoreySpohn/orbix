@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import priorities.testing
 
-from orbix.system import ClassicalChart, IsotropicInclination, isotropic_orientation
+from orbix.system import ClassicalChart, IsotropicInclination
 
 jax.config.update("jax_enable_x64", True)
 
@@ -28,12 +28,3 @@ def test_matches_classical_chart_reference_measure():
     # The chart density at z=0 is log(sech(0)^2)=0, so subtract nothing else.
     ours = dist.log_prob(inc) + jnp.log(jnp.sin(inc)) + jnp.log(2.0)
     np.testing.assert_allclose(ours, chart_inc, atol=1e-12)
-
-
-def test_orientation_set():
-    """The helper returns the inclination record and three uniform angles."""
-    inc, node, peri, anomaly = isotropic_orientation()
-    assert isinstance(inc, IsotropicInclination)
-    for angle in (node, peri, anomaly):
-        low, high = angle.support()
-        assert (float(low), float(high)) == (0.0, 2 * np.pi)

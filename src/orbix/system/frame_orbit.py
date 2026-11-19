@@ -157,7 +157,7 @@ class FrameOrbit(eqx.Module):
         )
 
     @classmethod
-    def unit_plane(cls, e, tp_d, n_rad_per_d):
+    def from_unit_plane(cls, e, tp_d, n_rad_per_d):
         """Build a unit-size orbit for dimensionless perifocal coordinates.
 
         The semi-major axis is one AU and the periapsis lies on the f axis at
@@ -175,10 +175,10 @@ class FrameOrbit(eqx.Module):
         )
 
     @classmethod
-    def unit_plane_from_phase(cls, e, ln_period_d, tau, t_ref_d):
-        """Build a unit_plane with periapsis at t_ref_d + tau periods."""
+    def from_unit_plane_phase(cls, e, ln_period_d, tau, t_ref_d):
+        """Build a from_unit_plane orbit with periapsis at t_ref_d + tau periods."""
         period = jnp.exp(ln_period_d)
-        return cls.unit_plane(e, t_ref_d + period * tau, 2 * jnp.pi / period)
+        return cls.from_unit_plane(e, t_ref_d + period * tau, 2 * jnp.pi / period)
 
     def to_classical(self):
         """Return a_AU, e, i_rad, W_rad, w_rad, M0_rad as a dictionary.
@@ -280,28 +280,26 @@ class FrameOrbit(eqx.Module):
         position, _ = self.at(time_d, solver=solver)
         return offset_arcsec(position, dist_pc)
 
-    def periapsis_rows(self):
-        """Return rows (a, e, cos_i, W, cos_w, sin_w, tp), shape B + (7,).
+    def to_periapsis_elements(self):
+        """Return a_AU, e, cos_i, W_rad, cos_w, sin_w, tp_d as a dictionary.
 
-        The inverse of from_periapsis_time. The time of periapsis is the epoch
-        minus the epoch mean anomaly over the mean motion, so it lies within
-        one period before the epoch. Classical angles are undefined at e=0 and
-        cos_i=+-1; the row is for output only.
+        The keys are the arguments of from_periapsis_time, so
+        ``from_periapsis_time(**elements, mu_AU3_per_d2=mu)`` rebuilds the
+        orbit. Each value has the orbit's batch shape. The time of periapsis
+        is the epoch minus the epoch mean anomaly over the mean motion, so it
+        lies within one period before the epoch. Classical angles are
+        undefined at e=0 and cos_i=+-1; the elements are for output only.
         """
         elements = self.to_classical()
-        tp = self.epoch_d - elements["M0_rad"] / self.n_rad_per_d
-        return jnp.stack(
-            [
-                elements["a_AU"],
-                elements["e"],
-                jnp.cos(elements["i_rad"]),
-                elements["W_rad"],
-                jnp.cos(elements["w_rad"]),
-                jnp.sin(elements["w_rad"]),
-                tp,
-            ],
-            axis=-1,
-        )
+        return {
+            "a_AU": elements["a_AU"],
+            "e": elements["e"],
+            "cos_i": jnp.cos(elements["i_rad"]),
+            "W_rad": elements["W_rad"],
+            "cos_w": jnp.cos(elements["w_rad"]),
+            "sin_w": jnp.sin(elements["w_rad"]),
+            "tp_d": self.epoch_d - elements["M0_rad"] / self.n_rad_per_d,
+        }
 
     def plane_basis(self) -> Array:
         """Return the constant B + (3, 2) plane-to-sky matrix in AU.

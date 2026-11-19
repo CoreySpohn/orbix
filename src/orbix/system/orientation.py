@@ -37,9 +37,9 @@ class IsotropicInclination(priorities.AbstractDistribution):
         out = jnp.where(inside, jnp.log(jnp.where(inside, s, 1.0) / 2), -jnp.inf)
         return jnp.where(jnp.isnan(value), jnp.nan, out)
 
-    def sample(self, key: Array, shape: tuple[int, ...] = ()):
-        """Draw inclinations of the given shape."""
-        return self.icdf(jax.random.uniform(key, shape))
+    def sample(self, key: Array, sample_shape: tuple[int, ...] = ()):
+        """Draw inclinations of shape ``sample_shape``."""
+        return self.icdf(jax.random.uniform(key, sample_shape))
 
     def cdf(self, value):
         """Return ``sin(i/2)^2``, accurate near the pole."""
@@ -47,18 +47,8 @@ class IsotropicInclination(priorities.AbstractDistribution):
         out = jnp.sin(jnp.clip(value, 0.0, math.pi) / 2) ** 2
         return jnp.where(jnp.isnan(value), jnp.nan, out)
 
-    def icdf(self, unit):
-        """Return ``2 arcsin(sqrt(u))``, accurate near the pole."""
-        unit = jnp.asarray(unit)
-        out = 2 * jnp.arcsin(jnp.sqrt(jnp.clip(unit, 0.0, 1.0)))
-        return jnp.where((unit >= 0) & (unit <= 1), out, jnp.nan)
-
-
-def isotropic_orientation():
-    """Return the isotropic orientation as ``(inc, node, argperi, mean_anomaly)``.
-
-    The inclination is `IsotropicInclination`; the other three angles are
-    independent `priorities.Uniform` on ``[0, 2 pi]``. All are in radians.
-    """
-    angle = priorities.Uniform(0.0, 2 * math.pi)
-    return IsotropicInclination(), angle, angle, angle
+    def icdf(self, q):
+        """Return ``2 arcsin(sqrt(q))``, accurate near the pole."""
+        q = jnp.asarray(q)
+        out = 2 * jnp.arcsin(jnp.sqrt(jnp.clip(q, 0.0, 1.0)))
+        return jnp.where((q >= 0) & (q <= 1), out, jnp.nan)

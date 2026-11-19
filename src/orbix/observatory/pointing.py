@@ -52,7 +52,7 @@ def sun_longitude_deg(epoch: Epoch, time_d: ArrayLike) -> Array:
 
 
 def ecliptic_pointing(
-    ra_rad: ArrayLike, dec_rad: ArrayLike, epoch: Epoch, time_d: ArrayLike
+    ra_deg: ArrayLike, dec_deg: ArrayLike, epoch: Epoch, time_d: ArrayLike
 ) -> tuple[Array, Array]:
     """Ecliptic latitude and Sun-relative longitude of a target for the zodi model.
 
@@ -66,8 +66,8 @@ def ecliptic_pointing(
     Elongation from the Sun is ``arccos(cos(beta) cos(dlon))``.
 
     Args:
-        ra_rad: Target right ascension [rad].
-        dec_rad: Target declination [rad].
+        ra_deg: Target right ascension [deg].
+        dec_deg: Target declination [deg].
         epoch: Static day zero of ``time_d``.
         time_d: Days from ``epoch``. Differentiable. All array arguments
             broadcast to one output shape.
@@ -80,8 +80,8 @@ def ecliptic_pointing(
         that of the mean solar motion plus the equation of centre. It is not
         defined at the ecliptic poles, where the longitude is degenerate.
     """
-    ra = jnp.asarray(ra_rad)
-    dec = jnp.asarray(dec_rad)
+    ra = jnp.radians(ra_deg)
+    dec = jnp.radians(dec_deg)
     cos_obl = jnp.cos(jnp.radians(_OBLIQUITY_J2000_DEG))
     sin_obl = jnp.sin(jnp.radians(_OBLIQUITY_J2000_DEG))
     sin_beta = jnp.sin(dec) * cos_obl - jnp.cos(dec) * sin_obl * jnp.sin(ra)

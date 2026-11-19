@@ -18,7 +18,7 @@ def _ecliptic_to_radec(lon_deg, lat_deg):
     x = np.cos(lat) * np.cos(lon)
     y = np.cos(lat) * np.sin(lon) * np.cos(obl) - np.sin(lat) * np.sin(obl)
     z = np.cos(lat) * np.sin(lon) * np.sin(obl) + np.sin(lat) * np.cos(obl)
-    return np.arctan2(y, x), np.arcsin(z)
+    return np.degrees(np.arctan2(y, x)), np.degrees(np.arcsin(z))
 
 
 def _jd(y, m, d):
@@ -77,8 +77,8 @@ def test_sun_longitude_at_equinox_and_solstice(date, lon):
 
 def test_dlon_range_and_shape():
     """Outputs broadcast and the longitude difference is wrapped to [-180, 180)."""
-    ra = jnp.linspace(0.0, 6.28, 7)
-    beta, dlon = ecliptic_pointing(ra, 0.1, EPOCH, jnp.linspace(0.0, 365.0, 7))
+    ra = jnp.linspace(0.0, 360.0, 7)
+    beta, dlon = ecliptic_pointing(ra, 5.0, EPOCH, jnp.linspace(0.0, 365.0, 7))
     assert beta.shape == dlon.shape == (7,)
     assert bool(jnp.all((dlon >= -180.0) & (dlon < 180.0)))
 
@@ -105,7 +105,7 @@ def test_matches_astropy():
         BarycentricMeanEcliptic(equinox="J2000")
     )
     want_dlon = (tgt.lon.deg - sun.lon.deg + 180.0) % 360.0 - 180.0
-    beta, dlon = ecliptic_pointing(ra, dec, EPOCH, t_d)
+    beta, dlon = ecliptic_pointing(np.degrees(ra), np.degrees(dec), EPOCH, t_d)
     assert np.max(np.abs(np.asarray(beta) - tgt.lat.deg)) < 1e-3
     err = (np.asarray(dlon) - want_dlon + 180.0) % 360.0 - 180.0
     assert np.max(np.abs(err)) < 0.03
@@ -113,7 +113,7 @@ def test_matches_astropy():
 
 def test_gradient_in_time_matches_central_difference():
     """The time derivative matches central differences and the solar rate."""
-    ra, dec = 1.0, 0.3
+    ra, dec = 57.0, 17.0
     t0 = 1234.5
     grad = jax.grad(lambda t: ecliptic_pointing(ra, dec, EPOCH, t)[1])(t0)
     h = 0.5

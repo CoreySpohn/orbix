@@ -549,32 +549,35 @@ def test_offsets_arcsec_matches_recorded_values(case, expected):
 
 
 @pytest.mark.parametrize("case", PERIAPSIS_CASES[1:])
-def test_periapsis_rows_round_trip(case):
+def test_periapsis_elements_round_trip(case):
     """Rows recover the construction inputs and rebuild the same orbit."""
     a, e, cos_i, node, cos_w, sin_w, tp, mass_kg = case
     mu = G * mass_kg
     orbit = FrameOrbit.from_periapsis_time(
         a, e, cos_i, node, cos_w, sin_w, tp, mu_AU3_per_d2=mu
     )
-    rows = orbit.periapsis_rows()
-    assert rows.shape == (7,)
+    elements = orbit.to_periapsis_elements()
+    assert list(elements) == ["a_AU", "e", "cos_i", "W_rad", "cos_w", "sin_w", "tp_d"]
     np.testing.assert_allclose(
-        rows, [a, e, cos_i, node, cos_w, sin_w, tp], rtol=2e-4, atol=2e-4
+        list(elements.values()),
+        [a, e, cos_i, node, cos_w, sin_w, tp],
+        rtol=2e-4,
+        atol=2e-4,
     )
-    rebuilt = FrameOrbit.from_periapsis_time(*rows, mu_AU3_per_d2=mu)
+    rebuilt = FrameOrbit.from_periapsis_time(**elements, mu_AU3_per_d2=mu)
     for name in ("a_AU", "n_rad_per_d", "ex", "ey", "quat", "epoch_d"):
         np.testing.assert_allclose(
             getattr(rebuilt, name), getattr(orbit, name), rtol=1e-4, atol=1e-4
         )
 
 
-def test_periapsis_rows_batch_shape_and_offsets_broadcast():
+def test_periapsis_elements_batch_shape_and_offsets_broadcast():
     """Batched orbits give batched rows, and dist_pc broadcasts over the batch."""
     a, e = jnp.array([1.0, 2.0, 3.0]), jnp.array([0.1, 0.2, 0.3])
     orbit = FrameOrbit.from_periapsis_time(
         a, e, 0.4, 1.0, 0.6, 0.8, 5.0, mu_AU3_per_d2=G * Msun2kg
     )
-    assert orbit.periapsis_rows().shape == (3, 7)
+    assert all(v.shape == (3,) for v in orbit.to_periapsis_elements().values())
     east, north = orbit.offsets_arcsec(TIMES, jnp.array([5.0, 10.0, 20.0]))
     assert east.shape == north.shape == (3, 4)
     single = FrameOrbit.from_periapsis_time(
@@ -585,15 +588,15 @@ def test_periapsis_rows_batch_shape_and_offsets_broadcast():
     )
 
 
-def test_unit_plane_matches_perifocal_coordinates():
+def test_from_unit_plane_matches_perifocal_coordinates():
     """Unit planes put periapsis on the f axis and keep the phase convention."""
     e, period = 0.3, 400.0
     n = 2 * jnp.pi / period
-    plane = FrameOrbit.unit_plane(e, 50.0, n)
+    plane = FrameOrbit.from_unit_plane(e, 50.0, n)
     xy, _ = plane.perifocal_coordinates(jnp.array([50.0, 50.0 + period / 2]))
     np.testing.assert_allclose(xy[0], [1 - e, 0.0], atol=1e-6)
     np.testing.assert_allclose(xy[1], [-1 - e, 0.0], atol=1e-5)
-    phase = FrameOrbit.unit_plane_from_phase(e, jnp.log(period), 0.2, 50.0)
+    phase = FrameOrbit.from_unit_plane_phase(e, jnp.log(period), 0.2, 50.0)
     np.testing.assert_allclose(phase.epoch_d, 50.0 + 0.2 * period, rtol=1e-6)
     np.testing.assert_allclose(phase.n_rad_per_d, n, rtol=1e-6)
     recorded = [
