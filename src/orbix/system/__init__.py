@@ -1,6 +1,12 @@
 """Non-singular orbit frames, Jacobi systems, and solve-once ephemerides."""
 
 from orbix.kepler import AbstractKeplerSolver, Grid, Halley, Markley, kepler
+from orbix.system.block import (
+    AbstractBlock,
+    block_order,
+    check_writers,
+    paths_overlap,
+)
 from orbix.system.charts import (
     AbstractChart,
     CartesianChart,
@@ -29,9 +35,11 @@ from orbix.system.observables import (
     radial_velocity_m_per_s,
     separation_arcsec,
 )
+from orbix.system.orbit_blocks import OrbitBlock, ThieleInnesBlock
 from orbix.system.orientation import IsotropicInclination
 
 __all__ = [
+    "AbstractBlock",
     "AbstractChart",
     "AbstractKeplerSolver",
     "Body",
@@ -45,9 +53,13 @@ __all__ = [
     "Halley",
     "IsotropicInclination",
     "Markley",
+    "OrbitBlock",
     "SkyFrame",
     "System",
+    "ThieleInnesBlock",
     "ThieleInnesChart",
+    "block_order",
+    "check_writers",
     "disk_to_plane",
     "distance_AU",
     "enclosed_mu",
@@ -56,6 +68,7 @@ __all__ = [
     "kepler",
     "line_of_sight_branch",
     "offset_arcsec",
+    "paths_overlap",
     "periapsis_chart_shape",
     "phase_angle_rad",
     "plane_to_disk",

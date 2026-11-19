@@ -93,9 +93,12 @@ class AbstractChart(eqx.Module):
     Coordinates have shape B + (n_coords,), and log_volume returns shape B.
     mu_AU3_per_d2 must be positive; it and epoch_d broadcast against B.
     Inverses use the state's own epoch and cannot recover angle windings.
+    ``coordinate_names`` names the trailing axis, in order, for hosts that keep
+    coordinates as a dict of named arrays.
     """
 
     n_coords: eqx.AbstractClassVar[int]
+    coordinate_names: ClassVar[tuple[str, ...]]
 
     @abstractmethod
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
@@ -138,6 +141,15 @@ class FrameChart(AbstractChart):
     """
 
     n_coords: ClassVar[int] = 7
+    coordinate_names: ClassVar[tuple[str, ...]] = (
+        "ln_a",
+        "ux",
+        "uy",
+        "vw",
+        "vx",
+        "vy",
+        "vz",
+    )
     gauge_sd: float | None = eqx.field(static=True, default=0.1)
 
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
@@ -205,6 +217,14 @@ class EccentricityVectorChart(AbstractChart):
     """
 
     n_coords: ClassVar[int] = 6
+    coordinate_names: ClassVar[tuple[str, ...]] = (
+        "ln_a",
+        "ux",
+        "uy",
+        "atanh_cos_i",
+        "W_rad",
+        "M0_plus_w_rad",
+    )
 
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
         """Build the frame using mean longitude, without a periapsis singularity."""
@@ -275,6 +295,7 @@ class CartesianChart(AbstractChart):
     """
 
     n_coords: ClassVar[int] = 6
+    coordinate_names: ClassVar[tuple[str, ...]] = ("px", "py", "pz", "wx", "wy", "wz")
     scale_AU: float = eqx.field(static=True, default=1.0)
 
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
@@ -336,6 +357,14 @@ class ClassicalChart(AbstractChart):
     """
 
     n_coords: ClassVar[int] = 6
+    coordinate_names: ClassVar[tuple[str, ...]] = (
+        "ln_a",
+        "logit_e",
+        "atanh_cos_i",
+        "W_rad",
+        "w_rad",
+        "M0_rad",
+    )
 
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
         """Build from smoothly transformed classical elements."""
@@ -422,6 +451,15 @@ class ThieleInnesChart(AbstractChart):
     """
 
     n_coords: ClassVar[int] = 7
+    coordinate_names: ClassVar[tuple[str, ...]] = (
+        "ln_n",
+        "ux",
+        "uy",
+        "A",
+        "B",
+        "F",
+        "G",
+    )
     branch: int = eqx.field(static=True, default=1)
 
     def __check_init__(self):
