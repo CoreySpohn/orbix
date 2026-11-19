@@ -73,10 +73,71 @@ All strategies support broadcasting and implicit forward/reverse derivatives,
 including circular orbits and higher orders. Enable
 `jax.config.update("jax_enable_x64", True)` for double-precision accuracy.
 
+## Orbits as fit parameters
+
+`orbix.system` also describes an orbit as the free parameter of a fit. Three pieces work
+together:
+
+- A chart maps an orbit to a vector of real coordinates and back, with the exact volume of
+  the map: `ClassicalChart`, `EccentricityVectorChart`, `FrameChart`, `CartesianChart` and
+  `ThieleInnesChart`.
+- An orbit law is the prior density of an orbit, independent of the chart. `OrbitLaw`
+  takes a law on the semi-major axis or the period and one on the eccentricity, with
+  isotropic orientation and uniform phase.
+- A block combines a chart, a law and the rows of a `System` it frees. `OrbitBlock` works
+  with every chart except the Thiele-Innes one, and `ThieleInnesBlock` frees one row
+  through the Thiele-Innes chart and writes the star mass its coordinates imply. Both
+  follow the `hwoutils.blocks.AbstractBlock` contract, which is how photomancy fits use
+  them.
+
+```python
+import jax
+from hwoutils.constants import G, Msun2kg
+from orbix.system import (
+    Body,
+    EccentricityVectorChart,
+    FrameOrbit,
+    OrbitBlock,
+    OrbitLaw,
+    SkyFrame,
+    System,
+)
+from priorities import LogUniform, Uniform
+
+jax.config.update("jax_enable_x64", True)
+
+orbit = FrameOrbit.from_classical(
+    a_AU=[1.0],
+    e=0.2,
+    W_rad=0.5,
+    i_rad=1.0,
+    w_rad=0.3,
+    M0_rad=0.0,
+    mu_AU3_per_d2=G * Msun2kg,
+)
+system = System(Body(1.0), Body([0.0]), orbit, SkyFrame(10.0))
+
+law = OrbitLaw(period_d=LogUniform(100.0, 10_000.0), eccentricity=Uniform(0.0, 0.9))
+block = OrbitBlock(EccentricityVectorChart(), law, rows=(0,), system="")
+
+x = block.sample(jax.random.key(0), system)  # {name: (1,)} per coordinate
+orbits = block.forward(x, system)["orbits"]  # the freed row written into the orbits
+log_p = block.log_prob(x, system)  # normalized density of the coordinates
+print(block.coordinate_names)
+```
+
+Every coordinate takes any real value. A coordinate that the law bounds is mapped onto the
+real line with a logit and named with the prefix `logit_` (`logit_ln_a_AU` above), and the
+density includes the log derivative of that map. In the Thiele-Innes chart the sky
+position of a planet is linear in the four constants `(A, B, F, G)`: `sky_design` gives the
+design matrix at a fixed orbit shape and `linear_gaussian_conditional` the exact Gaussian
+conditional of the constants under Gaussian astrometric errors.
+
 ## Scope
 
-orbix provides Keplerian orbit geometry and Kepler-equation solvers; scene
-composition lives in skyscapes.
+orbix provides Keplerian orbit geometry, Kepler-equation solvers, and the charts, laws
+and blocks that make an orbit a fit parameter. Scene composition lives in skyscapes, and
+inference lives in photomancy.
 
 ## Citation
 
