@@ -75,4 +75,5 @@ examples/prepared
 :caption: Reference
 
 gallery
+migration
 ```
