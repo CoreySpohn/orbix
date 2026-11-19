@@ -156,7 +156,9 @@ def test_volume_against_automatic_jacobian(source, target):
     Truth: change of variables for one shared reference measure; automatic
     Jacobians independently differentiate orbit interchange at five seed-0
     generic points. Residual spread <2e-11 allows x64 rotation/inverse and
-    determinant conditioning; the additive normalization is not asserted.
+    determinant conditioning. Between the charts without a gauge the volumes are
+    exact, so the residual is also zero (the frame charts are normalized in
+    the block normalization tests).
 
     For the 6x7 frame Jacobian J, normalization kills the radial direction
     and scales three quaternion tangent directions by 1/r. The coarea
@@ -191,6 +193,8 @@ def test_volume_against_automatic_jacobian(source, target):
     spread = np.ptp(residual)
     print(f"{type(source).__name__} -> {type(target).__name__} spread: {spread:.17g}")
     assert spread < 2e-11
+    if not isinstance(source, FrameChart):
+        np.testing.assert_allclose(residual, 0.0, atol=2e-11, rtol=0)
     if isinstance(source, FrameChart):
         disk_logdet = -2 * np.log1p(np.sum(np.asarray(x[..., 1:3]) ** 2, axis=-1))
         wrong_spread = np.ptp(residual - disk_logdet)
@@ -206,9 +210,9 @@ def test_cartesian_volume_against_automatic_jacobian(scale_AU, mu):
 
     Truth: the 6x6 AD change-of-variables determinant at five seed-0
     generic points. The same 2e-11 spread bound as the other chart pair
-    covers x64 inverse/determinant conditioning. The residual's constant
-    is also -log(16) at both mu and scale values, proving cancellation
-    rather than hiding mu in an untested additive constant. Dropping the
+    covers x64 inverse/determinant conditioning. The residual is zero at both
+    mu and scale values: both volumes are exact against the one normalized
+    measure, and mu cancels with no hidden constant. Dropping the
     ball Jacobian once must fail the same spread assertion.
     """
     chart = CartesianChart(scale_AU=scale_AU)
@@ -222,7 +226,7 @@ def test_cartesian_volume_against_automatic_jacobian(scale_AU, mu):
     spread = np.ptp(residual)
     print(f"Cartesian scale={scale_AU}, mu={mu} spread: {spread:.17g}")
     assert spread < 2e-11
-    np.testing.assert_allclose(residual, -np.log(16.0), atol=2e-11, rtol=0)
+    np.testing.assert_allclose(residual, 0.0, atol=2e-11, rtol=0)
     if scale_AU == 1.0 and mu == 0.25:
         ball_logdet = -2.5 * np.log1p(np.sum(np.asarray(x[..., 3:]) ** 2, axis=-1))
         wrong_spread = np.ptp(residual - ball_logdet)

@@ -1,10 +1,11 @@
 """Unconstrained coordinates and volumes for bound Keplerian orbit frames.
 
-The common reference measure is Haar orientation measure times dex dey
-times d(ln a). For a density p against that measure, the coordinate log
-density is log(p(chart.to_orbit(x))) + chart.log_volume(x). The frame chart
-also supplies a radial gauge density, possibly up to a constant. Plain real
-angles have periodic predictions; densities are interpreted per fundamental cell.
+The common reference measure is normalized Haar orientation measure times
+dex dey times d(ln a). For a density p against that measure, the coordinate log
+density is log(p(chart.to_orbit(x))) + chart.log_volume(x), and every
+log_volume is exact against it: no constant is omitted. The frame chart
+also supplies a normalized radial gauge density. Plain real angles have periodic
+predictions; densities are interpreted per fundamental cell of 2 pi.
 
 Transforms do not clip. As with exp and sigmoid, floating-point overflow,
 underflow and rounding to a boundary limit the representable input range.
@@ -14,9 +15,11 @@ from abc import abstractmethod
 from typing import ClassVar
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 from hwoutils.constants import two_pi
 from jax.nn import log_sigmoid, sigmoid
+from jax.scipy.special import log_ndtr
 from jaxtyping import Array
 
 from orbix.equations.orbit import mean_motion
@@ -87,18 +90,29 @@ def _inclination_log_volume(z):
     return 2 * (jnp.log(2.0) - jnp.logaddexp(z, -z))
 
 
+# Total Haar measure of the orientation angles (cos i, W, u0): 2 * 2 pi * 2 pi.
+_LOG_HAAR = jnp.log(8 * jnp.pi**2)
+
+
+def _wrap_angles(coords, columns):
+    """Reduce the listed coordinate columns to ``[0, 2 pi)``."""
+    cols = jnp.asarray(columns)
+    return coords.at[..., cols].set(jnp.mod(coords[..., cols], two_pi))
+
+
 class AbstractChart(eqx.Module):
     """Static-only orbit coordinates with a free leading batch shape B.
 
     Coordinates have shape B + (n_coords,), and log_volume returns shape B.
     mu_AU3_per_d2 must be positive; it and epoch_d broadcast against B.
     Inverses use the state's own epoch and cannot recover angle windings.
-    ``coordinate_names`` names the trailing axis, in order, for hosts that keep
-    coordinates as a dict of named arrays.
+    ``coordinate_names`` names the trailing axis, in order, with a unit suffix where
+    the coordinate has a unit, for hosts that keep coordinates as a dict of named
+    arrays.
     """
 
     n_coords: eqx.AbstractClassVar[int]
-    coordinate_names: ClassVar[tuple[str, ...]]
+    coordinate_names: eqx.AbstractClassVar[tuple[str, ...]]
 
     @abstractmethod
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
@@ -110,7 +124,21 @@ class AbstractChart(eqx.Module):
 
     @abstractmethod
     def log_volume(self, x) -> Array:
-        """Return the log reference-measure density, one scalar per batch."""
+        """Return the exact log density of the reference measure, one per batch.
+
+        This is the log Jacobian from the coordinates to normalized Haar times
+        dex dey times d(ln a), including the normalization of any gauge.
+        """
+
+    @abstractmethod
+    def sample_coordinates(self, key, orbit: FrameOrbit) -> Array:
+        """Return coordinates of ``orbit``, with any gauge freedom drawn.
+
+        Equals ``from_orbit`` for a chart without a gauge, with plain angles in
+        ``[0, 2 pi)``; for a chart with a gauge it is ``from_orbit`` plus a draw
+        from the gauge density, so that the coordinates of an orbit drawn from a
+        law have the density ``law.log_prob + log_volume``.
+        """
 
 
 class FrameChart(AbstractChart):
@@ -127,12 +155,14 @@ class FrameChart(AbstractChart):
     almost surely.
 
     For positive gauge_sd, with r=norm(v), log_volume is
-    -2 log(1+norm(u)^2) - 0.5*((r-1)/gauge_sd)^2 - 3 log(r).
-    The additive normalization constant is omitted, including the normal's
-    truncation to r>0 (a negligible correction for small gauge_sd); r=0
-    has zero density. Since d^4 v=r^3 dr dS3, the r^3 factor cancels:
-    length and Haar-uniform direction are independent. The default keeps
-    r near one to limit changes in orientation scales during inference.
+    -2 log(1+norm(u)^2) - 0.5*((r-1)/gauge_sd)^2 - 3 log(r)
+    - log(gauge_sd sqrt(2 pi)) - log(Phi(1/gauge_sd)) - log(2 pi^2).
+    The gauge is normalized: r is a normal of mean one truncated to r>0
+    (Phi(1/gauge_sd) is the mass kept), and the direction is uniform on the
+    three-sphere of area 2 pi^2; r=0 has zero density. Since d^4 v=r^3 dr dS3,
+    the r^3 factor cancels: length and Haar-uniform direction are independent.
+    The default keeps r near one to limit changes in orientation scales during
+    inference.
 
     With gauge_sd=None, log_volume is instead
     -2 log(1+norm(u)^2) - norm(v)^2/2 - 2 log(2*pi), unchanged and normalized.
@@ -142,7 +172,7 @@ class FrameChart(AbstractChart):
 
     n_coords: ClassVar[int] = 7
     coordinate_names: ClassVar[tuple[str, ...]] = (
-        "ln_a",
+        "ln_a_AU",
         "ux",
         "uy",
         "vw",
@@ -196,9 +226,32 @@ class FrameChart(AbstractChart):
         else:
             nonzero = squared > 0
             radius = jnp.sqrt(jnp.where(nonzero, squared, 1.0))
-            gauge = -0.5 * ((radius - 1) / self.gauge_sd) ** 2 - 3 * jnp.log(radius)
+            norm = (
+                jnp.log(self.gauge_sd * jnp.sqrt(2 * jnp.pi))
+                + log_ndtr(1.0 / self.gauge_sd)
+                + jnp.log(2 * jnp.pi**2)
+            )
+            gauge = (
+                -0.5 * ((radius - 1) / self.gauge_sd) ** 2 - 3 * jnp.log(radius) - norm
+            )
             gauge = jnp.where(nonzero, gauge, -jnp.inf)
         return _disk_log_volume(x[..., 1:3]) + gauge
+
+    def sample_coordinates(self, key, orbit: FrameOrbit) -> Array:
+        """Return ``from_orbit`` with the quaternion length and sign drawn."""
+        coords = self.from_orbit(orbit)
+        k_radius, k_sign = jax.random.split(key)
+        shape = coords.shape[:-1]
+        if self.gauge_sd is None:
+            radius = jnp.sqrt(2 * jax.random.gamma(k_radius, 2.0, shape))
+        else:
+            sd = self.gauge_sd
+            radius = 1.0 + sd * jax.random.truncated_normal(
+                k_radius, -1.0 / sd, jnp.inf, shape
+            )
+        sign = jnp.where(jax.random.bernoulli(k_sign, shape=shape), 1.0, -1.0)
+        scale = (radius * sign)[..., None]
+        return jnp.concatenate([coords[..., :3], scale * coords[..., 3:]], axis=-1)
 
 
 class EccentricityVectorChart(AbstractChart):
@@ -210,15 +263,15 @@ class EccentricityVectorChart(AbstractChart):
     either inclination pole, which finite coordinates do not reach in exact
     arithmetic.
 
-    log_volume = -2 log(1+norm(u)^2) + log(sech(z)^2), z=atanh(cos i).
-    The omitted additive constant is -log(8*pi^2) for normalized Haar
-    measure and one 2*pi cell for each angle. Rotation of the eccentricity
+    log_volume = -2 log(1+norm(u)^2) + log(sech(z)^2) - log(8*pi^2), z=atanh(cos i).
+    The constant is the total Haar measure of (cos i, W, M0+w) over one
+    2*pi cell for each angle. Rotation of the eccentricity
     plane by -(M0+w) preserves area, including its coupled phase dependence.
     """
 
     n_coords: ClassVar[int] = 6
     coordinate_names: ClassVar[tuple[str, ...]] = (
-        "ln_a",
+        "ln_a_AU",
         "ux",
         "uy",
         "atanh_cos_i",
@@ -276,7 +329,15 @@ class EccentricityVectorChart(AbstractChart):
     def log_volume(self, x) -> Array:
         """Return disk area and isotropic inclination Jacobians."""
         x = _coordinates(x, self.n_coords)
-        return _disk_log_volume(x[..., 1:3]) + _inclination_log_volume(x[..., 3])
+        return (
+            _disk_log_volume(x[..., 1:3])
+            + _inclination_log_volume(x[..., 3])
+            - _LOG_HAAR
+        )
+
+    def sample_coordinates(self, key, orbit: FrameOrbit) -> Array:
+        """Return ``from_orbit`` with the angles reduced to ``[0, 2 pi)``."""
+        return _wrap_angles(self.from_orbit(orbit), (4, 5))
 
 
 class CartesianChart(AbstractChart):
@@ -332,14 +393,20 @@ class CartesianChart(AbstractChart):
         eigenvalues b^(-3/2), b^(-1/2), b^(-1/2). Position dependence of
         escape speed leaves the phase-space Jacobian block triangular.
         Thus escape-speed scaling cancels mu exactly, and R=s*norm(p) cancels
-        s. The omitted additive constant may depend on scale_AU only;
-        here it is independent of scale too: log(16) for unnormalized
-        Haar, or log(2/pi^2) for normalized Haar.
+        s. The constant is independent of scale: log(16) against unnormalized
+        Haar, so log(16/(8 pi^2)) = log(2/pi^2) against normalized Haar, which
+        is what is returned.
         """
         x = _coordinates(x, self.n_coords)
-        return -3 * jnp.log(jnp.linalg.norm(x[..., :3], axis=-1)) - 4 * jnp.log1p(
-            jnp.sum(x[..., 3:] ** 2, axis=-1)
+        return (
+            -3 * jnp.log(jnp.linalg.norm(x[..., :3], axis=-1))
+            - 4 * jnp.log1p(jnp.sum(x[..., 3:] ** 2, axis=-1))
+            + jnp.log(2 / jnp.pi**2)
         )
+
+    def sample_coordinates(self, key, orbit: FrameOrbit) -> Array:
+        """Return ``from_orbit``; the chart has no gauge."""
+        return self.from_orbit(orbit)
 
 
 class ClassicalChart(AbstractChart):
@@ -349,16 +416,16 @@ class ClassicalChart(AbstractChart):
     conventions of FrameOrbit.from_classical. The inverse is undefined at
     e=0 or either inclination pole.
 
-    log_volume = 2 log(e) + log(1-e) + log(sech(z)^2), z=atanh(cos i).
+    log_volume = 2 log(e) + log(1-e) + log(sech(z)^2) - log(8*pi^2), z=atanh(cos i).
     Polar eccentricity area contributes e, the logit contributes e*(1-e),
-    and Haar orientation contributes d(cos i) dW d(M0+w). The omitted
-    additive constant is -log(8*pi^2) for normalized Haar measure and one
-    2*pi cell for each angle. There is no size Jacobian because size is ln a.
+    and Haar orientation contributes d(cos i) dW d(M0+w). The constant is the
+    total Haar measure over one 2*pi cell for each angle. There is no size
+    Jacobian because size is ln a.
     """
 
     n_coords: ClassVar[int] = 6
     coordinate_names: ClassVar[tuple[str, ...]] = (
-        "ln_a",
+        "ln_a_AU",
         "logit_e",
         "atanh_cos_i",
         "W_rad",
@@ -403,7 +470,12 @@ class ClassicalChart(AbstractChart):
             2 * log_sigmoid(x[..., 1])
             + log_sigmoid(-x[..., 1])
             + _inclination_log_volume(x[..., 2])
+            - _LOG_HAAR
         )
+
+    def sample_coordinates(self, key, orbit: FrameOrbit) -> Array:
+        """Return ``from_orbit`` with the angles reduced to ``[0, 2 pi)``."""
+        return _wrap_angles(self.from_orbit(orbit), (3, 4, 5))
 
 
 class ThieleInnesChart(AbstractChart):
@@ -437,28 +509,30 @@ class ThieleInnesChart(AbstractChart):
     both sheets meet at face-on. Values remain finite there; derivatives
     of the inverse and the volume density are singular.
 
-    Reference measure is the other charts' unnormalized Haar*dex*dey*
+    Reference measure is the other charts' normalized Haar*dex*dey*
     d(ln a), extended by d(ln mu). Write c=cos(i), l=ln(a), and u0 for
     the angle locating f from the node. The volume derivation is:
     dnu = dex dey dl dc dW du0 d(ln mu).
     |d(A,B,F,G)/d(l,c,W,u0)| = a^4*(1-c^2).
     d(ln mu) = 2*d(ln n)+3*dl, giving a factor 2 in the wedge product.
     |d(ex,ey)/d(ux,uy)| = (1+ux^2+uy^2)^(-2).
-    log_volume = log(2)-4*log(a)-log(1-c^2)-2*log(1+ux^2+uy^2).
-    No additive constant is omitted relative to ClassicalChart; normalized
-    Haar would subtract log(8*pi^2). At face-on log_volume=+inf, an
-    integrable coordinate singularity, not a finite density approximation.
+    log_volume = log(2)-4*log(a)-log(1-c^2)-2*log(1+ux^2+uy^2)-log(8*pi^2).
+    The log(2) is the Jacobian of d(ln mu), not a prior factor. The chart
+    covers one line-of-sight sheet; a density over its coordinates for a
+    law on orbits is the sum of the law over both sheets (ThieleInnesBlock).
+    At face-on log_volume=+inf, an integrable coordinate singularity, not a
+    finite density approximation.
     """
 
     n_coords: ClassVar[int] = 7
     coordinate_names: ClassVar[tuple[str, ...]] = (
-        "ln_n",
+        "ln_n_rad_per_d",
         "ux",
         "uy",
-        "A",
-        "B",
-        "F",
-        "G",
+        "A_AU",
+        "B_AU",
+        "F_AU",
+        "G_AU",
     )
     branch: int = eqx.field(static=True, default=1)
 
@@ -502,5 +576,13 @@ class ThieleInnesChart(AbstractChart):
         a, gap = sky_block_geometry(*jnp.moveaxis(x[..., 3:], -1, 0))
         # gap=a^2*(1-c^2), computed without cancellation near face-on.
         return (
-            jnp.log(2.0) - 2 * jnp.log(a) - jnp.log(gap) + _disk_log_volume(x[..., 1:3])
+            jnp.log(2.0)
+            - 2 * jnp.log(a)
+            - jnp.log(gap)
+            + _disk_log_volume(x[..., 1:3])
+            - _LOG_HAAR
         )
+
+    def sample_coordinates(self, key, orbit: FrameOrbit) -> Array:
+        """Return ``from_orbit``; an orbit on either sheet maps to this branch."""
+        return self.from_orbit(orbit)
