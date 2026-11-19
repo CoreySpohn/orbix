@@ -11,6 +11,7 @@ Transforms do not clip. As with exp and sigmoid, floating-point overflow,
 underflow and rounding to a boundary limit the representable input range.
 """
 
+import math
 from abc import abstractmethod
 from typing import ClassVar
 
@@ -91,7 +92,7 @@ def _inclination_log_volume(z):
 
 
 # Total Haar measure of the orientation angles (cos i, W, u0): 2 * 2 pi * 2 pi.
-_LOG_HAAR = jnp.log(8 * jnp.pi**2)
+_LOG_HAAR = math.log(8 * math.pi**2)
 
 
 def _wrap_angles(coords, columns):
