@@ -1,12 +1,13 @@
 """Sky projection of orbit frames and conditional relative-astrometry fits."""
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jax.scipy.linalg import solve_triangular
 from jaxtyping import Array
 
 from orbix.system.frame_orbit import FrameOrbit
-from orbix.system.rotation import from_basis
+from orbix.system.rotation import from_basis, rotate
 
 
 def _hypot_with_zero_gradient(x, y):
@@ -45,6 +46,28 @@ def line_of_sight_branch(orbit: FrameOrbit) -> Array:
     pivot = jnp.where(jnp.abs(away[..., 0]) >= jnp.abs(away[..., 1]), 0, 1)
     sign = jnp.sign(jnp.take_along_axis(away, pivot[..., None], axis=-1)[..., 0])
     return jnp.where(sign == 0, 1, sign).astype(int)
+
+
+def reflect_line_of_sight(orbits: FrameOrbit, row: int) -> FrameOrbit:
+    """Return stacked ``orbits`` with row ``row`` reflected through the sky plane.
+
+    The in-plane axes of the row have their away component negated and the plane
+    normal follows from them, so the reflected orbit has the same sky track (east and
+    north positions at every time) and the opposite line-of-sight coordinate and
+    velocity: ``frame_to_sky_block`` is unchanged and ``line_of_sight_branch``
+    flips. ``row`` indexes the last batch axis of ``orbits``; the other rows are
+    unchanged.
+
+    A likelihood that tells the two sheets apart (radial velocity, phase-dependent
+    photometry) is summed over them as ``logaddexp(L(orbit), L(reflected)) - log 2``.
+    """
+    flip = jnp.asarray([1.0, 1.0, -1.0])
+    f = rotate(orbits.quat, jnp.asarray([1.0, 0.0, 0.0])) * flip
+    g = rotate(orbits.quat, jnp.asarray([0.0, 1.0, 0.0])) * flip
+    quat = from_basis(f, g, jnp.cross(f, g))
+    return eqx.tree_at(
+        lambda o: o.quat, orbits, orbits.quat.at[..., row, :].set(quat[..., row, :])
+    )
 
 
 def sky_block_to_frame(A, B, F, G, *, branch=1) -> tuple[Array, Array]:

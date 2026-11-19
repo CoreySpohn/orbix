@@ -290,13 +290,12 @@ class ThieleInnesBlock(AbstractBlock):
     for every law and equals ``log 2`` plus the law for one that is symmetric under the
     reflection, as an isotropic orientation is.
 
-    ``forward`` builds the orbit on the chart's static branch. With a symmetric law the
-    fit is the posterior given that branch and ``log_evidence`` is the evidence given
-    that branch; a term that tells the sheets apart (radial velocity, phase-dependent
-    photometry) needs both branches run and combined as
-    ``logaddexp(Z_plus, Z_minus) - log 2``. With an asymmetric law the sum over sheets
-    is exact only when no term tells the sheets apart; otherwise use a chart that covers
-    both sheets.
+    ``forward`` builds the orbit on the chart's static branch. A term that tells the
+    sheets apart (radial velocity, phase-dependent photometry) is averaged over both
+    sheets inside the fit: its likelihood is ``logaddexp(L(orbit), L(reflected)) -
+    log 2``, with the reflected orbit from :func:`reflect_line_of_sight`. With an
+    asymmetric law the sum over sheets is exact only when no term tells the sheets
+    apart; otherwise use a chart that covers both sheets.
 
     Attributes:
         law: The density of the orbit given the enclosed mass.

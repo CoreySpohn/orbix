@@ -645,9 +645,18 @@ def test_line_of_sight_branch(branch):
     """Fails if the branch read back from an orbit differs from the chart's sheet.
 
     Orbits of a ThieleInnesChart sheet report that sheet, and reflecting an orbit
-    through the sky plane flips the sign while the sky block stays the same.
+    through the sky plane flips the sign while the sky block stays the same. Also fails
+    if ``reflect_line_of_sight`` changes the sky track, keeps the line-of-sight
+    coordinate, or touches another row: at three times the reflected row has the same
+    east and north positions and the opposite away coordinate (1e-12 AU), and its
+    branch is the other sheet's.
     """
-    from orbix.system import ThieleInnesChart, frame_to_sky_block, line_of_sight_branch
+    from orbix.system import (
+        ThieleInnesChart,
+        frame_to_sky_block,
+        line_of_sight_branch,
+        reflect_line_of_sight,
+    )
 
     x = jnp.asarray(np.random.default_rng(0).normal(size=(6, 7)))
     chart = ThieleInnesChart(branch=branch)
@@ -660,3 +669,12 @@ def test_line_of_sight_branch(branch):
         frame_to_sky_block(other.a_AU, other.quat),
         atol=1e-13,
     )
+    reflected = reflect_line_of_sight(orbit, 2)
+    times = jnp.array([0.0, 0.3, 1.7])
+    r, _ = orbit.at(times)
+    r_ref, _ = reflected.at(times)
+    sign = jnp.array([1.0, 1.0, -1.0])
+    np.testing.assert_allclose(r_ref[2], r[2] * sign, rtol=0, atol=1e-12)
+    others = np.arange(6) != 2
+    np.testing.assert_array_equal(r_ref[others], r[others])
+    np.testing.assert_array_equal(line_of_sight_branch(reflected)[2], -branch)
