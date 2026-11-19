@@ -38,6 +38,43 @@ class AbstractOrbitLaw(eqx.Module):
         The batch shape is the broadcast of ``mu_AU3_per_d2`` and the law's parameters.
         """
 
+    @property
+    def unit_size(self) -> int | None:
+        """Unit-cube length per orbit of :meth:`from_unit`, or ``None``."""
+        return None
+
+    def from_unit(self, c, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
+        """Map unit-cube points ``c`` (shape ``(..., unit_size)``) to orbits.
+
+        Deterministic, piecewise continuous, and with the pushforward of
+        :meth:`sample` for uniform ``c``. A law with no inverse CDF keeps this
+        refusal.
+
+        Raises:
+            NotImplementedError: When ``unit_size`` is ``None``.
+        """
+        raise NotImplementedError(f"{type(self).__name__} has no unit-cube map")
+
+
+def _uniform_quaternion(c) -> Array:
+    """Unit quaternion, uniform on the three-sphere, from ``c`` of shape ``(..., 3)``.
+
+    Shoemake's map: two polar angles and a radius split. It is continuous except where
+    an angle wraps. The normalized Gaussian four-vector of :meth:`OrbitLaw.sample` has
+    the same law, so the two draws agree in distribution.
+    """
+    u1, u2, u3 = c[..., 0], c[..., 1], c[..., 2]
+    lower, upper = jnp.sqrt(1.0 - u1), jnp.sqrt(u1)
+    return jnp.stack(
+        [
+            lower * jnp.sin(two_pi * u2),
+            lower * jnp.cos(two_pi * u2),
+            upper * jnp.sin(two_pi * u3),
+            upper * jnp.cos(two_pi * u3),
+        ],
+        axis=-1,
+    )
+
 
 def _batch_shape(*trees) -> tuple[int, ...]:
     leaves = jax.tree_util.tree_leaves(trees)
@@ -113,5 +150,46 @@ class OrbitLaw(AbstractOrbitLaw):
             e * jnp.cos(phase),
             e * jnp.sin(phase),
             quat,
+            epoch,
+        )
+
+    @property
+    def unit_size(self) -> int | None:
+        """Six per orbit if both scalar laws have an inverse CDF, else ``None``.
+
+        The six are the eccentricity, the size, the phase and three for the
+        orientation.
+        """
+        size = self.a_AU if self.a_AU is not None else self.period_d
+        return 6 if self.eccentricity.has_icdf and size.has_icdf else None
+
+    def from_unit(self, c, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
+        """Inverse-CDF draws of ``e`` and the size, then phase and orientation.
+
+        ``c[..., 0]`` gives the eccentricity, ``c[..., 1]`` the size element,
+        ``c[..., 2]`` the phase (times ``2 pi``) and ``c[..., 3:6]`` the orientation
+        through :func:`_uniform_quaternion`. The pushforward of uniform ``c`` is that of
+        :meth:`sample`.
+        """
+        if self.unit_size is None:
+            raise NotImplementedError("a scalar law has no inverse CDF")
+        c = jnp.asarray(c)
+        mu = jnp.asarray(mu_AU3_per_d2)
+        e = self.eccentricity.icdf(c[..., 0])
+        if self.a_AU is not None:
+            a = self.a_AU.icdf(c[..., 1])
+        else:
+            a = (mu * (self.period_d.icdf(c[..., 1]) / two_pi) ** 2) ** (1.0 / 3.0)
+        phase = two_pi * c[..., 2]
+        quat = _uniform_quaternion(c[..., 3:6])
+        e, phase, a, mu, epoch = jnp.broadcast_arrays(
+            e, phase, a, mu, jnp.asarray(epoch_d)
+        )
+        return FrameOrbit(
+            a,
+            mean_motion(a, mu),
+            e * jnp.cos(phase),
+            e * jnp.sin(phase),
+            jnp.broadcast_to(quat, (*a.shape, 4)),
             epoch,
         )

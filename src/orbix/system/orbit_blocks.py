@@ -180,6 +180,32 @@ class OrbitBlock(AbstractBlock):
         coords = self.chart.from_orbit(_take(resolve(model, self.owns), self.rows))
         return _unstack(self.chart, coords)
 
+    @property
+    def unit_size(self) -> int | None:
+        """Unit-cube length: per row the law's coordinates and the chart's gauge."""
+        per_row = self.law.unit_size
+        if per_row is None:
+            return None
+        return len(self.rows) * (per_row + self.chart.gauge_unit_size)
+
+    def from_unit(self, c, model) -> dict[str, Array]:
+        """Map a unit-cube point to coordinates with the law of ``sample``.
+
+        ``c`` has shape ``(unit_size,)``, laid out row by row: the law's coordinates
+        (:meth:`AbstractOrbitLaw.from_unit`) then the chart's gauge
+        (:meth:`AbstractChart.unit_coordinates`).
+        """
+        c = _unit_rows(self, c)
+        held = resolve(model, self.owns)
+        rows = jnp.asarray(self.rows)
+        n_law = self.law.unit_size
+        orbit = self.law.from_unit(
+            c[:, :n_law],
+            mu_AU3_per_d2=self._mu(model)[..., rows],
+            epoch_d=held.epoch_d[..., rows],
+        )
+        return _unstack(self.chart, self.chart.unit_coordinates(c[:, n_law:], orbit))
+
     def same_map(self, other) -> bool:
         """Whether ``other`` has this chart, rows and system; only the law differs."""
         return (
@@ -328,6 +354,30 @@ class ThieleInnesBlock(AbstractBlock):
         coords = self.chart.from_orbit(_take(resolve(model, self.owns), self.rows))
         return _unstack(self.chart, coords)
 
+    @property
+    def unit_size(self) -> int | None:
+        """Unit-cube length: the star mass, then the law's coordinates of the row."""
+        per_row = self.law.unit_size
+        if per_row is None or not self.star_mass_Msun.has_icdf:
+            return None
+        return 1 + per_row
+
+    def from_unit(self, c, model) -> dict[str, Array]:
+        """Map a unit-cube point to coordinates with the law of ``sample``.
+
+        ``c[0]`` gives the star mass through its inverse CDF and ``c[1:]`` the orbit
+        through :meth:`AbstractOrbitLaw.from_unit` at the implied rate.
+        """
+        c = _unit_rows(self, c, rows=1)
+        held = resolve(model, self.owns)
+        enclosed = self.star_mass_Msun.icdf(c[0, 0]) + self._inner_mass(model)
+        orbit = self.law.from_unit(
+            c[:, 1:],
+            mu_AU3_per_d2=jnp.reshape(GM_SUN_AU3_PER_D2 * enclosed, (1,)),
+            epoch_d=held.epoch_d[..., jnp.asarray(self.rows)],
+        )
+        return _unstack(self.chart, self.chart.unit_coordinates(c[:, :0], orbit))
+
     def same_map(self, other) -> bool:
         """Whether ``other`` has this chart, rows and system; only laws differ."""
         return (
@@ -345,6 +395,21 @@ def _check_rows(rows) -> None:
         or any(not isinstance(r, int) or isinstance(r, bool) or r < 0 for r in rows)
     ):
         raise ValueError("rows must be a nonempty tuple of distinct nonnegative ints")
+
+
+def _unit_rows(block, c, rows=None) -> Array:
+    """Check a unit-cube vector and shape it ``(rows, per_row)``.
+
+    For the Thiele-Innes block (``rows=1``) the single row is the whole vector, whose
+    first entry is the star mass.
+    """
+    size = block.unit_size
+    if size is None:
+        raise NotImplementedError(f"{type(block).__name__} has no unit-cube map")
+    c = jnp.asarray(c)
+    if c.shape != (size,):
+        raise ValueError(f"the unit-cube point must have shape ({size},)")
+    return c.reshape(rows or len(block.rows), -1)
 
 
 def _stack(chart, rows, x) -> Array:

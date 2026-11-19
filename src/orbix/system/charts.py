@@ -20,7 +20,7 @@ import jax
 import jax.numpy as jnp
 from hwoutils.constants import two_pi
 from jax.nn import log_sigmoid, sigmoid
-from jax.scipy.special import log_ndtr
+from jax.scipy.special import gammainc, log_ndtr, ndtr, ndtri
 from jaxtyping import Array
 
 from orbix.equations.orbit import mean_motion
@@ -101,6 +101,27 @@ def _wrap_angles(coords, columns):
     return coords.at[..., cols].set(jnp.mod(coords[..., cols], two_pi))
 
 
+def _chi_four_icdf(q):
+    """Quantile of the norm of a standard normal four-vector, by bisection.
+
+    The squared norm is gamma with shape 2 and scale 2, so ``gammainc(2, t)`` at
+    ``t`` half of it is its CDF. Eighty halvings of ``[0, 800]`` leave an error below
+    1e-21 in ``t``.
+    """
+    q = jnp.asarray(q)
+
+    def step(_, bounds):
+        low, high = bounds
+        mid = 0.5 * (low + high)
+        below = gammainc(2.0, mid) < q
+        return jnp.where(below, mid, low), jnp.where(below, high, mid)
+
+    low, high = jax.lax.fori_loop(
+        0, 80, step, (jnp.zeros_like(q), jnp.full_like(q, 800.0))
+    )
+    return jnp.sqrt(low + high)
+
+
 class AbstractChart(eqx.Module):
     """Static-only orbit coordinates with a free leading batch shape B.
 
@@ -117,6 +138,8 @@ class AbstractChart(eqx.Module):
     n_coords: eqx.AbstractClassVar[int]
     coordinate_names: eqx.AbstractClassVar[tuple[str, ...]]
     periods: eqx.AbstractClassVar[tuple[float | None, ...]]
+    # Unit-cube coordinates a gauge consumes in ``unit_coordinates``.
+    gauge_unit_size: ClassVar[int] = 0
 
     @abstractmethod
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
@@ -143,6 +166,17 @@ class AbstractChart(eqx.Module):
         from the gauge density, so that the coordinates of an orbit drawn from a
         law have the density ``law.log_prob + log_volume``.
         """
+
+    def unit_coordinates(self, c, orbit: FrameOrbit) -> Array:
+        """Return :meth:`sample_coordinates` with the gauge drawn from the unit cube.
+
+        ``c`` has shape ``B + (gauge_unit_size,)`` with values in ``(0, 1)``; a chart
+        without a gauge ignores it. The map is deterministic and its pushforward of
+        uniform ``c`` is the gauge law of :meth:`sample_coordinates`.
+        """
+        if self.gauge_unit_size:
+            raise NotImplementedError(f"{type(self).__name__} must draw its gauge")
+        return self.sample_coordinates(None, orbit)
 
 
 class FrameChart(AbstractChart):
@@ -185,6 +219,7 @@ class FrameChart(AbstractChart):
         "vz",
     )
     periods: ClassVar[tuple[float | None, ...]] = (None,) * 7
+    gauge_unit_size: ClassVar[int] = 2
     gauge_sd: float | None = eqx.field(static=True, default=0.1)
 
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
@@ -255,6 +290,27 @@ class FrameChart(AbstractChart):
                 k_radius, -1.0 / sd, jnp.inf, shape
             )
         sign = jnp.where(jax.random.bernoulli(k_sign, shape=shape), 1.0, -1.0)
+        scale = (radius * sign)[..., None]
+        return jnp.concatenate([coords[..., :3], scale * coords[..., 3:]], axis=-1)
+
+    def unit_coordinates(self, c, orbit: FrameOrbit) -> Array:
+        """Return ``from_orbit`` with the quaternion length and sign from ``c``.
+
+        ``c[..., 0]`` is the length through the inverse CDF of its gauge law (a normal
+        of mean one truncated to positive values, or a chi variable of four degrees of
+        freedom without ``gauge_sd``) and ``c[..., 1]`` the sign (negative above one
+        half).
+        """
+        c = jnp.asarray(c)
+        coords = self.from_orbit(orbit)
+        if self.gauge_sd is None:
+            radius = _chi_four_icdf(c[..., 0])
+        else:
+            sd = self.gauge_sd
+            below = ndtr(-1.0 / sd)
+            radius = 1.0 + sd * ndtri(below + c[..., 0] * (1.0 - below))
+            radius = jnp.maximum(radius, jnp.finfo(radius.dtype).tiny)
+        sign = jnp.where(c[..., 1] < 0.5, 1.0, -1.0)
         scale = (radius * sign)[..., None]
         return jnp.concatenate([coords[..., :3], scale * coords[..., 3:]], axis=-1)
 
