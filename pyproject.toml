@@ -11,7 +11,7 @@ dependencies = [
     "numpy>=2.2",
     "equinox>=0.13.2",
     "interpax>=0.3.3",
-    "hwoutils>=1.15.0",
+    "hwoutils>=2.0.0",
     "jaxtyping>=0.3.3",
 ]
 license = { file = "LICENSE" }
