@@ -15,9 +15,7 @@ import numpy as np
 import pytest
 
 from orbix.observatory import ObservatoryL2Halo
-from orbix.observatory.solar_system import (
-    obliquity_deg as orbix_obliquity,
-)
+from orbix.observatory.solar_system import OBLIQUITY_J2000_DEG
 from orbix.observatory.solar_system import (
     planet_position_ecliptic as orbix_planet,
 )
@@ -147,20 +145,10 @@ class TestL2HaloOrbit:
 
 @skip_no_exosims
 class TestObliquity:
-    """Compare obliquity calculation."""
+    """Compare the J2000 obliquity."""
 
-    @pytest.mark.parametrize("mjd", [51544.5, 55000.0, 60000.0])
-    def test_obliquity(self, exo_obs, mjd):
-        """Obliquity should match EXOSIMS within 1e-4 degrees."""
-        obl_orbix = float(orbix_obliquity(float(mjd)))
-
-        t = Time(np.array([mjd]), format="mjd", scale="tai")
-        TDB = exo_obs.cent(t)[0]
-        obl_exo = float(exo_obs.obe(TDB))
-
+    def test_obliquity_j2000(self, exo_obs):
+        """The fixed J2000 obliquity matches EXOSIMS at J2000 within 1e-4 degrees."""
         np.testing.assert_allclose(
-            obl_orbix,
-            obl_exo,
-            atol=1e-4,
-            err_msg=f"Obliquity at MJD {mjd}",
+            OBLIQUITY_J2000_DEG, float(exo_obs.obe(0.0)), atol=1e-4
         )

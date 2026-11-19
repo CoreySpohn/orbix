@@ -1,4 +1,4 @@
-"""Tests for orbix.observatory.pointing: ecliptic latitude and solar longitude."""
+"""Tests for orbix.observatory.pointing: ecliptic latitude, Sun-relative longitude."""
 
 import jax
 import jax.numpy as jnp
@@ -7,7 +7,7 @@ import pytest
 from hwoutils.constants import J2000_JD
 from hwoutils.epoch import Epoch
 
-from orbix.observatory import ecliptic_pointing, sun_longitude_deg
+from orbix.observatory import ecliptic_pointing, sun_ecliptic_longitude_deg
 
 EPOCH = Epoch(J2000_JD, scale="tt")
 OBL = 84381.406 / 3600.0
@@ -47,7 +47,7 @@ def test_ecliptic_pole_latitude(sign):
 def test_target_at_sun_has_zero_elongation():
     """A target at the Sun has zero longitude difference; opposite gives 180."""
     t = 5000.0
-    lon = float(sun_longitude_deg(EPOCH, t))
+    lon = float(sun_ecliptic_longitude_deg(EPOCH, t))
     ra, dec = _ecliptic_to_radec(lon, 0.0)
     beta, dlon = ecliptic_pointing(ra, dec, EPOCH, t)
     assert float(beta) == pytest.approx(0.0, abs=1e-4)
@@ -70,9 +70,36 @@ def test_sun_longitude_at_equinox_and_solstice(date, lon):
     """The Sun's longitude is 0, 90, 180, 270 deg at equinoxes and solstices."""
     # Longitude of date, i.e. add back the precession removed for the J2000 frame.
     t = _jd(*date) - J2000_JD
-    of_date = float(sun_longitude_deg(EPOCH, t)) + 5028.796195 / 3600.0 * t / 36525.0
+    of_date = (
+        float(sun_ecliptic_longitude_deg(EPOCH, t)) + 5028.796195 / 3600.0 * t / 36525.0
+    )
     diff = (of_date - lon + 180.0) % 360.0 - 180.0
     assert abs(diff) < 0.1  # events quoted to 0.1 d is 0.1 deg
+
+
+def test_sun_longitude_against_published_almanac_value():
+    """The Sun's geometric longitude matches Meeus, Astronomical Algorithms (2nd ed.).
+
+    Example 25.a: 1992 October 13.0 TD (JD 2448908.5), Sun true geometric
+    longitude 199.90988 deg, referred to the mean equinox of date (VSOP87).
+    Adding the general precession since J2000 gives the longitude of date from
+    the J2000-frame result. The Vallado ephemeris matches to 1e-4 deg; the
+    Astronomical Almanac low-precision formula it replaced was 0.007 deg low.
+    """
+    t = 2448908.5 - J2000_JD
+    of_date = (
+        float(sun_ecliptic_longitude_deg(EPOCH, t)) + 5028.796195 / 3600.0 * t / 36525.0
+    )
+    assert of_date == pytest.approx(199.90988, abs=1e-4)
+
+
+def test_sun_longitude_shape_and_range():
+    """The longitude broadcasts over time arrays and lies in [0, 360)."""
+    lon = sun_ecliptic_longitude_deg(
+        EPOCH, jnp.linspace(-4000.0, 4000.0, 9).reshape(3, 3)
+    )
+    assert lon.shape == (3, 3)
+    assert bool(jnp.all((lon >= 0.0) & (lon < 360.0)))
 
 
 def test_dlon_range_and_shape():
@@ -108,7 +135,7 @@ def test_matches_astropy():
     beta, dlon = ecliptic_pointing(np.degrees(ra), np.degrees(dec), EPOCH, t_d)
     assert np.max(np.abs(np.asarray(beta) - tgt.lat.deg)) < 1e-3
     err = (np.asarray(dlon) - want_dlon + 180.0) % 360.0 - 180.0
-    assert np.max(np.abs(err)) < 0.03
+    assert np.max(np.abs(err)) < 0.03  # astropy returns the apparent longitude
 
 
 def test_gradient_in_time_matches_central_difference():

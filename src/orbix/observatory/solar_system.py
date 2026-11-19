@@ -1,6 +1,10 @@
-"""Solar system body positions using Vallado (2013) static ephemerides.
+"""Solar system body positions and the ecliptic frame.
 
-All positions are heliocentric ecliptic, in AU.  Time inputs are MJD.
+Positions use Vallado (2013) static ephemerides. All positions are
+heliocentric ecliptic (J2000 mean ecliptic and equinox), in AU.  Body
+positions take MJD; the Sun's longitude takes an ``Epoch`` and ``time_d``.
+This module holds the one equatorial-to-ecliptic rotation, a fixed J2000
+rotation, shared by the keepout, observatory and pointing geometry.
 
 This module is a pure-JAX port of the ``keplerplanet`` method in
 ``EXOSIMS.Prototypes.Observatory``, using orbix's own Kepler solver.
@@ -15,6 +19,8 @@ from __future__ import annotations
 import jax.numpy as jnp
 from hwoutils.constants import J2000_JD
 from hwoutils.conversions import jd_to_mjd, years_to_days
+from hwoutils.epoch import Epoch
+from jaxtyping import Array, ArrayLike
 
 from orbix.kepler import kepler
 
@@ -32,25 +38,8 @@ def _mjd_to_julian_centuries(mjd: float) -> float:
 # Obliquity of the ecliptic
 # ---------------------------------------------------------------------------
 
-
-def obliquity_deg(mjd: float) -> float:
-    """Obliquity of the ecliptic in degrees (Vallado polynomial).
-
-    Args:
-        mjd: Modified Julian Date.
-
-    Returns:
-        Obliquity in degrees.
-    """
-    TDB = _mjd_to_julian_centuries(mjd)
-    return (
-        23.439279
-        - 0.0130102 * TDB
-        - 5.086e-8 * TDB**2
-        + 5.565e-7 * TDB**3
-        + 1.6e-10 * TDB**4
-        + 1.21e-11 * TDB**5
-    )
+OBLIQUITY_J2000_DEG = 84381.406 / 3600.0
+"""IAU 2006 mean obliquity of the ecliptic at J2000 [deg]."""
 
 
 # ---------------------------------------------------------------------------
@@ -70,40 +59,55 @@ def _rot3(theta: float) -> jnp.ndarray:
     return jnp.array([[c, s, 0.0], [-s, c, 0.0], [0.0, 0.0, 1.0]])
 
 
-def equat2eclip(r_equat: jnp.ndarray, mjd: float) -> jnp.ndarray:
-    """Rotate heliocentric equatorial -> ecliptic.
+def equat2eclip(r_equat: ArrayLike) -> Array:
+    """Rotate equatorial J2000 vectors to the J2000 ecliptic.
+
+    The one equatorial-to-ecliptic rotation: a rotation about the x axis by the
+    J2000 mean obliquity. The Vallado ephemerides and the J2000 sky positions
+    share this frame, so no obliquity of date enters.
 
     Args:
-        r_equat: Position vector(s) in equatorial frame, shape ``(3,)`` or ``(n, 3)``.
-        mjd: MJD (scalar) for obliquity calculation.
+        r_equat: Vector(s) in the equatorial frame, shape ``(..., 3)``.
 
     Returns:
-        Position vector(s) in ecliptic frame, same shape as input.
+        Vector(s) in the ecliptic frame, same shape as the input.
     """
-    obe = jnp.radians(obliquity_deg(mjd))
-    R = _rot1(obe)
-    squeeze = r_equat.ndim == 1
-    r = jnp.atleast_2d(r_equat)
-    r_eclip = (R @ r.T).T
-    return r_eclip.squeeze(axis=0) if squeeze else r_eclip
+    rotation = _rot1(jnp.radians(OBLIQUITY_J2000_DEG))
+    return jnp.asarray(r_equat) @ rotation.T
 
 
-def eclip2equat(r_eclip: jnp.ndarray, mjd: float) -> jnp.ndarray:
-    """Rotate heliocentric ecliptic -> equatorial.
+def eclip2equat(r_eclip: ArrayLike) -> Array:
+    """Rotate J2000 ecliptic vectors to the equatorial J2000 frame.
 
     Args:
-        r_eclip: Position vector(s) in ecliptic frame, shape ``(3,)`` or ``(n, 3)``.
-        mjd: MJD (scalar) for obliquity calculation.
+        r_eclip: Vector(s) in the ecliptic frame, shape ``(..., 3)``.
 
     Returns:
-        Position vector(s) in equatorial frame, same shape as input.
+        Vector(s) in the equatorial frame, same shape as the input.
     """
-    obe = jnp.radians(obliquity_deg(mjd))
-    R = _rot1(-obe)
-    squeeze = r_eclip.ndim == 1
-    r = jnp.atleast_2d(r_eclip)
-    r_equat = (R @ r.T).T
-    return r_equat.squeeze(axis=0) if squeeze else r_equat
+    rotation = _rot1(-jnp.radians(OBLIQUITY_J2000_DEG))
+    return jnp.asarray(r_eclip) @ rotation.T
+
+
+def equatorial_to_ecliptic_deg(ra_deg: ArrayLike, dec_deg: ArrayLike) -> tuple:
+    """Convert equatorial J2000 sky positions to ecliptic J2000 longitude and latitude.
+
+    Args:
+        ra_deg: Right ascension [deg].
+        dec_deg: Declination [deg]. Broadcasts with ``ra_deg``.
+
+    Returns:
+        ``(longitude_deg, latitude_deg)`` with longitude in [0, 360) and
+        latitude in [-90, 90].
+    """
+    ra, dec = jnp.broadcast_arrays(jnp.radians(ra_deg), jnp.radians(dec_deg))
+    direction = jnp.stack(
+        [jnp.cos(dec) * jnp.cos(ra), jnp.cos(dec) * jnp.sin(ra), jnp.sin(dec)],
+        axis=-1,
+    )
+    x, y, z = jnp.moveaxis(equat2eclip(direction), -1, 0)
+    longitude = jnp.mod(jnp.degrees(jnp.arctan2(y, x)), 360.0)
+    return longitude, jnp.degrees(jnp.arctan2(z, jnp.hypot(x, y)))
 
 
 # ---------------------------------------------------------------------------
@@ -258,9 +262,12 @@ def planet_position_ecliptic(body: str, mjd: float) -> jnp.ndarray:
         raise ValueError(
             "planet_position_ecliptic takes a scalar mjd; vmap over times instead"
         )
+    return _planet_position_ecliptic_tdb(body, _mjd_to_julian_centuries(mjd))
 
+
+def _planet_position_ecliptic_tdb(body: str, TDB: ArrayLike) -> Array:
+    """Heliocentric ecliptic position at ``TDB`` Julian centuries from J2000."""
     coeffs = _EPHEM[body]  # (6, 4) JAX array
-    TDB = _mjd_to_julian_centuries(mjd)
 
     # Evaluate all 6 polynomials at once: [a, e, I_deg, O_deg, w_deg, lM_deg]
     elems = _eval_elements(coeffs, TDB)
@@ -311,7 +318,7 @@ def planet_position_equatorial(body: str, mjd: float) -> jnp.ndarray:
         Position vector in heliocentric equatorial frame (AU), shape ``(3,)``.
     """
     r_eclip = planet_position_ecliptic(body, mjd)
-    return eclip2equat(r_eclip, mjd)
+    return eclip2equat(r_eclip)
 
 
 def earth_position_ecliptic(mjd: float) -> jnp.ndarray:
@@ -325,107 +332,32 @@ def earth_position_equatorial(mjd: float) -> jnp.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Ecliptic coordinate helpers for targets
+# Sun longitude
 # ---------------------------------------------------------------------------
 
 
-def radec_to_ecliptic(ra_rad: float, dec_rad: float, mjd: float) -> tuple:
-    """Convert equatorial RA/Dec to ecliptic longitude/latitude.
+def sun_ecliptic_longitude_deg(epoch: Epoch, time_d: ArrayLike) -> Array:
+    """Geocentric ecliptic longitude of the Sun in the J2000 ecliptic frame [deg].
+
+    The direction opposite Earth's heliocentric position from the Vallado
+    ephemeris, which shares the J2000 ecliptic with J2000 target coordinates.
+    The observatory at Sun-Earth L2 lies near the Sun-Earth line, so the
+    geocentric direction is used (the halo orbit shifts the Sun's direction by
+    up to about 0.3 deg).
 
     Args:
-        ra_rad: Right ascension in radians.
-        dec_rad: Declination in radians.
-        mjd: MJD for obliquity calculation.
+        epoch: Static day zero of ``time_d`` (the time scale is not converted;
+            the TDB-TT difference of about 1.6 ms is far below the ephemeris
+            accuracy).
+        time_d: Days from ``epoch``. Differentiable; any shape.
 
     Returns:
-        (ecliptic_lon_rad, ecliptic_lat_rad) tuple.
+        Longitude in degrees in [0, 360), the shape of ``time_d``.
     """
-    obe = jnp.radians(obliquity_deg(mjd))
-    cos_obe = jnp.cos(obe)
-    sin_obe = jnp.sin(obe)
+    days = jnp.asarray(time_d) + epoch.days_between(Epoch(J2000_JD, scale=epoch.scale))
 
-    sin_ra = jnp.sin(ra_rad)
-    cos_ra = jnp.cos(ra_rad)
-    sin_dec = jnp.sin(dec_rad)
-    cos_dec = jnp.cos(dec_rad)
+    def longitude(d):
+        r_earth = _planet_position_ecliptic_tdb("Earth", d / years_to_days(100.0))
+        return jnp.degrees(jnp.arctan2(-r_earth[1], -r_earth[0]))
 
-    # Ecliptic latitude
-    sin_beta = sin_dec * cos_obe - cos_dec * sin_obe * sin_ra
-    beta = jnp.arcsin(sin_beta)
-
-    # Ecliptic longitude
-    y = sin_ra * cos_obe + jnp.tan(dec_rad) * sin_obe
-    x = cos_ra
-    lam = jnp.arctan2(y, x)
-
-    return lam, beta
-
-
-def sun_target_angle(
-    obs_position_eclip: jnp.ndarray,
-    ra_rad: float,
-    dec_rad: float,
-    mjd: float,
-) -> float:
-    """Angular separation between the Sun and a target as seen from the observatory.
-
-    Args:
-        obs_position_eclip: Observatory position in heliocentric ecliptic (AU),
-            shape ``(3,)``.
-        ra_rad: Target right ascension in radians.
-        dec_rad: Target declination in radians.
-        mjd: MJD for coordinate conversion.
-
-    Returns:
-        Angular separation in radians.
-    """
-    # Sun direction from observatory (heliocentric, so Sun is at origin)
-    sun_dir = -obs_position_eclip
-    sun_dir = sun_dir / jnp.linalg.norm(sun_dir)
-
-    # Target direction (at infinity, so just the unit vector in ecliptic frame)
-    # Convert RA/Dec to ecliptic Cartesian
-    lam, beta = radec_to_ecliptic(ra_rad, dec_rad, mjd)
-    target_dir = jnp.array(
-        [
-            jnp.cos(beta) * jnp.cos(lam),
-            jnp.cos(beta) * jnp.sin(lam),
-            jnp.sin(beta),
-        ]
-    )
-
-    # Angular separation
-    cos_angle = jnp.dot(sun_dir, target_dir)
-    cos_angle = jnp.clip(cos_angle, -1.0, 1.0)
-    return jnp.arccos(cos_angle)
-
-
-def solar_elongation_ecliptic(
-    obs_position_eclip: jnp.ndarray,
-    ecliptic_lon_rad: float,
-    ecliptic_lat_rad: float,
-) -> float:
-    """Solar elongation (angle between Sun and target as seen from observer).
-
-    Args:
-        obs_position_eclip: Observatory heliocentric ecliptic position (AU).
-        ecliptic_lon_rad: Target ecliptic longitude (rad).
-        ecliptic_lat_rad: Target ecliptic latitude (rad).
-
-    Returns:
-        Solar elongation in radians.
-    """
-    sun_dir = -obs_position_eclip
-    sun_dir = sun_dir / jnp.linalg.norm(sun_dir)
-
-    target_dir = jnp.array(
-        [
-            jnp.cos(ecliptic_lat_rad) * jnp.cos(ecliptic_lon_rad),
-            jnp.cos(ecliptic_lat_rad) * jnp.sin(ecliptic_lon_rad),
-            jnp.sin(ecliptic_lat_rad),
-        ]
-    )
-
-    cos_angle = jnp.dot(sun_dir, target_dir)
-    cos_angle = jnp.clip(cos_angle, -1.0, 1.0)
-    return jnp.arccos(cos_angle)
+    return jnp.mod(jnp.vectorize(longitude)(days), 360.0)

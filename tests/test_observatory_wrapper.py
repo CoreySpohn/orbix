@@ -87,8 +87,8 @@ def test_is_observable_at_matches_mjd(keepout_observatory):
     The split epoch and nonzero/negative day offsets detect lost epoch parts.
     """
     obs = keepout_observatory
-    ra = jnp.array([[0.0], [1.7]])
-    dec = jnp.array([0.0, 0.3, 1.1])
+    ra = jnp.array([[0.0], [100.0]])
+    dec = jnp.array([0.0, 17.0, 63.0])
     time = jnp.array([-30.25, 95.125, 400.75])
     mjd = jnp.asarray(_EPOCH.jd(time) - 2400000.5)
     expected = jnp.stack(
@@ -135,14 +135,14 @@ def test_annual_observability_against_dense_grid(keepout_observatory):
     """
     obs = keepout_observatory
     year = 365.25
-    result = _interval(obs, np.pi, 0.0, _EPOCH, 0.0, year, n_samples=16)
+    result = _interval(obs, 180.0, 0.0, _EPOCH, 0.0, year, n_samples=16)
     times = jnp.linspace(0.0, year, 10000)
     mjds = jnp.asarray(_EPOCH.jd(times) - 2400000.5)
     direct = jax.jit(
         jax.vmap(
             lambda mjd: is_observable(
                 obs.orbit.position_ecliptic(mjd),
-                np.pi,
+                180.0,
                 0.0,
                 mjd,
                 ko_sun_min_deg=45.0,
@@ -168,7 +168,7 @@ def test_annual_observability_against_dense_grid(keepout_observatory):
     np.testing.assert_array_equal(result.time_d, np.linspace(0.0, year, 16))
     np.testing.assert_array_equal(
         result.is_observable,
-        obs.is_observable_at(np.pi, 0.0, _EPOCH, result.time_d),
+        obs.is_observable_at(180.0, 0.0, _EPOCH, result.time_d),
     )
 
 
@@ -176,22 +176,22 @@ def test_full_and_empty_observability(keepout_observatory):
     """Fails if always/never visible intervals lose endpoint or sentinel semantics.
 
     Truth: the ecliptic pole stays outside a 45-degree solar keepout;
-    RA=pi, Dec=0 is Sunward for the first ten days of this epoch.
+    RA=180 deg, Dec=0 is Sunward for the first ten days of this epoch.
     Constant decisions, fractions, endpoints, and sentinels are exact.
     """
     obs = keepout_observatory
-    pole = _interval(obs, 1.5 * np.pi, np.deg2rad(66.56), _EPOCH, 0.0, 365.25)
+    pole = _interval(obs, 270.0, 66.56, _EPOCH, 0.0, 365.25)
     assert pole.all and pole.any
     assert pole.fraction == 1.0
     assert pole.first_d == 0.0 and pole.last_d == 365.25
-    blocked = _interval(obs, np.pi, 0.0, _EPOCH, 0.0, 10.0)
+    blocked = _interval(obs, 180.0, 0.0, _EPOCH, 0.0, 10.0)
     assert not blocked.any and not blocked.all
     assert blocked.fraction == 0.0
     assert blocked.first_d == np.inf and blocked.last_d == -np.inf
     default = eqx.tree_at(lambda o: o.keepout_min_deg, obs, jnp.asarray(0.0))
     unrestricted = _interval(default, 0.0, 0.0, _EPOCH, 0.0, 365.25)
     assert unrestricted.all and unrestricted.fraction == 1.0
-    instant = _interval(obs, np.pi, 0.0, _EPOCH, 0.0, 0.0)
+    instant = _interval(obs, 180.0, 0.0, _EPOCH, 0.0, 0.0)
     assert instant.fraction == 0.0 and instant.first_d == np.inf
     with pytest.raises(ValueError, match="n_samples"):
         obs.observability(0.0, 0.0, _EPOCH, 0.0, 1.0, n_samples=1)
@@ -207,8 +207,8 @@ def test_observability_jit_and_vmap(keepout_observatory):
     roundoff divided by 365.25 d. Boundary brackets must stay unchanged.
     """
     obs = keepout_observatory
-    ras = jnp.array([0.0, 1.3, 1.5 * np.pi])
-    decs = jnp.array([0.0, 0.2, np.deg2rad(66.56)])
+    ras = jnp.array([0.0, 75.0, 270.0])
+    decs = jnp.array([0.0, 11.5, 66.56])
     results = [
         _interval(obs, r, d, _EPOCH, 0.0, 365.25)
         for r, d in zip(ras, decs, strict=True)

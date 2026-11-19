@@ -13,7 +13,7 @@ from jaxtyping import Array
 
 from orbix.observatory.solar_system import (
     earth_position_ecliptic,
-    radec_to_ecliptic,
+    equatorial_to_ecliptic_deg,
 )
 
 
@@ -22,56 +22,48 @@ def _unit_vector(v: jnp.ndarray) -> jnp.ndarray:
     return v / jnp.maximum(jnp.linalg.norm(v), 1e-30)
 
 
-def _angular_sep(v1: jnp.ndarray, v2: jnp.ndarray) -> float:
-    """Angular separation between two direction vectors (radians)."""
+def _angular_sep_deg(v1: jnp.ndarray, v2: jnp.ndarray) -> float:
+    """Angular separation between two direction vectors (degrees)."""
     u1 = _unit_vector(v1)
     u2 = _unit_vector(v2)
     cos_a = jnp.clip(jnp.dot(u1, u2), -1.0, 1.0)
-    return jnp.arccos(cos_a)
+    return jnp.degrees(jnp.arccos(cos_a))
 
 
-def _target_ecliptic_dir(ra_rad: float, dec_rad: float, mjd: float) -> jnp.ndarray:
-    """Unit vector toward a target in heliocentric ecliptic frame."""
-    lam, beta = radec_to_ecliptic(ra_rad, dec_rad, mjd)
+def target_ecliptic_direction(ra_deg: float, dec_deg: float) -> jnp.ndarray:
+    """Unit vector toward a J2000 target in the heliocentric ecliptic frame."""
+    lon, lat = map(jnp.radians, equatorial_to_ecliptic_deg(ra_deg, dec_deg))
     return jnp.array(
-        [
-            jnp.cos(beta) * jnp.cos(lam),
-            jnp.cos(beta) * jnp.sin(lam),
-            jnp.sin(beta),
-        ]
+        [jnp.cos(lat) * jnp.cos(lon), jnp.cos(lat) * jnp.sin(lon), jnp.sin(lat)]
     )
 
 
-def body_angle(
+def body_angle_deg(
     obs_pos_eclip: jnp.ndarray,
     body_pos_eclip: jnp.ndarray,
-    ra_rad: float,
-    dec_rad: float,
-    mjd: float,
+    ra_deg: float,
+    dec_deg: float,
 ) -> float:
     """Angle between a solar system body and a target as seen from the observatory.
 
     Args:
         obs_pos_eclip: Observatory heliocentric ecliptic position (AU).
         body_pos_eclip: Body heliocentric ecliptic position (AU).
-        ra_rad: Target RA in radians.
-        dec_rad: Target Dec in radians.
-        mjd: MJD for coordinate conversion.
+        ra_deg: Target right ascension [deg], J2000.
+        dec_deg: Target declination [deg], J2000.
 
     Returns:
-        Angular separation in radians.
+        Angular separation in degrees, [0, 180].
     """
-    # Direction from observer to body
+    # Direction from observer to body, and to the target (at infinity)
     body_dir = body_pos_eclip - obs_pos_eclip
-    # Direction from observer to target (at infinity)
-    target_dir = _target_ecliptic_dir(ra_rad, dec_rad, mjd)
-    return _angular_sep(body_dir, target_dir)
+    return _angular_sep_deg(body_dir, target_ecliptic_direction(ra_deg, dec_deg))
 
 
 def is_observable(
     obs_pos_eclip: jnp.ndarray,
-    ra_rad: float,
-    dec_rad: float,
+    ra_deg: float,
+    dec_deg: float,
     mjd: float,
     ko_sun_min_deg: float = 45.0,
     ko_sun_max_deg: float = 180.0,
@@ -82,9 +74,9 @@ def is_observable(
 
     Args:
         obs_pos_eclip: Observatory heliocentric ecliptic position (AU), shape ``(3,)``.
-        ra_rad: Target right ascension in radians.
-        dec_rad: Target declination in radians.
-        mjd: Modified Julian Date.
+        ra_deg: Target right ascension [deg], J2000.
+        dec_deg: Target declination [deg], J2000.
+        mjd: Modified Julian Date, used for Earth's position.
         ko_sun_min_deg: Minimum Sun keepout angle (degrees).
         ko_sun_max_deg: Maximum Sun keepout angle (degrees).
         ko_earth_min_deg: Minimum Earth keepout angle (degrees).
@@ -95,14 +87,12 @@ def is_observable(
     """
     # Sun is at origin in heliocentric frame
     sun_pos = jnp.zeros(3)
-    sun_angle_rad = body_angle(obs_pos_eclip, sun_pos, ra_rad, dec_rad, mjd)
-    sun_angle_deg = jnp.degrees(sun_angle_rad)
+    sun_angle_deg = body_angle_deg(obs_pos_eclip, sun_pos, ra_deg, dec_deg)
     sun_ok = (sun_angle_deg >= ko_sun_min_deg) & (sun_angle_deg <= ko_sun_max_deg)
 
     # Earth
     earth_pos = earth_position_ecliptic(mjd)
-    earth_angle_rad = body_angle(obs_pos_eclip, earth_pos, ra_rad, dec_rad, mjd)
-    earth_angle_deg = jnp.degrees(earth_angle_rad)
+    earth_angle_deg = body_angle_deg(obs_pos_eclip, earth_pos, ra_deg, dec_deg)
     earth_ok = (earth_angle_deg >= ko_earth_min_deg) & (
         earth_angle_deg <= ko_earth_max_deg
     )

@@ -5,38 +5,45 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from hwoutils.constants import two_pi
+from hwoutils.constants import J2000_JD, two_pi
+from hwoutils.epoch import Epoch
 from hypothesis import example, given
 from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
 
 from orbix.observatory import (
     ObservatoryL2Halo,
+    ecliptic_pointing,
     is_observable,
+    sun_ecliptic_longitude_deg,
 )
 from orbix.observatory.solar_system import (
+    OBLIQUITY_J2000_DEG,
     _rot1,
     _rot3,
     earth_position_ecliptic,
     eclip2equat,
     equat2eclip,
-    obliquity_deg,
+    equatorial_to_ecliptic_deg,
     planet_position_ecliptic,
-    radec_to_ecliptic,
 )
+
+_J2000 = Epoch(J2000_JD, scale="tt")
+# MJD 60575.25: the bundled halo-orbit equinox
+_EQUINOX = Epoch(2400000.5, 60575.25, scale="tt")
 
 
 @jax.jit
-def _frame_round_trips(vectors, mjd, angles):
+def _frame_round_trips(vectors, angles):
     """Keep scalar/batch transform shapes and matrix shapes constant."""
-    forward = equat2eclip(vectors, mjd)
-    backward = eclip2equat(vectors, mjd)
+    forward = equat2eclip(vectors)
+    backward = eclip2equat(vectors)
     return (
-        eclip2equat(forward, mjd),
-        equat2eclip(backward, mjd),
-        eclip2equat(equat2eclip(vectors[0], mjd), mjd),
-        equat2eclip(jnp.eye(3), mjd),
-        eclip2equat(jnp.eye(3), mjd),
+        eclip2equat(forward),
+        equat2eclip(backward),
+        eclip2equat(equat2eclip(vectors[0])),
+        equat2eclip(jnp.eye(3)),
+        eclip2equat(jnp.eye(3)),
         _rot1(angles[0]),
         _rot1(-angles[0]),
         _rot3(angles[1]),
@@ -54,9 +61,8 @@ class TestSolarSystemEphemerides:
     """Test Vallado ephemerides against expected values."""
 
     def test_obliquity_j2000(self):
-        """Obliquity at J2000 should be ~23.439 deg."""
-        obl = obliquity_deg(51544.5)
-        assert jnp.isclose(obl, 23.439279, atol=1e-4)
+        """The J2000 mean obliquity is 23.439 deg."""
+        assert jnp.isclose(OBLIQUITY_J2000_DEG, 23.439279, atol=1e-4)
 
     def test_earth_distance_j2000(self):
         """Earth should be ~1 AU from Sun at J2000."""
@@ -83,7 +89,6 @@ class TestSolarSystemEphemerides:
 
     @example(
         vectors=np.array([[1.0, 0.5, 0.3]] * 4),
-        mjd=51544.5,
         angles=np.array([0.0, np.pi]),
     )
     @given(
@@ -92,20 +97,17 @@ class TestSolarSystemEphemerides:
             (4, 3),
             elements=st.floats(-100.0, 100.0, allow_nan=False, allow_infinity=False),
         ),
-        mjd=st.floats(15000.0, 90000.0, allow_nan=False, allow_infinity=False),
         angles=arrays(
             np.float64,
             (2,),
             elements=st.floats(-two_pi, two_pi, allow_nan=False, allow_infinity=False),
         ),
     )
-    def test_equat_eclip_roundtrip(self, vectors, mjd, angles):
+    def test_equat_eclip_roundtrip(self, vectors, angles):
         """Fails if frame inverses, scalar/batch paths, or orthonormality drift."""
         first, second, scalar, forward, backward, r1, ir1, r3, ir3, rotated = map(
             np.asarray,
-            _frame_round_trips(
-                jnp.asarray(vectors), jnp.asarray(mjd), jnp.asarray(angles)
-            ),
+            _frame_round_trips(jnp.asarray(vectors), jnp.asarray(angles)),
         )
         np.testing.assert_allclose(first, vectors, rtol=0, atol=5e-14)
         np.testing.assert_allclose(second, vectors, rtol=0, atol=5e-14)
@@ -138,13 +140,16 @@ class TestSolarSystemEphemerides:
         with pytest.raises(ValueError):
             planet_position_ecliptic("Earth", jnp.array([51544.5, 51545.5]))
 
-    def test_radec_to_ecliptic(self):
-        """RA/Dec -> ecliptic at ecliptic pole: lat should be ~90 deg."""
-        # North ecliptic pole in J2000 equatorial: RA=270deg, Dec=66.56deg
-        ra = jnp.radians(270.0)
-        dec = jnp.radians(66.56)
-        _, beta = radec_to_ecliptic(ra, dec, 51544.5)
-        assert jnp.isclose(jnp.degrees(beta), 90.0, atol=1.0)
+    def test_equatorial_to_ecliptic_deg(self):
+        """The ecliptic pole is at RA 270 deg, Dec 90 deg minus the obliquity."""
+        pole_dec = 90.0 - OBLIQUITY_J2000_DEG
+        _, beta = equatorial_to_ecliptic_deg(270.0, pole_dec)
+        assert jnp.isclose(beta, 90.0, atol=1e-9)
+        lon, beta = equatorial_to_ecliptic_deg(0.0, 0.0)
+        assert jnp.isclose(lon, 0.0, atol=1e-9) and jnp.isclose(beta, 0.0, atol=1e-9)
+        lon, beta = equatorial_to_ecliptic_deg(90.0, 0.0)
+        assert jnp.isclose(lon, 90.0, atol=1e-9)
+        assert jnp.isclose(beta, -OBLIQUITY_J2000_DEG, atol=1e-9)
 
 
 # ============================================================================
@@ -175,10 +180,10 @@ class TestObservatoryL2Halo:
         """Halo period should be ~0.49 years (~180 days)."""
         assert 0.4 < obs.period_yr < 0.6
 
-    def test_sun_angle_range(self, obs):
-        """Sun angle should be in [0, pi]."""
-        angle = obs.sun_angle(51544.5, 0.0, 0.5)
-        assert 0.0 <= float(angle) <= jnp.pi
+    def test_solar_elongation_range(self, obs):
+        """Solar elongation is in [0, 180] deg."""
+        angle = obs.solar_elongation_deg(0.0, 30.0, _J2000, 0.0)
+        assert 0.0 <= float(angle) <= 180.0
 
     def test_jit_position(self, obs):
         """Position should work with eqx.filter_jit."""
@@ -194,37 +199,21 @@ class TestObservatoryL2Halo:
         assert jnp.isfinite(positions).all()
 
     def test_vmap_over_targets(self, obs):
-        """Vmap over multiple targets for sun angle."""
-        ras = jnp.linspace(0, 2 * jnp.pi, 10)
-        decs = jnp.ones(10) * 0.5
+        """Vmap over multiple targets for solar elongation."""
+        ras = jnp.linspace(0, 360.0, 10)
+        decs = jnp.ones(10) * 30.0
 
         def get_angle(ra, dec):
-            return obs.sun_angle(51544.5, ra, dec)
+            return obs.solar_elongation_deg(ra, dec, _J2000, 0.0)
 
         angles = jax.vmap(get_angle)(ras, decs)
         assert angles.shape == (10,)
         assert jnp.isfinite(angles).all()
 
-    def test_gradient_sun_angle(self, obs):
-        """Sun angle should be differentiable w.r.t. time."""
-        grad_fn = jax.grad(lambda t: obs.sun_angle(t, 1.0, 0.5))
-        g = grad_fn(51544.5)
-        assert jnp.isfinite(g)
-
-    def test_solar_elongation_deg_range(self, obs):
-        """Solar elongation should be in [0, 180]."""
-        sol_elong = obs.solar_elongation_deg(51544.5, 1.0, 0.5)
-        assert 0.0 <= float(sol_elong) <= 180.0
-
-    def test_helio_ecliptic_longitude_deg_range(self, obs):
-        """|lambda_target - lambda_sun| should be in [0, 180]."""
-        dlam = obs.helio_ecliptic_longitude_deg(51544.5, 1.0, 0.5)
-        assert 0.0 <= float(dlam) <= 180.0
-
-    def test_ecliptic_latitude_deg_range(self, obs):
-        """Ecliptic latitude should be in [-90, 90]."""
-        ecl_lat = obs.ecliptic_latitude_deg(51544.5, 1.0, 0.5)
-        assert -90.0 <= float(ecl_lat) <= 90.0
+    def test_gradient_solar_elongation(self, obs):
+        """Solar elongation is differentiable with respect to time."""
+        grad_fn = jax.grad(lambda t: obs.solar_elongation_deg(57.0, 29.0, _J2000, t))
+        assert jnp.isfinite(grad_fn(0.0))
 
 
 # ============================================================================
@@ -235,11 +224,8 @@ class TestObservatoryL2Halo:
 class TestObservatoryGeometryInvariants:
     """Invariants of the L2-halo + RA/Dec geometry over a full year.
 
-    These tests guard against argument-order regressions (a stale bug
-    that previously caused ``ecliptic_latitude(...)`` to receive ``mjd``
-    where it expected ``ra_rad``, and silently returned chaotic
-    latitudes) and against confusing the 3D solar elongation with
-    Leinert's helio-ecliptic longitude ``Delta_lambda_sun``.
+    These tests guard against confusing the 3D solar elongation with the
+    helioecliptic longitude that indexes the zodiacal-light tables.
     """
 
     @pytest.fixture
@@ -248,136 +234,67 @@ class TestObservatoryGeometryInvariants:
         return ObservatoryL2Halo.from_default()
 
     @pytest.fixture
-    def mjds(self):
-        """Year-long MJD sweep starting at the bundled equinox."""
-        return 60575.25 + jnp.linspace(0.0, 365.25, 73)
+    def time_d(self):
+        """Year-long day sweep from the bundled equinox."""
+        return jnp.linspace(0.0, 365.25, 73)
 
-    def test_ecliptic_latitude_constant_for_fixed_target(self, obs, mjds):
-        """For a sky-fixed target, ecl_lat must barely change over a year.
+    def test_ecliptic_latitude_constant_for_fixed_target(self, time_d):
+        """For a sky-fixed target the ecliptic latitude does not change in time."""
+        lats, _ = ecliptic_pointing(0.0, 60.0, _EQUINOX, time_d)
+        assert float(lats.max() - lats.min()) < 1e-9
 
-        Obliquity drift is ~0.5 arcsec/yr -- a fraction of a milli-degree.
-        Any larger variation means the function is sampling something it
-        shouldn't (e.g. mjd accidentally consumed as ra_rad).
+    def test_ecliptic_plane_target_sweeps_full_longitude(self, time_d):
+        """An ecliptic-plane target visits both anti-Sun and conjunction."""
+        _, dlon = ecliptic_pointing(0.0, 0.0, _EQUINOX, time_d)
+        assert float(jnp.abs(dlon).max()) > 175.0, "Did not reach anti-Sun."
+        assert float(jnp.abs(dlon).min()) < 5.0, "Did not reach conjunction."
+
+    def test_high_latitude_target_never_at_conjunction(self, obs, time_d):
+        """A target at |ecliptic latitude| of 65 deg never nears the Sun.
+
+        The minimum 3D elongation is bounded below by the ecliptic latitude.
         """
-        # Mid-latitude target: ecl_lat ~ +53 deg.
-        ra_rad = jnp.deg2rad(0.0)
-        dec_rad = jnp.deg2rad(60.0)
-        lats = jax.vmap(lambda m: obs.ecliptic_latitude_deg(m, ra_rad, dec_rad))(mjds)
-        spread = float(lats.max() - lats.min())
-        assert spread < 0.01, (
-            f"ecl_lat for a fixed RA/Dec target moved {spread:.3f} deg over a "
-            "year; should be effectively constant."
+        elongs = jax.vmap(lambda t: obs.solar_elongation_deg(0.0, 80.0, _EQUINOX, t))(
+            time_d
         )
+        assert float(elongs.min()) > 50.0
 
-    def test_ecliptic_plane_target_sweeps_full_longitude(self, obs, mjds):
-        """Ecliptic-plane target visits both anti-Sun and conjunction.
+    def test_solar_elongation_matches_helioecliptic_longitude_on_ecliptic(self, obs):
+        """On the ecliptic the great-circle angle equals the longitude difference.
 
-        Helio-ecliptic longitude difference should reach near 180 deg
-        (anti-Sun) and near 0 deg (conjunction) within one year. Tolerate
-        a few degrees of sampling slack.
+        The tolerance covers the halo-orbit shift of the Sun's direction,
+        up to about 0.33 deg.
         """
-        ra_rad = jnp.deg2rad(0.0)
-        dec_rad = jnp.deg2rad(0.0)  # vernal equinox direction -> ecl_lat ~ 0
-        dlams = jax.vmap(
-            lambda m: obs.helio_ecliptic_longitude_deg(m, ra_rad, dec_rad)
-        )(mjds)
-        assert float(dlams.max()) > 175.0, "Did not reach anti-Sun within the year."
-        assert float(dlams.min()) < 5.0, "Did not reach conjunction within the year."
+        t = 91.0
+        elong = float(obs.solar_elongation_deg(0.0, 0.0, _EQUINOX, t))
+        _, dlon = ecliptic_pointing(0.0, 0.0, _EQUINOX, t)
+        assert abs(elong - abs(float(dlon))) < 0.5
 
-    def test_high_latitude_target_never_at_conjunction(self, obs, mjds):
-        """Ecliptic-pole-ish target stays bounded away from the Sun.
+    def test_solar_elongation_diverges_from_helioecliptic_longitude_off_ecliptic(
+        self, obs
+    ):
+        """At high latitude the elongation and the longitude difference differ.
 
-        A target at |ecl_lat| > 60 deg cannot have ``Delta_lambda_sun``
-        bring the look vector to the Sun -- the minimum 3D elongation is
-        bounded below by ``|ecl_lat|``.
+        Feeding the elongation into a zodiacal-light table lookup in place of
+        the helioecliptic longitude would be wrong; this pins the difference.
         """
-        # (RA=0, Dec=+80) -> ecl_lat ~ +65 deg, well off the ecliptic.
-        ra_rad = jnp.deg2rad(0.0)
-        dec_rad = jnp.deg2rad(80.0)
-        elongs = jax.vmap(lambda m: obs.solar_elongation_deg(m, ra_rad, dec_rad))(mjds)
-        assert float(elongs.min()) > 50.0, (
-            "High-latitude target should never come closer than its "
-            "ecliptic latitude to the Sun."
-        )
+        elong = float(obs.solar_elongation_deg(0.0, 60.0, _EQUINOX, 0.0))
+        _, dlon = ecliptic_pointing(0.0, 60.0, _EQUINOX, 0.0)
+        assert abs(elong - abs(float(dlon))) > 10.0
 
-    def test_solar_elongation_vs_helio_longitude_match_on_ecliptic(self, obs):
-        """On the ecliptic plane the two angles must coincide.
+    def test_geocentric_sun_direction_close_to_halo_observer(self, obs, time_d):
+        """The Sun's longitude from the telescope differs from the geocentric one.
 
-        For ``ecl_lat = 0`` the great-circle Sun-target angle and the
-        helio-ecliptic longitude difference are mathematically identical.
+        The halo orbit moves the telescope off the Sun-Earth line by up to
+        about 0.01 AU, shifting the Sun's direction by at most about 0.35 deg.
         """
-        # Vernal equinox direction is ecl_lat=0.
-        ra_rad = jnp.deg2rad(0.0)
-        dec_rad = jnp.deg2rad(0.0)
-        mjd = 60575.25 + 91.0  # part-way through the year
-        elong = float(obs.solar_elongation_deg(mjd, ra_rad, dec_rad))
-        dlam = float(obs.helio_ecliptic_longitude_deg(mjd, ra_rad, dec_rad))
-        assert abs(elong - dlam) < 0.5
-
-    def test_solar_elongation_diverges_from_helio_longitude_off_ecliptic(self, obs):
-        """High-latitude targets show the bug we are guarding against.
-
-        For a target at large |ecl_lat|, feeding ``solar_elongation_deg``
-        into a Leinert lookup (instead of ``helio_ecliptic_longitude_deg``)
-        gives a *different* answer. This test pins that difference so a
-        future refactor that unifies them gets flagged.
-        """
-        # (RA=0, Dec=+60) -> ecl_lat ~ +53 deg.
-        ra_rad = jnp.deg2rad(0.0)
-        dec_rad = jnp.deg2rad(60.0)
-        mjd = 60575.25
-        elong = float(obs.solar_elongation_deg(mjd, ra_rad, dec_rad))
-        dlam = float(obs.helio_ecliptic_longitude_deg(mjd, ra_rad, dec_rad))
-        assert abs(elong - dlam) > 10.0
-
-    def test_conjunction_aligns_with_sun_apparent_longitude(self, obs, mjds):
-        """Helio-longitude minimum lines up with heliocentric ecliptic longitude.
-
-        Conjunction (``Delta_lambda_sun -> 0``) happens when the Sun's
-        apparent ecliptic longitude equals the target's. We can compute
-        Sun's apparent longitude from Earth's heliocentric position and
-        verify the argmin of the helio-ecliptic-longitude curve matches.
-        """
-        # Ecliptic-plane target at ecl_lon = 90 deg (RA=90, Dec=+23.44).
-        ra_rad = jnp.deg2rad(90.0)
-        dec_rad = jnp.deg2rad(23.44)
-        dlams = jax.vmap(
-            lambda m: obs.helio_ecliptic_longitude_deg(m, ra_rad, dec_rad)
-        )(mjds)
-        i_min = int(jnp.argmin(dlams))
-        # At the conjunction epoch, Earth's heliocentric longitude must
-        # be ~target_ecl_lon + 180 (Sun apparent = -Earth_helio).
-        r_earth = earth_position_ecliptic(float(mjds[i_min]))
-        earth_lon_deg = float(jnp.degrees(jnp.arctan2(r_earth[1], r_earth[0])))
-        target_lon_deg = 90.0
-        # Sun apparent longitude from observer = earth_helio_lon + 180.
-        sun_apparent_lon_deg = (earth_lon_deg + 180.0) % 360.0
-        # Difference should be small (within sampling cadence: ~5 deg).
-        diff = abs(((sun_apparent_lon_deg - target_lon_deg + 180.0) % 360.0) - 180.0)
-        assert diff < 8.0, (
-            f"At argmin(Delta_lambda_sun) the Sun's apparent longitude "
-            f"({sun_apparent_lon_deg:.2f}) should match the target's "
-            f"ecliptic longitude ({target_lon_deg:.2f}); got off by "
-            f"{diff:.2f} deg."
-        )
-
-    def test_geometry_methods_share_argument_order(self, obs):
-        """All four geometry methods take ``(mjd, ra_rad, dec_rad)``.
-
-        Regression: the historical inconsistency
-        ``ecliptic_latitude(ra, dec, mjd=...)`` vs
-        ``solar_longitude(mjd, ra, dec)`` caused real bugs. This test
-        documents the invariant so it cannot drift again silently.
-        """
-        mjd = 60575.25
-        ra = jnp.deg2rad(45.0)
-        dec = jnp.deg2rad(30.0)
-        # All four methods must accept (mjd, ra, dec) positionally
-        # without raising.
-        obs.sun_angle(mjd, ra, dec)
-        obs.solar_elongation_deg(mjd, ra, dec)
-        obs.helio_ecliptic_longitude_deg(mjd, ra, dec)
-        obs.ecliptic_latitude_deg(mjd, ra, dec)
+        position = jax.vmap(
+            lambda t: obs.position_ecliptic(60575.25 + t)  # equinox MJD plus offset
+        )(time_d)
+        halo_lon = jnp.degrees(jnp.arctan2(-position[:, 1], -position[:, 0]))
+        geo_lon = sun_ecliptic_longitude_deg(_EQUINOX, time_d)
+        diff = (halo_lon - geo_lon + 180.0) % 360.0 - 180.0
+        assert float(jnp.abs(diff).max()) < 0.35
 
 
 # ============================================================================
@@ -394,7 +311,7 @@ class TestKeepout:
         obs_pos = jnp.array([1.01, 0.0, 0.0])
         mjd = 60000.0
         # Target at RA=180 deg, Dec=0: looking back toward the Sun.
-        blocked = is_observable(obs_pos, jnp.pi, 0.0, mjd)
+        blocked = is_observable(obs_pos, 180.0, 0.0, mjd)
         assert not bool(blocked)
 
     def test_anti_solar_pointing_is_observable(self):
@@ -408,6 +325,6 @@ class TestKeepout:
     def test_keepout_jit(self):
         """Keepout should be JIT-compilable."""
         obs_pos = jnp.array([1.01, 0.0, 0.0])
-        f = jax.jit(lambda: is_observable(obs_pos, 1.0, 0.5, 51544.5))
+        f = jax.jit(lambda: is_observable(obs_pos, 57.0, 29.0, 51544.5))
         result = f()
         assert isinstance(result, jax.Array)
