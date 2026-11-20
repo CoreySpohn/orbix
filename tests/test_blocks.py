@@ -668,7 +668,7 @@ def test_the_tilted_law_differs_between_the_two_sheets():
     )
     laws = [
         _TiltedLaw(broad).log_prob(
-            ThieleInnesChart(branch=b).to_orbit(x, mu_AU3_per_d2=1.0)
+            ThieleInnesChart(sheet=b).to_orbit(x, mu_AU3_per_d2=1.0)
         )
         for b in (1, -1)
     ]

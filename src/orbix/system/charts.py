@@ -708,13 +708,13 @@ class ThieleInnesChart(AbstractChart):
     against the coordinate batch. Thus orbit round trips preserve the
     orbit's own rate and mass, irrespective of the passed mu.
 
-    Static branch selects the sign of the largest-magnitude away-row entry
+    Static sheet selects the sign of the largest-magnitude away-row entry
     (first wins ties), as in sky_block_to_frame. cos(i)=(A*G-B*F)/a^2 is
-    already determined by the sky block; branch selects the remaining
+    already determined by the sky block; sheet selects the remaining
     line-of-sight reflection, not prograde versus retrograde. On each
-    declared branch this is one-to-one onto bound orbit states, modulo
+    declared sheet this is one-to-one onto bound orbit states, modulo
     quaternion sign, with zero sky block excluded. An orbit on the other
-    branch is reflected on round trip. The branch has a pivot seam and
+    sheet is reflected on round trip. The sheet has a pivot seam and
     both sheets meet at face-on. Values remain finite there; derivatives
     of the inverse and the volume density are singular.
 
@@ -746,19 +746,17 @@ class ThieleInnesChart(AbstractChart):
     size_coordinate: ClassVar[str | None] = "ln_n"
     eccentricity_coordinate: ClassVar[str | None] = "disk"
     periods: ClassVar[tuple[float | None, ...]] = (None,) * 7
-    branch: int = eqx.field(static=True, default=1)
+    sheet: int = eqx.field(static=True, default=1)
 
     def __check_init__(self):
         """Validate the static choice of line-of-sight sheet."""
-        if self.branch not in (-1, 1):
-            raise ValueError("branch must be +1 or -1")
+        if self.sheet not in (-1, 1):
+            raise ValueError("sheet must be +1 or -1")
 
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
         """Build an epoch frame, ignoring mu in favor of the coordinate rate."""
         x = _coordinates(x, self.n_coords)
-        a, quat = sky_block_to_frame(
-            *jnp.moveaxis(x[..., 3:], -1, 0), branch=self.branch
-        )
+        a, quat = sky_block_to_frame(*jnp.moveaxis(x[..., 3:], -1, 0), sheet=self.sheet)
         evec = plane_to_disk(x[..., 1:3])
         a, n, ex, ey, epoch = jnp.broadcast_arrays(
             a, jnp.exp(x[..., 0]), evec[..., 0], evec[..., 1], jnp.asarray(epoch_d)
@@ -766,7 +764,7 @@ class ThieleInnesChart(AbstractChart):
         return FrameOrbit(a, n, ex, ey, jnp.broadcast_to(quat, (*a.shape, 4)), epoch)
 
     def from_orbit(self, orbit: FrameOrbit) -> Array:
-        """Project an orbit; inversion reproduces its declared branch only."""
+        """Project an orbit; inversion reproduces its declared sheet only."""
         return jnp.concatenate(
             [
                 jnp.log(orbit.n_rad_per_d)[..., None],
@@ -803,5 +801,5 @@ class ThieleInnesChart(AbstractChart):
         )
 
     def sample_coordinates(self, key, orbit: FrameOrbit) -> Array:
-        """Return ``from_orbit``; an orbit on either sheet maps to this branch."""
+        """Return ``from_orbit``; an orbit on either sheet maps to this sheet."""
         return self.from_orbit(orbit)

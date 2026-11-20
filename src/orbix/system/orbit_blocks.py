@@ -290,7 +290,7 @@ class ThieleInnesBlock(AbstractBlock):
     for every law and equals ``log 2`` plus the law for one that is symmetric under the
     reflection, as an isotropic orientation is.
 
-    ``forward`` builds the orbit on the chart's static branch. A term that tells the
+    ``forward`` builds the orbit on the chart's static sheet. A term that tells the
     sheets apart (radial velocity, phase-dependent photometry) is averaged over both
     sheets inside the fit: its likelihood is ``logaddexp(L(orbit), L(reflected)) -
     log 2``, with the reflected orbit from :func:`reflect_line_of_sight`. With an
@@ -302,7 +302,7 @@ class ThieleInnesBlock(AbstractBlock):
         star_mass_Msun: Scalar law on the star mass in solar masses.
         rows: The freed row; exactly one.
         system: Path of the :class:`System` in the model.
-        chart: The Thiele-Innes chart; its branch sets the sheet ``forward`` builds.
+        chart: The Thiele-Innes chart; its ``sheet`` is the sheet ``forward`` builds.
     """
 
     law: AbstractOrbitLaw
@@ -400,11 +400,11 @@ class ThieleInnesBlock(AbstractBlock):
         epoch = held.epoch_d[..., jnp.asarray(self.rows)]
         sheets = [
             self.law.log_prob(
-                ThieleInnesChart(branch=branch).to_orbit(
+                ThieleInnesChart(sheet=sheet).to_orbit(
                     coords, mu_AU3_per_d2=1.0, epoch_d=epoch
                 )
             )
-            for branch in (1, -1)
+            for sheet in (1, -1)
         ]
         enclosed = self._enclosed_mass(coords)
         star_mass = enclosed - self._inner_mass(model)

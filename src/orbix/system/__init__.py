@@ -18,7 +18,7 @@ from orbix.system.laws import AbstractOrbitLaw, OrbitLaw
 from orbix.system.linear import (
     fit_linear_map,
     frame_to_sky_block,
-    line_of_sight_branch,
+    line_of_sight_sheet,
     linear_gaussian_conditional,
     reflect_line_of_sight,
     sky_block_geometry,
@@ -63,7 +63,7 @@ __all__ = [
     "fit_linear_map",
     "frame_to_sky_block",
     "kepler",
-    "line_of_sight_branch",
+    "line_of_sight_sheet",
     "linear_gaussian_conditional",
     "offset_arcsec",
     "periapsis_chart_shape",

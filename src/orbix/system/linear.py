@@ -33,7 +33,7 @@ def sky_block_geometry(A, B, F, G) -> tuple[Array, Array]:
     return (plus + minus) / 2, plus * minus
 
 
-def line_of_sight_branch(orbit: FrameOrbit) -> Array:
+def line_of_sight_sheet(orbit: FrameOrbit) -> Array:
     """Return the line-of-sight sheet (+1 or -1) of orbits.
 
     The sheet is the one ``sky_block_to_frame`` defines: the sign of the
@@ -48,14 +48,14 @@ def line_of_sight_branch(orbit: FrameOrbit) -> Array:
     return jnp.where(sign == 0, 1, sign).astype(int)
 
 
-def reflect_line_of_sight(orbits: FrameOrbit, row: int) -> FrameOrbit:
-    """Return stacked ``orbits`` with row ``row`` reflected through the sky plane.
+def reflect_line_of_sight(orbits: FrameOrbit, planet: int) -> FrameOrbit:
+    """Return stacked ``orbits`` with ``planet`` reflected through the sky plane.
 
-    The in-plane axes of the row have their away component negated and the plane
+    The in-plane axes of the planet have their away component negated and the plane
     normal follows from them, so the reflected orbit has the same sky track (east and
     north positions at every time) and the opposite line-of-sight coordinate and
-    velocity: ``frame_to_sky_block`` is unchanged and ``line_of_sight_branch``
-    flips. ``row`` indexes the last batch axis of ``orbits``; the other rows are
+    velocity: ``frame_to_sky_block`` is unchanged and ``line_of_sight_sheet``
+    flips. ``planet`` indexes the last batch axis of ``orbits``; the other planets are
     unchanged.
 
     A likelihood that tells the two sheets apart (radial velocity, phase-dependent
@@ -66,11 +66,13 @@ def reflect_line_of_sight(orbits: FrameOrbit, row: int) -> FrameOrbit:
     g = rotate(orbits.quat, jnp.asarray([0.0, 1.0, 0.0])) * flip
     quat = from_basis(f, g, jnp.cross(f, g))
     return eqx.tree_at(
-        lambda o: o.quat, orbits, orbits.quat.at[..., row, :].set(quat[..., row, :])
+        lambda o: o.quat,
+        orbits,
+        orbits.quat.at[..., planet, :].set(quat[..., planet, :]),
     )
 
 
-def sky_block_to_frame(A, B, F, G, *, branch=1) -> tuple[Array, Array]:
+def sky_block_to_frame(A, B, F, G, *, sheet=1) -> tuple[Array, Array]:
     """Complete a sky block to (a_AU, quat), with broadcast batch shape B.
 
     A,F are north and B,G east, all in AU: the sky matrix is [[B,G],[A,F]].
@@ -80,10 +82,10 @@ def sky_block_to_frame(A, B, F, G, *, branch=1) -> tuple[Array, Array]:
 
     Every finite nonzero real 2x2 block has a completion. Its largest
     singular value is a; a^2 I - S.T S = z z.T determines the away row
-    z=(C,H). Static branch must be +1 or -1 and sets the sign of z's
+    z=(C,H). Static sheet must be +1 or -1 and sets the sign of z's
     largest-magnitude entry (first wins ties). The other entry follows
     from C*H=-(A*F+B*G). This is a local chart with a sign seam where
-    equally large, opposite-sign entries exchange pivot. The two branches
+    equally large, opposite-sign entries exchange pivot. The two sheets
     coincide at face-on, where z=0; zero size is excluded.
 
     Values are finite at both face-on orientations and independent of
@@ -91,8 +93,8 @@ def sky_block_to_frame(A, B, F, G, *, branch=1) -> tuple[Array, Array]:
     face-on (tilt is a square root of projected flattening); no smooth
     inverse there is claimed. All numerical work is host-free.
     """
-    if branch not in (-1, 1):
-        raise ValueError("branch must be +1 or -1")
+    if sheet not in (-1, 1):
+        raise ValueError("sheet must be +1 or -1")
     A, B, F, G = jnp.broadcast_arrays(*map(jnp.asarray, (A, B, F, G)))
     # Normalize first to avoid squaring a large or small physical scale.
     scale = jnp.maximum(
@@ -112,8 +114,8 @@ def sky_block_to_frame(A, B, F, G, *, branch=1) -> tuple[Array, Array]:
     other = -(plus_a * minus_b - minus_a * plus_b) / (2 * pivot)
     pivot = jnp.where(nonzero, pivot, 0.0)
     other = jnp.where(nonzero, other, 0.0)
-    C = branch * jnp.where(first, pivot, other)
-    H = branch * jnp.where(first, other, pivot)
+    C = sheet * jnp.where(first, pivot, other)
+    H = sheet * jnp.where(first, other, pivot)
     f = jnp.stack([B, A, C], -1) / a[..., None]
     g = jnp.stack([G, F, H], -1) / a[..., None]
     return scale * a, from_basis(f, g, jnp.cross(f, g))
@@ -125,7 +127,7 @@ def frame_to_sky_block(a_AU, quat) -> Array:
     quat is a scalar-first unit quaternion, shape B+(4,), rotating the
     chosen plane axes into east,north,away. A,F are north; B,G are east.
     For FrameOrbit pass its a_AU and quat to obtain the epoch-axis block.
-    sky_block_to_frame inverts this projection on its declared branch.
+    sky_block_to_frame inverts this projection on its declared sheet.
     No eccentricity or inclination angle is used, including at e=0 or
     either face-on orientation.
     """
