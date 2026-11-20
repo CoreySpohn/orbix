@@ -361,7 +361,7 @@ def test_sky_block_completion():
 
     Truth: independently constructed orthonormal frames, including exact
     face-on matrices. 32 eps times a covers the small matrix arithmetic;
-    the branch reflects only the away row and leaves the sky block intact.
+    the sheet reflects only the away row and leaves the sky block intact.
     """
     from orbix.system import frame_to_sky_block, sky_block_to_frame
 
@@ -377,9 +377,9 @@ def test_sky_block_completion():
         ]
     )
     constants = 1.7 * bases[:, [1, 0, 1, 0], [0, 0, 1, 1]]
-    for branch in (-1, 1):
+    for sheet in (-1, 1):
         a, q = eqx.filter_jit(sky_block_to_frame)(
-            *jnp.moveaxis(constants, -1, 0), branch=branch
+            *jnp.moveaxis(constants, -1, 0), sheet=sheet
         )
         actual = frame_to_sky_block(a, q)
         np.testing.assert_allclose(
@@ -390,7 +390,7 @@ def test_sky_block_completion():
             rotate(q, jnp.array([0.0, 1.0, 0.0])),
         )
         expected = np.asarray(bases).copy()
-        expected[:, 2] *= branch
+        expected[:, 2] *= sheet
         np.testing.assert_allclose(
             jnp.stack([f, g], -1), expected, atol=32 * np.finfo(float).eps, rtol=0
         )
@@ -431,9 +431,9 @@ def test_sky_block_geometry_of_projected_circular_frames():
     np.testing.assert_allclose(dgap, 2 * gap_true, atol=64 * eps * a_true**2, rtol=0)
 
 
-@pytest.mark.parametrize("branch", [-1, 1])
-def test_thiele_innes_round_trip(branch):
-    """Fails if a branch, circular phase, free mu, or batch broadcasting is lost.
+@pytest.mark.parametrize("sheet", [-1, 1])
+def test_thiele_innes_round_trip(sheet):
+    """Fails if a sheet, circular phase, free mu, or batch broadcasting is lost.
 
     Generic seed-0 blocks have no angle windings; 2e-13 relative/absolute
     allows x64 rank-one completion and quaternion roundoff. The circular
@@ -441,7 +441,7 @@ def test_thiele_innes_round_trip(branch):
     """
     from orbix.system import ThieleInnesChart
 
-    chart = ThieleInnesChart(branch=branch)
+    chart = ThieleInnesChart(sheet=sheet)
     x = jnp.asarray(np.random.default_rng(0).normal(size=(2, 3, 7)))
     x = x.at[0, 0, 1:3].set(0.0)
     recovered, original, rebuilt = _round_trip(chart, x)
@@ -450,7 +450,7 @@ def test_thiele_innes_round_trip(branch):
     orbit = chart.to_orbit(x, mu_AU3_per_d2=100.0, epoch_d=jnp.array([1.0, 2.0, 3.0]))
     np.testing.assert_allclose(orbit.mu_AU3_per_d2, chart.implied_mu(x), rtol=8e-15)
     np.testing.assert_allclose(chart.from_orbit(orbit), x, rtol=2e-13, atol=2e-13)
-    # Independent classical source in the chosen branch, including e=0.
+    # Independent classical source in the chosen sheet, including e=0.
     source = FrameOrbit.from_classical(
         1.3,
         jnp.array([0.0, 0.4, 0.9, 0.3, 0.0]),
@@ -467,7 +467,7 @@ def test_thiele_innes_round_trip(branch):
     pivot = jnp.take_along_axis(z, jnp.argmax(jnp.abs(z), -1)[:, None], -1)[:, 0]
     from orbix.system.rotation import from_basis
 
-    sign = branch * jnp.where(pivot < 0, -1.0, 1.0)
+    sign = sheet * jnp.where(pivot < 0, -1.0, 1.0)
     f, g = f.at[:, 2].multiply(sign), g.at[:, 2].multiply(sign)
     source = eqx.tree_at(lambda o: o.quat, source, from_basis(f, g, jnp.cross(f, g)))
     result = chart.to_orbit(chart.from_orbit(source), mu_AU3_per_d2=100.0, epoch_d=17.0)
@@ -479,8 +479,8 @@ def test_thiele_innes_round_trip(branch):
     )
 
 
-@pytest.mark.parametrize("branch", [-1, 1])
-def test_thiele_innes_volume(branch):
+@pytest.mark.parametrize("sheet", [-1, 1])
+def test_thiele_innes_volume(sheet):
     """Fails if sky determinant or the d ln(mu) factor of two is omitted.
 
     Truth: jacfwd into the already tested ClassicalChart plus ln(mu).
@@ -489,7 +489,7 @@ def test_thiele_innes_volume(branch):
     """
     from orbix.system import ThieleInnesChart
 
-    chart = ThieleInnesChart(branch=branch)
+    chart = ThieleInnesChart(sheet=sheet)
     target = ClassicalChart()
 
     def phi(x):
@@ -640,30 +640,30 @@ def test_periapsis_chart_shape():
     assert batch[0].shape == (2,)
 
 
-@pytest.mark.parametrize("branch", [-1, 1])
-def test_line_of_sight_branch(branch):
-    """Fails if the branch read back from an orbit differs from the chart's sheet.
+@pytest.mark.parametrize("sheet", [-1, 1])
+def test_line_of_sight_sheet(sheet):
+    """Fails if the sheet read back from an orbit differs from the chart's sheet.
 
     Orbits of a ThieleInnesChart sheet report that sheet, and reflecting an orbit
     through the sky plane flips the sign while the sky block stays the same. Also fails
     if ``reflect_line_of_sight`` changes the sky track, keeps the line-of-sight
     coordinate, or touches another row: at three times the reflected row has the same
     east and north positions and the opposite away coordinate (1e-12 AU), and its
-    branch is the other sheet's.
+    sheet is the other sheet's.
     """
     from orbix.system import (
         ThieleInnesChart,
         frame_to_sky_block,
-        line_of_sight_branch,
+        line_of_sight_sheet,
         reflect_line_of_sight,
     )
 
     x = jnp.asarray(np.random.default_rng(0).normal(size=(6, 7)))
-    chart = ThieleInnesChart(branch=branch)
+    chart = ThieleInnesChart(sheet=sheet)
     orbit = chart.to_orbit(x, mu_AU3_per_d2=1.0)
-    np.testing.assert_array_equal(line_of_sight_branch(orbit), branch)
-    other = ThieleInnesChart(branch=-branch).to_orbit(x, mu_AU3_per_d2=1.0)
-    np.testing.assert_array_equal(line_of_sight_branch(other), -branch)
+    np.testing.assert_array_equal(line_of_sight_sheet(orbit), sheet)
+    other = ThieleInnesChart(sheet=-sheet).to_orbit(x, mu_AU3_per_d2=1.0)
+    np.testing.assert_array_equal(line_of_sight_sheet(other), -sheet)
     np.testing.assert_allclose(
         frame_to_sky_block(orbit.a_AU, orbit.quat),
         frame_to_sky_block(other.a_AU, other.quat),
@@ -677,4 +677,4 @@ def test_line_of_sight_branch(branch):
     np.testing.assert_allclose(r_ref[2], r[2] * sign, rtol=0, atol=1e-12)
     others = np.arange(6) != 2
     np.testing.assert_array_equal(r_ref[others], r[others])
-    np.testing.assert_array_equal(line_of_sight_branch(reflected)[2], -branch)
+    np.testing.assert_array_equal(line_of_sight_sheet(reflected)[2], -sheet)
