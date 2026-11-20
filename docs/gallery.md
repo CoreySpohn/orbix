@@ -392,22 +392,21 @@ own, rather than described.
 ```{code-cell} ipython3
 # Three colours from ONE SourceStyles: a fresh SourceStyles restarts the
 # palette, so asking for three separate ones would give the same colour thrice.
-families = ep.style.SourceStyles(["alias A", "alias B", "alias C"])
-per_track = [families[f"alias {c}"]["color"] for c in "ABC"] * (len(weights) // 3)
-
-# The same three families as sources: the renderer colors each track by its
-# source through one cast, instead of recoloring the drawn lines afterwards.
+# Three period-alias families as sources: the renderer colors each track by its
+# source through one cast.
 aliases = [f"alias {c}" for c in "ABC"] * (len(weights) // 3)
 alias_cast = SourceCast(["alias A", "alias B", "alias C"])
 
 # Deliberately lumpy weights; a near-uniform posterior fades almost invisibly.
 lumpy = np.random.default_rng(3).dirichlet(np.full(len(weights), 0.35))
 
+planet_b_profile = replace(ep.style.snapshot_profile(), colors=(styles["planet b"]["color"],))
+
 variants = [
     ("plot_sky_track(fan, ...)", {}),
     ("weights=posterior_mass", {"weights": lumpy}),
-    ("colors=per_track", {"colors": per_track}),
-    ("source_ids=aliases", {"source_ids": aliases, "cast": alias_cast, "style": None}),
+    ("source_ids=aliases", {"source_ids": aliases, "cast": alias_cast, "profile": None}),
+    ("profile=thicker stroke", {"profile": replace(planet_b_profile, stroke_width_pt=2.4)}),
     ("iwa_arcsec=0.06", {"iwa_arcsec": 0.06}),
     ("observations=(xy, xerr, yerr)", {"observations": epochs}),
 ]
@@ -418,16 +417,15 @@ for ax, (label, kw) in zip(axes.ravel(), variants):
         time_d=time_d,
         dist_pc=10.0,
         ax=ax,
-        **{"style": styles["planet b"], **kw},
+        **{"profile": planet_b_profile, **kw},
     )
     ax.set_title(label, fontsize=10.5)
 ```
 
-`colors=` recolors each drawn track after rendering, and `source_ids=` with a
-cast has the renderer color each track by its source; both panels color the
-three alias families the same way. A `style` recolors every track after
-rendering, so the `source_ids` panel passes `style=None` to keep the cast
-colors. RA increases to the left in every panel: the view fixes the
+`source_ids=` with a cast has the renderer color each track by its source, so
+the three alias families each get their own color; that panel passes
+`profile=None` to keep the cast colors, and the other panels pass a render
+profile with one color. RA increases to the left in every panel: the view fixes the
 direction, so no option flips it.
 
 `plot_orbit` on the same system. With no `style` it uses the star-chart look --
@@ -476,10 +474,7 @@ for history in ["all", 15, "none"]:
         kind="3d",
         history=history,
         rotate=None,
-        source_ids="planet b",
-        profile=replace(
-            ep.style.snapshot_profile(), colors=(styles["planet b"]["color"],)
-        ),
+        style=styles["planet b"],
         base_ms=viz.size_by_radius([1.0, 3.9, 11.2]),
     )
     for i, frame in enumerate(anim.frames):

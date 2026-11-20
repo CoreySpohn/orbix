@@ -722,9 +722,9 @@ class ThieleInnesChart(AbstractChart):
     d(ln a), extended by d(ln mu). Write c=cos(i), l=ln(a), and u0 for
     the angle locating f from the node. The volume derivation is:
     dnu = dex dey dl dc dW du0 d(ln mu).
-    |d(A,B,F,G)/d(l,c,W,u0)| = a^4*(1-c^2).
+    ``|d(A,B,F,G)/d(l,c,W,u0)|`` = a^4*(1-c^2).
     d(ln mu) = 2*d(ln n)+3*dl, giving a factor 2 in the wedge product.
-    |d(ex,ey)/d(ux,uy)| = (1+ux^2+uy^2)^(-2).
+    ``|d(ex,ey)/d(ux,uy)|`` = (1+ux^2+uy^2)^(-2).
     log_volume = log(2)-4*log(a)-log(1-c^2)-2*log(1+ux^2+uy^2)-log(8*pi^2).
     The log(2) is the Jacobian of d(ln mu), not a prior factor. The chart
     covers one line-of-sight sheet; a density over its coordinates for a

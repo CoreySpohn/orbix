@@ -1,47 +1,34 @@
 # Changelog
 
-## Unreleased -- descope
+## [5.0.0](https://github.com/CoreySpohn/orbix/compare/v4.2.0...v5.0.0) (2026-11-19)
 
-### BREAKING CHANGE
 
-* Raw `propagate` rows are now (east, north, away), right-handed, instead
-  of (north, east, away). Positions are in AU and velocities use the same
-  order in AU/day. The same row order applies to the exported helpers
-  `AB_matrices`, `AB_matrices_reduced`, `single_r`, `single_r_v`,
-  `system_r` and `system_r_v`. `position_arcsec` keeps its (ra, dec) return
-  order, but the two numbers swap relative to 2.x: the first now holds the
-  east offset and the second the north offset, where 2.x put the north offset
-  first (see Bug fixes). `state_vector_to_keplerian` now expects both
-  position and velocity in (east, north, away) order. Swap the first two
-  components of stored raw states before passing them to the new API.
-  Orbital elements and the z sign are unchanged: dz/dt is the body's
-  radial velocity relative to the star, positive receding. Phase angle
-  is denoted beta, with cos(beta) = z/r; alpha denotes angular separation.
-  The 3D orbit view now agrees with the sky panel when viewed from -z.
+### ⚠ BREAKING CHANGES
 
-### Bug fixes
+* expose sky_block_geometry as the public projected-orbit scale and gap
+* **viz:** remove legacy viz keywords; time_d only
+* delete the Lambert phase copies and add quaternion rotation from an axis and angle
+* remove the angle-field orbit class and the positional eccentric-anomaly solvers
 
-* `position_arcsec` now returns (Delta alpha*, Delta Dec) = (east, north),
-  where Delta alpha* = Delta RA cos Dec. Earlier releases returned these
-  swapped, reflecting the sky about the diagonal; earlier sky outputs and
-  anything fitted against them followed that old convention. The phase-angle
-  documentation now states that z points away from the observer and the
-  returned angle is the standard star-planet-observer phase angle beta.
-  The phase-angle numbers are unchanged; the raw row-order change is
-  described above. Published elements (standard convention) now give the correct
-  sky positions; elements fitted against earlier `position_arcsec` outputs
-  convert by i' = 180 deg - i, Omega' = (90 deg - Omega) mod 360, with a, e,
-  omega and the epoch terms unchanged. Rerun figures drawn from
-  `position_arcsec`.
+### Features
 
-### Removed / moved (not a release-please entry; folded into the next release notes)
+* expose sky_block_geometry as the public projected-orbit scale and gap ([73cb76e](https://github.com/CoreySpohn/orbix/commit/73cb76eedc81bbee6449b0f25bd7494b5eb7047c))
+* expose the disk map, periapsis chart shape and line-of-sight branch ([0565a6f](https://github.com/CoreySpohn/orbix/commit/0565a6fc6064c69a8ab03e270c7fe6439322be5c))
+* invert Thiele-Innes constants to Campbell elements ([a731568](https://github.com/CoreySpohn/orbix/commit/a731568b74974a79a191637cef4916cc9b29ee76))
+* **observatory:** observability at day offsets from an epoch and summarized over an interval ([bc01fcc](https://github.com/CoreySpohn/orbix/commit/bc01fcc0f8766ba4daf99b3a8d8d789d18a14ca5))
+* remove the angle-field orbit class and the positional eccentric-anomaly solvers ([3cd51b8](https://github.com/CoreySpohn/orbix/commit/3cd51b88773dc08d6a71a3f27d741e25115bea17))
+* **system:** the linear map and in-plane basis of an orbit, a Thiele-Innes chart and a conditional linear fit ([12651f3](https://github.com/CoreySpohn/orbix/commit/12651f3d102912d09cb1f48c1e0211b1a9686b54))
 
-* Orbit fitting (the `fitting` module and its `numpyro` extra) moved to photomancy.
-* `Planets`/`System`/`Star` and the EXOSIMS integration moved to exosims-plugins.
-* Zodiacal photometry moved to skyscapes.
-* `quasi_random` (the vendored Roberts quasi-random sequence) moved to photomancy.
-* The broken predict/pdet functions and the `discrete_e` factory were removed
-  (they did not work correctly and had no working callers).
+
+### Bug Fixes
+
+* require the hwoutils release that carries the epoch type ([9419545](https://github.com/CoreySpohn/orbix/commit/9419545363a951dcf2c1418763f06aabd9253f9d))
+
+
+### Code Refactoring
+
+* delete the Lambert phase copies and add quaternion rotation from an axis and angle ([c9b1485](https://github.com/CoreySpohn/orbix/commit/c9b148555c8f940bd0605f617936ce14ab891ab4))
+* **viz:** remove legacy viz keywords; time_d only ([63d90e9](https://github.com/CoreySpohn/orbix/commit/63d90e9560258b8cb1c045f6bdb9bb68b86d0a93))
 
 ## [4.2.0](https://github.com/CoreySpohn/orbix/compare/v4.1.0...v4.2.0) (2026-11-16)
 
