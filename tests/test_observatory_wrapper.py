@@ -36,7 +36,6 @@ def test_observatory_defaults():
     obs = Observatory(orbit=orbit)
 
     assert obs.orbit is orbit
-    assert obs.temperature_K == 270.0
     assert obs.settling_time_d == 1.0
     assert obs.keepout_min_deg == 0.0
     assert obs.keepout_max_deg == 180.0
@@ -47,19 +46,19 @@ def test_observatory_custom_fields():
     orbit = ObservatoryL2Halo.from_default()
     obs = Observatory(
         orbit=orbit,
-        temperature_K=265.0,
+        settling_time_d=2.0,
     )
-    assert obs.temperature_K == 265.0
+    assert obs.settling_time_d == 2.0
 
 
 def test_observatory_is_pytree():
     """Observatory flattens and unflattens cleanly as a JAX pytree."""
     orbit = ObservatoryL2Halo.from_default()
-    obs = Observatory(orbit=orbit, temperature_K=265.0)
+    obs = Observatory(orbit=orbit, settling_time_d=2.0)
 
     leaves, treedef = jax.tree_util.tree_flatten(obs)
     rebuilt = jax.tree_util.tree_unflatten(treedef, leaves)
-    assert rebuilt.temperature_K == 265.0
+    assert rebuilt.settling_time_d == 2.0
 
 
 def test_observatory_delegates_orbit_method():

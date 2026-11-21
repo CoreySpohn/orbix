@@ -53,6 +53,10 @@ orbix 5.0 changes the order of raw state rows, corrects the sky axes of
   `sky_block_to_frame(..., branch=)` takes `sheet=`.
 * The solar gravitational parameter `GM_SUN_AU3_PER_D2` lives in
   `hwoutils.constants`.
+* `Observatory` no longer has `overhead_multi`, `overhead_fixed_s`, `stability_fact`
+  or `temperature_K`. Overheads belong to the survey simulator, the speckle
+  stability factor is `optixstuff.PostProcessing.speckle_residual_fraction`, and the
+  telescope temperature is `optixstuff.WarmEmission` on the instrument.
 * The observatory takes sky angles in degrees. `body_angle(obs_pos, body_pos,
   ra_rad, dec_rad, mjd)` is `body_angle_deg(obs_pos, body_pos, ra_deg, dec_deg)`, and
   `is_observable` takes `ra_deg` and `dec_deg`.

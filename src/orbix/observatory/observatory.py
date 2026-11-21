@@ -1,7 +1,7 @@
 """Observatory composition wrapper around ObservatoryL2Halo.
 
 Bundles an orbit model with platform-level operational scalars
-(temperature, settling time, keepout limits).
+(settling time, keepout limits).
 
 Follows equinox-best-practices Style A: pure field declarations with
 defaults, no custom __init__.
@@ -47,21 +47,18 @@ class Observatory(eqx.Module):
     """Space telescope observatory platform.
 
     Composes an :class:`ObservatoryL2Halo` orbit model with operational
-    scalars (thermal state, settling time, keepout
-    limits). All scalar fields have sensible defaults so a bare
-    ``Observatory(orbit=orbit)`` constructs a reasonable HWO-like
-    platform.
+    scalars (settling time, keepout limits). All scalar fields have sensible
+    defaults so a bare ``Observatory(orbit=orbit)`` constructs a reasonable
+    HWO-like platform.
 
     Args:
         orbit: L2 halo orbit model.
-        temperature_K: Telescope equilibrium temperature in Kelvin.
         settling_time_d: Slew-settling time in days.
         keepout_min_deg: Minimum allowed solar elongation in degrees.
         keepout_max_deg: Maximum allowed solar elongation in degrees.
     """
 
     orbit: ObservatoryL2Halo
-    temperature_K: float = 270.0
     settling_time_d: float = 1.0
     keepout_min_deg: float = 0.0
     keepout_max_deg: float = 180.0
