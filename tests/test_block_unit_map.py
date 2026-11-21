@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import priorities
 import pytest
+from hwoutils.constants import GM_SUN_AU3_PER_D2 as GM
 from scipy.stats import ks_1samp, ks_2samp, uniform
 from test_blocks import (
     A_LAW,
@@ -25,7 +26,6 @@ from orbix.system import (
     OrbitBlock,
     OrbitLaw,
 )
-from orbix.system.core import GM_SUN_AU3_PER_D2 as GM
 
 N = 40_000
 ALPHA = 1e-3

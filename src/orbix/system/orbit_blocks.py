@@ -38,13 +38,13 @@ import jax.numpy as jnp
 import numpy as np
 import priorities
 from hwoutils.blocks import AbstractBlock
-from hwoutils.constants import two_pi
+from hwoutils.constants import GM_SUN_AU3_PER_D2, two_pi
 from hwoutils.model_paths import join, resolve
 from jaxtyping import Array
 
 from orbix.equations.orbit import mean_motion
 from orbix.system.charts import AbstractChart, ThieleInnesChart
-from orbix.system.core import GM_SUN_AU3_PER_D2, enclosed_mu
+from orbix.system.core import enclosed_mu
 from orbix.system.frame_orbit import FrameOrbit
 from orbix.system.laws import AbstractOrbitLaw, size_term
 

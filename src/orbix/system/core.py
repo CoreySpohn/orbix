@@ -7,7 +7,7 @@ The hierarchy is a set of independent Kepler orbits, not an N-body integrator.
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from hwoutils.constants import G, Msun2kg
+from hwoutils.constants import GM_SUN_AU3_PER_D2
 from hwoutils.epoch import Epoch
 from jaxtyping import Array
 
@@ -15,7 +15,6 @@ from orbix.kepler import Markley
 from orbix.system import observables
 from orbix.system.frame_orbit import FrameOrbit
 
-GM_SUN_AU3_PER_D2 = G * Msun2kg
 _DEFAULT_SOLVER = Markley()
 
 

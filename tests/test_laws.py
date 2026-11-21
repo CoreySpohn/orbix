@@ -6,9 +6,9 @@ import jax.numpy as jnp
 import numpy as np
 import priorities
 import pytest
+from hwoutils.constants import GM_SUN_AU3_PER_D2 as GM
 
 from orbix.system import ClassicalChart, FrameChart, FrameOrbit, OrbitLaw
-from orbix.system.core import GM_SUN_AU3_PER_D2 as GM
 
 KEY = jax.random.PRNGKey(3)
 E_LAW = priorities.Uniform(0.05, 0.8)

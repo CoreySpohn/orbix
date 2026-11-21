@@ -7,6 +7,7 @@ import numpy as np
 import priorities
 import pytest
 from hwoutils.blocks import AbstractBlock
+from hwoutils.constants import GM_SUN_AU3_PER_D2 as GM
 from hwoutils.model_paths import assign, resolve
 
 from orbix.system import (
@@ -25,7 +26,6 @@ from orbix.system import (
     enclosed_mu,
 )
 from orbix.system.charts import disk_to_plane
-from orbix.system.core import GM_SUN_AU3_PER_D2 as GM
 from orbix.system.rotation import rotate
 
 TIMES = jnp.array([-40.0, 0.0, 25.0, 90.0])

@@ -1,6 +1,5 @@
 """Non-singular orbit frames, Jacobi systems, and solve-once ephemerides."""
 
-from orbix.kepler import AbstractKeplerSolver, Grid, Halley, Markley, kepler
 from orbix.system.charts import (
     AbstractChart,
     CartesianChart,
@@ -12,7 +11,14 @@ from orbix.system.charts import (
     periapsis_chart_shape,
     plane_to_disk,
 )
-from orbix.system.core import Body, Ephemeris, SkyFrame, System, enclosed_mu
+from orbix.system.core import (
+    Body,
+    Ephemeris,
+    SkyFrame,
+    System,
+    enclosed_mu,
+    jacobi_to_barycentric,
+)
 from orbix.system.frame_orbit import FrameOrbit
 from orbix.system.laws import AbstractOrbitLaw, OrbitLaw
 from orbix.system.linear import (
@@ -35,10 +41,10 @@ from orbix.system.observables import (
 )
 from orbix.system.orbit_blocks import OrbitBlock, ThieleInnesBlock
 from orbix.system.orientation import IsotropicInclination
+from orbix.system.rotation import from_axis_angle, rotate
 
 __all__ = [
     "AbstractChart",
-    "AbstractKeplerSolver",
     "AbstractOrbitLaw",
     "Body",
     "CartesianChart",
@@ -47,10 +53,7 @@ __all__ = [
     "Ephemeris",
     "FrameChart",
     "FrameOrbit",
-    "Grid",
-    "Halley",
     "IsotropicInclination",
-    "Markley",
     "OrbitBlock",
     "OrbitLaw",
     "SkyFrame",
@@ -62,7 +65,8 @@ __all__ = [
     "enclosed_mu",
     "fit_linear_map",
     "frame_to_sky_block",
-    "kepler",
+    "from_axis_angle",
+    "jacobi_to_barycentric",
     "line_of_sight_sheet",
     "linear_gaussian_conditional",
     "offset_arcsec",
@@ -72,6 +76,7 @@ __all__ = [
     "position_angle_deg",
     "radial_velocity_m_per_s",
     "reflect_line_of_sight",
+    "rotate",
     "separation_arcsec",
     "sky_block_geometry",
     "sky_block_to_frame",
