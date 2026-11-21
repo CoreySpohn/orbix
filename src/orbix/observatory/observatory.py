@@ -1,8 +1,7 @@
 """Observatory composition wrapper around ObservatoryL2Halo.
 
 Bundles an orbit model with platform-level operational scalars
-(temperature, overheads, stability, keepout limits) that jaxedith
-and other downstream consumers read when assembling ETC count rates.
+(temperature, overheads, stability, keepout limits).
 
 Follows equinox-best-practices Style A: pure field declarations with
 defaults, no custom __init__.
