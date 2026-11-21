@@ -43,3 +43,16 @@ orbix 5.0 changes the order of raw state rows, corrects the sky axes of
 * `quasi_random` (the vendored Roberts quasi-random sequence) moved to photomancy.
 * The broken predict/pdet functions and the `discrete_e` factory were removed
   (they did not work correctly and had no working callers).
+
+# Migrating from 5.0
+
+* The Kepler solvers (`Markley`, `Halley`, `Grid`, `AbstractKeplerSolver`) and the
+  non-singular `kepler` function are no longer re-exported by `orbix.system`.
+  Import them from `orbix.kepler`.
+* `orbix.system.line_of_sight_branch` is `line_of_sight_sheet`, and
+  `sky_block_to_frame(..., branch=)` takes `sheet=`.
+* The solar gravitational parameter `GM_SUN_AU3_PER_D2` lives in
+  `hwoutils.constants`.
+* The observatory takes sky angles in degrees. `body_angle(obs_pos, body_pos,
+  ra_rad, dec_rad, mjd)` is `body_angle_deg(obs_pos, body_pos, ra_deg, dec_deg)`, and
+  `is_observable` takes `ra_deg` and `dec_deg`.

@@ -88,6 +88,12 @@ position of a planet is linear in the four constants `(A, B, F, G)`: `sky_design
 design matrix at a fixed orbit shape and `linear_gaussian_conditional` the exact Gaussian
 conditional of the constants under Gaussian astrometric errors.
 
+A radial-velocity or phase-dependent likelihood can tell apart two orbits that share one
+sky track and differ only in the sign of the line-of-sight coordinate. `line_of_sight_sheet`
+reads that sign (+1 or -1) of an orbit, and `reflect_line_of_sight(orbits, planet)` returns
+the orbits with one planet mirrored through the sky plane, which has the same east and
+north positions at every time and the opposite away coordinate.
+
 ## Sky-coordinate convention
 
 Star-centered orbit vectors use the right-handed **(east, north, away)**
@@ -118,7 +124,8 @@ ecliptic and equatorial APIs retain their respective solar-system frames.
 Plotting lives in the optional `orbix.viz` package, built on
 [eyepiece](https://eyepiece.readthedocs.io) and installed with
 `pip install 'orbix[viz]'`; the base install carries no plotting stack.
-Start with {doc}`examples/orbits`; {doc}`examples/prepared` prepares sky
+Start with {doc}`examples/orbits`; {doc}`examples/observatory` checks keepout and
+computes the zodiacal-light pointing angles of a target; {doc}`examples/prepared` prepares sky
 tracks once for a still, a strip, a movie, and a Manim clip; {doc}`gallery`
 shows every function it exports.
 
@@ -128,6 +135,7 @@ shows every function it exports.
 
 examples/orbits
 examples/prepared
+examples/observatory
 ```
 
 ```{toctree}

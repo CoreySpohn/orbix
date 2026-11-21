@@ -34,6 +34,8 @@ intersphinx_mapping = {
 exclude_patterns = ["_build", ".build", "Thumbs.db", ".DS_Store"]
 
 autoapi_dirs = ["../src"]
+# AutoAPI already indexes fields; Napoleon should render their descriptions only.
+napoleon_use_ivar = True
 autoapi_ignore = ["**/_version.py"]
 # hatch-vcs generates _version.py, which is excluded from the API docs above.
 # AutoAPI still tries to resolve its re-export from orbix.__init__.

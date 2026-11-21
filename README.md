@@ -133,6 +133,19 @@ position of a planet is linear in the four constants `(A, B, F, G)`: `sky_design
 design matrix at a fixed orbit shape and `linear_gaussian_conditional` the exact Gaussian
 conditional of the constants under Gaussian astrometric errors.
 
+A radial-velocity or phase-dependent likelihood can tell apart two orbits that share one
+sky track and differ only in the sign of the line-of-sight coordinate. `line_of_sight_sheet`
+reads that sign (+1 or -1) of an orbit, and `reflect_line_of_sight(orbits, planet)` returns
+the orbits with one planet mirrored through the sky plane, which has the same east and
+north positions at every time and the opposite away coordinate.
+
+## Observatory geometry
+
+`orbix.observatory` places the telescope on its L2 halo orbit and answers whether a target
+is outside the keepout zones at a given time (`Observatory.is_observable_at`) or for what
+fraction of an interval (`Observatory.observability`). `ecliptic_pointing` returns the
+ecliptic latitude and helioecliptic longitude that the local zodiacal light models need.
+
 ## Scope
 
 orbix provides Keplerian orbit geometry, Kepler-equation solvers, and the charts, laws
