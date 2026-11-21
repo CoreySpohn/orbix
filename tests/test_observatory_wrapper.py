@@ -38,9 +38,6 @@ def test_observatory_defaults():
     assert obs.orbit is orbit
     assert obs.temperature_K == 270.0
     assert obs.settling_time_d == 1.0
-    assert obs.overhead_multi == 1.0
-    assert obs.overhead_fixed_s == 0.0
-    assert obs.stability_fact == 1.0
     assert obs.keepout_min_deg == 0.0
     assert obs.keepout_max_deg == 180.0
 
@@ -51,14 +48,8 @@ def test_observatory_custom_fields():
     obs = Observatory(
         orbit=orbit,
         temperature_K=265.0,
-        overhead_multi=1.1,
-        overhead_fixed_s=100.0,
-        stability_fact=0.95,
     )
     assert obs.temperature_K == 265.0
-    assert obs.overhead_multi == 1.1
-    assert obs.overhead_fixed_s == 100.0
-    assert obs.stability_fact == 0.95
 
 
 def test_observatory_is_pytree():
