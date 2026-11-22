@@ -29,13 +29,29 @@ class AbstractOrbitLaw(eqx.Module):
 
     @abstractmethod
     def log_prob(self, orbit: FrameOrbit) -> Array:
-        """Return the log density of each orbit, with the orbit batch shape."""
+        """Return the log density of each orbit, with the orbit batch shape.
+
+        Args:
+            orbit: Orbits to evaluate, with batch shape B.
+
+        Returns:
+            Log density against the orbit reference measure, shape B.
+        """
 
     @abstractmethod
     def sample(self, key, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
         """Draw orbits at the given rate parameter and epoch.
 
         The batch shape is the broadcast of ``mu_AU3_per_d2`` and the law's parameters.
+
+        Args:
+            key: JAX PRNG key.
+            mu_AU3_per_d2: Gravitational parameter in AU^3/day^2, broadcast with the
+                law's parameters.
+            epoch_d: Epoch of the returned orbits in days. Defaults to 0.
+
+        Returns:
+            Sampled orbits.
         """
 
     def support(self) -> dict[str, tuple[Array, Array]]:
@@ -47,6 +63,10 @@ class AbstractOrbitLaw(eqx.Module):
         arrays that broadcast against the law's parameters. A block that frees
         coordinates uses these to give its coordinates no hard wall. The default
         reports no bound.
+
+        Returns:
+            Dictionary from "e", "a_AU" or "period_d" to a (low, high) pair of arrays,
+            for each bounded element only.
         """
         return {}
 
@@ -61,6 +81,15 @@ class AbstractOrbitLaw(eqx.Module):
         Deterministic, piecewise continuous, and with the pushforward of
         :meth:`sample` for uniform ``c``. A law with no inverse CDF keeps this
         refusal.
+
+        Args:
+            c: Unit-cube points in (0, 1), shape (..., unit_size).
+            mu_AU3_per_d2: Gravitational parameter in AU^3/day^2, broadcast with the
+                law's parameters.
+            epoch_d: Epoch of the returned orbits in days. Defaults to 0.
+
+        Returns:
+            Orbits with the batch shape of the leading axes of c.
 
         Raises:
             NotImplementedError: When ``unit_size`` is ``None``.
@@ -101,7 +130,15 @@ def _draw(dist: priorities.AbstractDistribution, key, batch) -> Array:
 
 
 def size_term(log_p, log_volume) -> Array:
-    """``log_p + log_volume``; a zero of the law wins over an infinite volume."""
+    """``log_p + log_volume``; a zero of the law wins over an infinite volume.
+
+    Args:
+        log_p: Log density of the size law.
+        log_volume: Log of the size Jacobian factor.
+
+    Returns:
+        Sum log_p + log_volume, or -inf where log_p is -inf.
+    """
     return jnp.where(jnp.isneginf(log_p), -jnp.inf, log_p + log_volume)
 
 
@@ -141,6 +178,12 @@ class OrbitLaw(AbstractOrbitLaw):
         the eccentricity-vector density ``p_e(e) / (2 pi e)`` is singular there, a set
         of measure zero that no draw lands on. Where a size law gives zero density the
         result is ``-inf`` even at an infinite size.
+
+        Args:
+            orbit: Orbits to evaluate, with batch shape B.
+
+        Returns:
+            Log density against the orbit reference measure, shape B.
         """
         e = jnp.hypot(orbit.ex, orbit.ey)
         safe_e = jnp.where(e > 0, e, 1.0)
@@ -153,7 +196,18 @@ class OrbitLaw(AbstractOrbitLaw):
         return out + size_term(self.period_d.log_prob(period), jnp.log(1.5 * period))
 
     def sample(self, key, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
-        """Draw orbits; orientation and phase are uniform."""
+        """Draw orbits; orientation and phase are uniform.
+
+        Args:
+            key: JAX PRNG key.
+            mu_AU3_per_d2: Gravitational parameter in AU^3/day^2, broadcast with the
+                law's parameters.
+            epoch_d: Epoch of the returned orbits in days. Defaults to 0.
+
+        Returns:
+            Sampled orbits with the broadcast batch shape of mu_AU3_per_d2 and the law's
+            parameters.
+        """
         mu = jnp.asarray(mu_AU3_per_d2)
         batch = _batch_shape(self, mu)
         k_e, k_size, k_phase, k_quat = jax.random.split(key, 4)
@@ -181,6 +235,10 @@ class OrbitLaw(AbstractOrbitLaw):
 
         The eccentricity bounds are clipped to ``[0, 1]``. A half-bounded or
         unbounded scalar law reports nothing.
+
+        Returns:
+            Dictionary from "e", "a_AU" or "period_d" to a (low, high) pair of arrays,
+            for each bounded element only.
         """
         out = {}
         if self.eccentricity.bounds == "interval":
@@ -212,6 +270,15 @@ class OrbitLaw(AbstractOrbitLaw):
         ``c[..., 2]`` the phase (times ``2 pi``) and ``c[..., 3:6]`` the orientation
         through :func:`_uniform_quaternion`. The pushforward of uniform ``c`` is that of
         :meth:`sample`.
+
+        Args:
+            c: Unit-cube points in (0, 1), shape (..., 6).
+            mu_AU3_per_d2: Gravitational parameter in AU^3/day^2, broadcast with the
+                law's parameters.
+            epoch_d: Epoch of the returned orbits in days. Defaults to 0.
+
+        Returns:
+            Orbits with the batch shape of the leading axes of c.
         """
         if self.unit_size is None:
             raise NotImplementedError("a scalar law has no inverse CDF")

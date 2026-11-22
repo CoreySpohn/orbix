@@ -19,6 +19,11 @@ class IsotropicInclination(priorities.AbstractDistribution):
     """Inclination of an isotropic orbit: density ``sin(i)/2`` on ``[0, pi]``.
 
     The density vanishes at both ends, which are poles of the orientation sphere.
+
+    Attributes:
+        event_dim: Number of event dimensions, zero for a scalar.
+        bounds: Kind of support, "interval".
+        has_icdf: True: the inverse CDF is available.
     """
 
     event_dim: ClassVar[int] = 0
@@ -26,11 +31,22 @@ class IsotropicInclination(priorities.AbstractDistribution):
     has_icdf: ClassVar[bool] = True
 
     def support(self):
-        """Return the bounds ``(0, pi)``."""
+        """Return the bounds ``(0, pi)``.
+
+        Returns:
+            Tuple (0, pi) of the inclination bounds in radians.
+        """
         return jnp.asarray(0.0), jnp.asarray(math.pi)
 
     def log_prob(self, value):
-        """Return ``log(sin(i)/2)``, ``-inf`` outside the open interval."""
+        """Return ``log(sin(i)/2)``, ``-inf`` outside the open interval.
+
+        Args:
+            value: Inclination in radians.
+
+        Returns:
+            Log density, with the shape of value.
+        """
         value = jnp.asarray(value)
         s = jnp.sin(value)
         inside = (value > 0) & (value < math.pi) & (s > 0)
@@ -38,17 +54,39 @@ class IsotropicInclination(priorities.AbstractDistribution):
         return jnp.where(jnp.isnan(value), jnp.nan, out)
 
     def sample(self, key: Array, sample_shape: tuple[int, ...] = ()):
-        """Draw inclinations of shape ``sample_shape``."""
+        """Draw inclinations of shape ``sample_shape``.
+
+        Args:
+            key: JAX PRNG key.
+            sample_shape: Shape of the draw. Defaults to a scalar.
+
+        Returns:
+            Inclinations in radians, with shape sample_shape.
+        """
         return self.icdf(jax.random.uniform(key, sample_shape))
 
     def cdf(self, value):
-        """Return ``sin(i/2)^2``, accurate near the pole."""
+        """Return ``sin(i/2)^2``, accurate near the pole.
+
+        Args:
+            value: Inclination in radians.
+
+        Returns:
+            Cumulative probability, with the shape of value.
+        """
         value = jnp.asarray(value)
         out = jnp.sin(jnp.clip(value, 0.0, math.pi) / 2) ** 2
         return jnp.where(jnp.isnan(value), jnp.nan, out)
 
     def icdf(self, q):
-        """Return ``2 arcsin(sqrt(q))``, accurate near the pole."""
+        """Return ``2 arcsin(sqrt(q))``, accurate near the pole.
+
+        Args:
+            q: Cumulative probability in [0, 1].
+
+        Returns:
+            Inclination in radians, with the shape of q; NaN outside [0, 1].
+        """
         q = jnp.asarray(q)
         out = 2 * jnp.arcsin(jnp.sqrt(jnp.clip(q, 0.0, 1.0)))
         return jnp.where((q >= 0) & (q <= 1), out, jnp.nan)

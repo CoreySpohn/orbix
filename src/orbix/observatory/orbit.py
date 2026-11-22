@@ -26,7 +26,16 @@ from orbix.observatory.solar_system import earth_position_ecliptic
 
 
 def epoch_mjd(epoch: Epoch, time_d: ArrayLike) -> Array:
-    """Modified Julian Date of ``time_d`` days from ``epoch``, on the epoch's scale."""
+    """Modified Julian Date of ``time_d`` days from ``epoch``, on the epoch's scale.
+
+    Args:
+        epoch: Static day zero of time_d.
+        time_d: Days from epoch, any shape.
+
+    Returns:
+        Modified Julian Date in days on the epoch's time scale, with the shape of
+        time_d.
+    """
     return epoch.days_between(Epoch(MJD_ZERO_JD, scale=epoch.scale)) + jnp.asarray(
         time_d
     )

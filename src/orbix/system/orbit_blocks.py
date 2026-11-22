@@ -160,6 +160,13 @@ class OrbitBlock(AbstractBlock):
         (the eccentricity), present for the coordinates the law bounds and the chart
         maps; each value is ``(low, high)``. The dict is what the chart's
         ``constrain`` and ``unconstrain`` take.
+
+        Args:
+            model: Model holding the System at the block's system path.
+
+        Returns:
+            Dictionary from "ln_size" and "e" to (low, high) bounds in chart
+            coordinates, for the coordinates the law bounds and the chart maps.
         """
         mu = self._mu(model)[..., jnp.asarray(self.rows)]
         return _chart_support(self.chart, self.law.support(), mu)
@@ -175,7 +182,16 @@ class OrbitBlock(AbstractBlock):
         return held, mu, coords, held.epoch_d[..., rows], log_jac
 
     def forward(self, x, model) -> dict[str, FrameOrbit]:
-        """Build the freed rows; held rows keep geometry and take the model's rate."""
+        """Build the freed rows; held rows keep geometry and take the model's rate.
+
+        Args:
+            x: Coordinates keyed by coordinate_names, each of shape (..., len(rows)).
+            model: Model holding the System at the block's system path.
+
+        Returns:
+            Dictionary from the path of the owned orbits to the stacked orbits with the
+            freed rows replaced.
+        """
         held, mu, coords, epoch, _ = self._freed(x, model)
         new = self.chart.to_orbit(
             coords, mu_AU3_per_d2=mu[..., jnp.asarray(self.rows)], epoch_d=epoch
@@ -188,6 +204,14 @@ class OrbitBlock(AbstractBlock):
         Coordinates the chart excludes (:meth:`AbstractChart.exclude`) read ``-inf``.
         The exactly circular orbit of a disk chart also reads ``-inf`` (see
         :meth:`OrbitLaw.log_prob`): a set of measure zero that no draw lands on.
+
+        Args:
+            x: Coordinates keyed by coordinate_names, each of shape (..., len(rows)).
+            model: Model holding the System at the block's system path.
+
+        Returns:
+            Log density of the coordinates against Lebesgue measure, summed over the
+            freed rows, with the leading batch shape of the coordinates.
         """
         _, mu, coords, epoch, log_jac = self._freed(x, model)
         coords, excluded = self.chart.exclude(coords)
@@ -200,7 +224,15 @@ class OrbitBlock(AbstractBlock):
         return jnp.where(jnp.any(excluded, -1), -jnp.inf, total)
 
     def sample(self, key, model) -> dict[str, Array]:
-        """Draw the freed orbits from the law at the model's mu, as coordinates."""
+        """Draw the freed orbits from the law at the model's mu, as coordinates.
+
+        Args:
+            key: JAX PRNG key.
+            model: Model holding the System at the block's system path.
+
+        Returns:
+            Coordinates keyed by coordinate_names, each of shape (len(rows),).
+        """
         held = resolve(model, self.owns)
         rows = jnp.asarray(self.rows)
         k_law, k_chart = jax.random.split(key)
@@ -215,7 +247,15 @@ class OrbitBlock(AbstractBlock):
         )
 
     def inverse(self, model) -> dict[str, Array]:
-        """Coordinates of the freed rows of the model's orbits."""
+        """Coordinates of the freed rows of the model's orbits.
+
+        Args:
+            model: Model holding the System at the block's system path.
+
+        Returns:
+            Coordinates keyed by coordinate_names, each of shape (..., len(rows)), of
+            the freed rows of the model's orbits.
+        """
         coords = self.chart.from_orbit(_take(resolve(model, self.owns), self.rows))
         return _unstack(
             self.coordinate_names,
@@ -236,6 +276,13 @@ class OrbitBlock(AbstractBlock):
         ``c`` has shape ``(unit_size,)``, laid out row by row: the law's coordinates
         (:meth:`AbstractOrbitLaw.from_unit`) then the chart's gauge
         (:meth:`AbstractChart.unit_coordinates`).
+
+        Args:
+            c: Unit-cube point in (0, 1), shape (unit_size,).
+            model: Model holding the System at the block's system path.
+
+        Returns:
+            Coordinates keyed by coordinate_names, each of shape (len(rows),).
         """
         c = _unit_rows(self, c)
         held = resolve(model, self.owns)
@@ -252,7 +299,14 @@ class OrbitBlock(AbstractBlock):
         )
 
     def same_layout(self, other) -> bool:
-        """Whether ``other`` matches in type, chart, rows and system; not the law."""
+        """Whether ``other`` matches in type, chart, rows and system; not the law.
+
+        Args:
+            other: Block to compare with.
+
+        Returns:
+            True if the type, chart, rows and system match.
+        """
         return (
             type(other) is type(self)
             and other.chart == self.chart
@@ -267,6 +321,12 @@ class OrbitBlock(AbstractBlock):
         has a coordinate for, so a law with other such bounds is another map (a traced
         bound counts as different). The shape of the law inside the bounds, and a bound
         no coordinate carries, are not part of the map.
+
+        Args:
+            other: Block to compare with.
+
+        Returns:
+            True if the layout matches and the law bounds that the chart maps are equal.
         """
         return self.same_layout(other) and _same_bounds(
             _map_bounds(self.chart, self.law.support()),
@@ -362,6 +422,13 @@ class ThieleInnesBlock(AbstractBlock):
 
         The Thiele-Innes size coordinate is ``ln n``, so the bounds do not depend on
         ``model``; the argument keeps one signature across blocks.
+
+        Args:
+            model: Model holding the System at the block's system path.
+
+        Returns:
+            Dictionary from "ln_size" and "e" to (low, high) bounds in chart
+            coordinates, for the coordinates the law bounds and the chart maps.
         """
         return _chart_support(self.chart, self.law.support(), None)
 
@@ -372,7 +439,17 @@ class ThieleInnesBlock(AbstractBlock):
         )
 
     def forward(self, x, model) -> dict[str, object]:
-        """Build the row and return it with the star mass it implies."""
+        """Build the row and return it with the star mass it implies.
+
+        Args:
+            x: Coordinates keyed by coordinate_names, each of shape (..., len(rows)).
+            model: Model holding the System at the block's system path.
+
+        Returns:
+            Dictionary from the path of the owned orbits to the orbits with the freed
+            rows replaced, and from the star mass path to the implied star mass in solar
+            masses.
+        """
         held = resolve(model, self.owns)
         coords, _ = self._coords(x, model)
         new = self.chart.to_orbit(
@@ -393,6 +470,14 @@ class ThieleInnesBlock(AbstractBlock):
         A zero sky block has no orbit (the chart excludes zero size) and reads ``-inf``.
         Exactly face-on, the chart volume is ``+inf``: an integrable singularity that no
         draw lands on.
+
+        Args:
+            x: Coordinates keyed by coordinate_names, each of shape (..., len(rows)).
+            model: Model holding the System at the block's system path.
+
+        Returns:
+            Log density of the coordinates against Lebesgue measure, summed over the
+            freed rows, with the leading batch shape of the coordinates.
         """
         held = resolve(model, self.owns)
         coords, log_jac = self._coords(x, model)
@@ -414,7 +499,15 @@ class ThieleInnesBlock(AbstractBlock):
         return jnp.where(jnp.any(excluded, -1), -jnp.inf, total)
 
     def sample(self, key, model) -> dict[str, Array]:
-        """Draw the star mass, then the orbit at the implied mu, as coordinates."""
+        """Draw the star mass, then the orbit at the implied mu, as coordinates.
+
+        Args:
+            key: JAX PRNG key.
+            model: Model holding the System at the block's system path.
+
+        Returns:
+            Coordinates keyed by coordinate_names, each of shape (len(rows),).
+        """
         held = resolve(model, self.owns)
         k_mass, k_law, k_chart = jax.random.split(key, 3)
         enclosed = self.star_mass_Msun.sample(k_mass) + self._inner_mass(model)
@@ -430,7 +523,15 @@ class ThieleInnesBlock(AbstractBlock):
         )
 
     def inverse(self, model) -> dict[str, Array]:
-        """Coordinates of the freed row of the model's orbits."""
+        """Coordinates of the freed row of the model's orbits.
+
+        Args:
+            model: Model holding the System at the block's system path.
+
+        Returns:
+            Coordinates keyed by coordinate_names, each of shape (..., len(rows)), of
+            the freed rows of the model's orbits.
+        """
         coords = self.chart.from_orbit(_take(resolve(model, self.owns), self.rows))
         return _unstack(
             self.coordinate_names,
@@ -450,6 +551,13 @@ class ThieleInnesBlock(AbstractBlock):
 
         ``c[0]`` gives the star mass through its inverse CDF and ``c[1:]`` the orbit
         through :meth:`AbstractOrbitLaw.from_unit` at the implied rate.
+
+        Args:
+            c: Unit-cube point in (0, 1), shape (unit_size,).
+            model: Model holding the System at the block's system path.
+
+        Returns:
+            Coordinates keyed by coordinate_names, each of shape (len(rows),).
         """
         c = _unit_rows(self, c, rows=1)
         held = resolve(model, self.owns)
@@ -466,7 +574,14 @@ class ThieleInnesBlock(AbstractBlock):
         )
 
     def same_layout(self, other) -> bool:
-        """Whether ``other`` matches in type, chart, rows and system; not the law."""
+        """Whether ``other`` matches in type, chart, rows and system; not the law.
+
+        Args:
+            other: Block to compare with.
+
+        Returns:
+            True if the type, chart, rows and system match.
+        """
         return (
             type(other) is type(self)
             and other.chart == self.chart
@@ -481,6 +596,12 @@ class ThieleInnesBlock(AbstractBlock):
         has a coordinate for, so a law with other such bounds is another map (a traced
         bound counts as different). The shape of the law inside the bounds, and a bound
         no coordinate carries, are not part of the map.
+
+        Args:
+            other: Block to compare with.
+
+        Returns:
+            True if the layout matches and the law bounds that the chart maps are equal.
         """
         return self.same_layout(other) and _same_bounds(
             _map_bounds(self.chart, self.law.support()),

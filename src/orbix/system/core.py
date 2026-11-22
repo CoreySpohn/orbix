@@ -29,7 +29,17 @@ def _ordered_sum(values):
 
 
 def enclosed_mu(star_mass_Msun, planet_mass_Msun):
-    """Return Jacobi mu for star shape B and inner-to-outer masses B + (K,)."""
+    """Return Jacobi mu for star shape B and inner-to-outer masses B + (K,).
+
+    Args:
+        star_mass_Msun: Star mass in solar masses, shape B.
+        planet_mass_Msun: Planet masses in solar masses, ordered inner to outer, shape B
+            + (K,).
+
+    Returns:
+        Gravitational parameter GM of the mass enclosed by each Jacobi orbit, in
+        AU^3/day^2, shape B + (K,).
+    """
     masses = jnp.asarray(planet_mass_Msun)
     _, cumulative = _ordered_sum(jnp.moveaxis(masses, -1, 0))
     return GM_SUN_AU3_PER_D2 * (
@@ -42,6 +52,17 @@ def jacobi_to_barycentric(relative, star_mass_Msun, planet_mass_Msun):
 
     Both sums run sequentially inner to outer. Appending zero-mass bodies
     preserves the bits of every preceding body and the stellar reflex.
+
+    Args:
+        relative: Jacobi positions or velocities of each planet, shape B + (K,) +
+            time_shape + (3,), in AU or AU/day.
+        star_mass_Msun: Star mass in solar masses, shape B.
+        planet_mass_Msun: Planet masses in solar masses, ordered inner to outer, shape B
+            + (K,).
+
+    Returns:
+        Barycentric vectors in the units of relative, shape B + (K+1,) + time_shape +
+        (3,). Index zero along the body axis is the star.
     """
     relative = jnp.asarray(relative)
     masses = jnp.asarray(planet_mass_Msun)
@@ -64,7 +85,11 @@ def jacobi_to_barycentric(relative, star_mass_Msun, planet_mass_Msun):
 
 
 class Body(eqx.Module):
-    """Body masses in solar masses, with a free batch shape."""
+    """Body masses in solar masses, with a free batch shape.
+
+    Attributes:
+        mass_Msun: Body masses in solar masses, any batch shape.
+    """
 
     mass_Msun: Array = eqx.field(converter=jnp.asarray)
 
@@ -84,6 +109,12 @@ class SkyFrame(eqx.Module):
     The epoch is host-only metadata (hwoutils.epoch.Epoch), never a traced
     leaf. time_d converts host dates to offsets before any float32 device
     transfer. No time-scale conversion is applied.
+
+    Attributes:
+        dist_pc: Distance to the system in parsecs.
+        epoch: Static reference epoch of the sky position and of the time offsets.
+        ra_deg: Right ascension in degrees, ICRS J2000, shape of dist_pc, or None.
+        dec_deg: Declination in degrees, ICRS J2000, shape of dist_pc, or None.
     """
 
     dist_pc: Array = eqx.field(converter=jnp.asarray)
@@ -108,6 +139,12 @@ class SkyFrame(eqx.Module):
 
         time_jd may be a numeric JD array or an object exposing jd1 and jd2
         (for example astropy Time). Dates must use the epoch's time scale.
+
+        Args:
+            time_jd: Julian dates as a numeric array, or an object exposing jd1 and jd2.
+
+        Returns:
+            Days from the epoch as a NumPy float64 array.
         """
         return self.epoch.days(time_jd)
 
@@ -118,6 +155,12 @@ class Ephemeris(eqx.Module):
     Index zero is the star. reference is a body index or "barycenter".
     Distance broadcasts against time_shape. All observables reuse these
     stored states and perform no further orbital solve.
+
+    Attributes:
+        position_AU: Barycentric positions in AU, shape (K+1,) + time_shape + (3,), in
+            the (east, north, away) frame.
+        velocity_AU_per_d: Barycentric velocities in AU/day, same shape as position_AU.
+        dist_pc: Distance to the system in parsecs, broadcast against time_shape.
     """
 
     position_AU: Array = eqx.field(converter=jnp.asarray)
@@ -157,37 +200,94 @@ class Ephemeris(eqx.Module):
         return jnp.take(values, target, axis=axis)
 
     def offset_arcsec(self, target, reference=0):
-        """Return east and north angular offsets from the reference."""
+        """Return east and north angular offsets from the reference.
+
+        Args:
+            target: Index of the target body, where index 0 is the star.
+            reference: Reference body index. Defaults to 0, the star, and may be the
+                string "barycenter".
+
+        Returns:
+            Tuple of east and north angular offsets of the target from the reference in
+            arcseconds.
+        """
         return observables.offset_arcsec(
             self._relative(self.position_AU, target, reference), self.dist_pc
         )
 
     def separation_arcsec(self, target, reference=0):
-        """Return projected separation from the reference in arcseconds."""
+        """Return projected separation from the reference in arcseconds.
+
+        Args:
+            target: Index of the target body, where index 0 is the star.
+            reference: Reference body index. Defaults to 0, the star, and may be the
+                string "barycenter".
+
+        Returns:
+            Projected angular separation in arcseconds.
+        """
         return observables.separation_arcsec(
             self._relative(self.position_AU, target, reference), self.dist_pc
         )
 
     def position_angle_deg(self, target, reference=0):
-        """Return position angle east of north in [0, 360) degrees."""
+        """Return position angle east of north in [0, 360) degrees.
+
+        Args:
+            target: Index of the target body, where index 0 is the star.
+            reference: Reference body index. Defaults to 0, the star, and may be the
+                string "barycenter".
+
+        Returns:
+            Position angle of the target east of north, in degrees in [0, 360).
+        """
         return observables.position_angle_deg(
             self._relative(self.position_AU, target, reference)
         )
 
     def phase_angle_rad(self, target, reference=0):
-        """Return reference-target-observer phase; zero behind the reference."""
+        """Return reference-target-observer phase; zero behind the reference.
+
+        Args:
+            target: Index of the target body, where index 0 is the star.
+            reference: Reference body index. Defaults to 0, the star, and may be the
+                string "barycenter".
+
+        Returns:
+            Reference-target-observer phase angle in radians, zero when the target is
+            behind the reference.
+        """
         return observables.phase_angle_rad(
             self._relative(self.position_AU, target, reference)
         )
 
     def radial_velocity_m_per_s(self, target, reference="barycenter"):
-        """Return receding-positive velocity relative to the reference, m/s."""
+        """Return receding-positive velocity relative to the reference, m/s.
+
+        Args:
+            target: Index of the target body, where index 0 is the star.
+            reference: Reference body index or the string "barycenter". Defaults to
+                "barycenter".
+
+        Returns:
+            Line-of-sight velocity of the target relative to the reference in m/s,
+            positive when receding.
+        """
         return observables.radial_velocity_m_per_s(
             self._relative(self.velocity_AU_per_d, target, reference)
         )
 
     def distance_AU(self, target, reference=0):
-        """Return three-dimensional distance to the reference in AU."""
+        """Return three-dimensional distance to the reference in AU.
+
+        Args:
+            target: Index of the target body, where index 0 is the star.
+            reference: Reference body index. Defaults to 0, the star, and may be the
+                string "barycenter".
+
+        Returns:
+            Three-dimensional distance between target and reference in AU.
+        """
         return observables.distance_AU(
             self._relative(self.position_AU, target, reference)
         )
@@ -200,6 +300,12 @@ class System(eqx.Module):
     and all preceding planets. The star and distance have shape B; planet
     masses and orbit batch have shape B + (K,). Editing masses changes the
     barycentric map only: rebuild to impose dynamically consistent rates.
+
+    Attributes:
+        star: Star mass, shape B.
+        planets: Planet masses ordered inner to outer, shape B + (K,).
+        orbits: Jacobi orbit of each planet, batch shape B + (K,).
+        frame: Distance, sky position and reference epoch, shape B.
     """
 
     star: Body
@@ -224,7 +330,25 @@ class System(eqx.Module):
     def from_classical(
         cls, star, planets, frame, *, a_AU, e, i_rad, W_rad, w_rad, M0_rad, epoch_d=0.0
     ):
-        """Set orbit rates from the mass enclosed by each Jacobi orbit."""
+        """Set orbit rates from the mass enclosed by each Jacobi orbit.
+
+        Args:
+            star: Star mass.
+            planets: Planet masses ordered inner to outer.
+            frame: Distance, sky position and reference epoch.
+            a_AU: Semi-major axes in AU, shape B + (K,).
+            e: Eccentricities, dimensionless.
+            i_rad: Inclinations in radians.
+            W_rad: Longitudes of the ascending node in radians, measured north through
+                east.
+            w_rad: Arguments of periapsis in radians.
+            M0_rad: Mean anomalies at epoch_d in radians.
+            epoch_d: Epoch in days on the time_d axis of the solve methods. Defaults to
+                0.
+
+        Returns:
+            System whose orbit rates follow from the mass enclosed by each Jacobi orbit.
+        """
         orbits = FrameOrbit.from_classical(
             a_AU,
             e,
@@ -238,7 +362,16 @@ class System(eqx.Module):
         return cls(star, planets, orbits, frame)
 
     def solve(self, time_d, *, solver=_DEFAULT_SOLVER):
-        """Solve once at all times; return (K+1,) + time_shape + (3,) states."""
+        """Solve once at all times; return (K+1,) + time_shape + (3,) states.
+
+        Args:
+            time_d: Times in days, shape (T,) or B + (T,).
+            solver: Value-only Kepler strategy. Defaults to Markley.
+
+        Returns:
+            Ephemeris with the barycentric positions and velocities of the star and all
+            planets at the requested times.
+        """
         batch = self.star.mass_Msun.shape
         if batch:
             time = jnp.asarray(time_d)

@@ -25,7 +25,16 @@ class AbstractKeplerSolver(eqx.Module):
 
     @abstractmethod
     def solve(self, mean_anomaly, e):
-        """Return (sin(E), cos(E)) without an attached derivative rule."""
+        """Return (sin(E), cos(E)) without an attached derivative rule.
+
+        Args:
+            mean_anomaly: Mean anomaly M in radians, any real value.
+            e: Eccentricity, 0 <= e < 1. Broadcasts with mean_anomaly.
+
+        Returns:
+            Tuple (sin(E), cos(E)) of the eccentric anomaly E, each with the broadcast
+            shape of the inputs.
+        """
         raise NotImplementedError
 
 
@@ -33,7 +42,16 @@ class Markley(AbstractKeplerSolver):
     """Cubic starter and fifth-order correction of Markley (1995)."""
 
     def solve(self, mean_anomaly, e):
-        """Evaluate the table-free Markley algorithm elementwise."""
+        """Evaluate the table-free Markley algorithm elementwise.
+
+        Args:
+            mean_anomaly: Mean anomaly M in radians, any real value.
+            e: Eccentricity, 0 <= e < 1. Broadcasts with mean_anomaly.
+
+        Returns:
+            Tuple (sin(E), cos(E)) of the eccentric anomaly E, each with the broadcast
+            shape of the inputs.
+        """
         return _markley_pair(mean_anomaly, e)
 
 
@@ -43,12 +61,24 @@ class Halley(AbstractKeplerSolver):
     See Danby, Fundamentals of Celestial Mechanics, for iterative elliptic
     Kepler solvers. Six steps reach roundoff for e <= 0.95; more steps may be
     needed very close to e = 1 and periapsis.
+
+    Attributes:
+        steps: Number of Halley updates applied; static under JIT.
     """
 
     steps: int = eqx.field(static=True, default=6)
 
     def solve(self, mean_anomaly, e):
-        """Apply a fixed number of branch-free Halley updates."""
+        """Apply a fixed number of branch-free Halley updates.
+
+        Args:
+            mean_anomaly: Mean anomaly M in radians, any real value.
+            e: Eccentricity, 0 <= e < 1. Broadcasts with mean_anomaly.
+
+        Returns:
+            Tuple (sin(E), cos(E)) of the eccentric anomaly E, each with the broadcast
+            shape of the inputs.
+        """
         dtype = jnp.result_type(mean_anomaly, e, 0.0)
         mean, e = jnp.broadcast_arrays(
             jnp.asarray(mean_anomaly, dtype=dtype), jnp.asarray(e, dtype=dtype)
@@ -72,13 +102,26 @@ class Grid(AbstractKeplerSolver):
     Interpolation error grows near e = 1. The returned pair need not have
     exactly unit norm; derivatives of the longitude function use the implicit
     equation with this approximate value, not derivatives of the interpolant.
+
+    Attributes:
+        n_e: Number of eccentricity nodes in the lookup table; static under JIT.
+        n_M: Number of mean-anomaly nodes in the lookup table; static under JIT.
     """
 
     n_e: int = eqx.field(static=True, default=512)
     n_M: int = eqx.field(static=True, default=2048)
 
     def solve(self, mean_anomaly, e):
-        """Gather four table corners for broadcast inputs without internal vmap."""
+        """Gather four table corners for broadcast inputs without internal vmap.
+
+        Args:
+            mean_anomaly: Mean anomaly M in radians, any real value.
+            e: Eccentricity, 0 <= e < 1. Broadcasts with mean_anomaly.
+
+        Returns:
+            Tuple (sin(E), cos(E)) of the eccentric anomaly E, each with the broadcast
+            shape of the inputs. The pair is interpolated and need not have unit norm.
+        """
         dtype = jnp.result_type(mean_anomaly, e, 0.0)
         mean, e = jnp.broadcast_arrays(
             jnp.asarray(mean_anomaly, dtype=dtype), jnp.asarray(e, dtype=dtype)
@@ -147,5 +190,16 @@ def kepler(mean_longitude, ex, ey, *, solver=_DEFAULT_SOLVER):
     A custom JVP differentiates the implicit equation, including at circular
     orbits and to higher orders. The value-only solver is closed over and is
     never differentiated. Equal solver instances reuse the same function.
+
+    Args:
+        mean_longitude: Mean longitude lam in radians.
+        ex: Eccentricity-vector component e*cos(p), dimensionless.
+        ey: Eccentricity-vector component e*sin(p), dimensionless.
+        solver: Value-only strategy used to solve for the eccentric anomaly. Defaults to
+            Markley.
+
+    Returns:
+        Tuple (sin(F), cos(F)) of the eccentric longitude F, each with the broadcast
+        shape of the inputs.
     """
     return _longitude_function(solver)(mean_longitude, ex, ey)

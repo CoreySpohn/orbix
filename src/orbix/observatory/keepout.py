@@ -31,7 +31,15 @@ def _angular_sep_deg(v1: jnp.ndarray, v2: jnp.ndarray) -> float:
 
 
 def target_ecliptic_direction(ra_deg: float, dec_deg: float) -> jnp.ndarray:
-    """Unit vector toward a J2000 target in the heliocentric ecliptic frame."""
+    """Unit vector toward a J2000 target in the heliocentric ecliptic frame.
+
+    Args:
+        ra_deg: Target right ascension in degrees, J2000.
+        dec_deg: Target declination in degrees, J2000.
+
+    Returns:
+        Unit vector of shape (3,) toward the target in the heliocentric ecliptic frame.
+    """
     lon, lat = map(jnp.radians, equatorial_to_ecliptic_deg(ra_deg, dec_deg))
     return jnp.array(
         [jnp.cos(lat) * jnp.cos(lon), jnp.cos(lat) * jnp.sin(lon), jnp.sin(lat)]

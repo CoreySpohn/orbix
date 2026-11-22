@@ -112,6 +112,12 @@ def depth_size(depth):
 
     Callers styling a scatter artist (whose ``s`` is an area) should
     square this factor to stay in area units.
+
+    Args:
+        depth: Depth factor in [0, 1], where 1 is the near side. Any array shape.
+
+    Returns:
+        Marker-diameter multiplier between 1 and about 1.22, with the shape of depth.
     """
     return np.sqrt(1.0 + 0.5 * depth)
 
@@ -125,6 +131,15 @@ def depth_scale(positions, azim_deg, elev_deg):
     direction -- but here it drives the one moving head marker instead of
     beads along the whole path: in an animation the head can carry the
     depth cue itself, so the path stays a clean line.
+
+    Args:
+        positions: Positions of the head marker relative to the star, shape (N, 3), in
+            any one length unit.
+        azim_deg: Camera azimuth in degrees.
+        elev_deg: Camera elevation in degrees.
+
+    Returns:
+        Depth factor in [0, 1] for each position, shape (N,), where 1 is the near side.
     """
     radius = max(float(np.max(np.linalg.norm(positions, axis=-1))), 1.0)
     elev_rad, azim_rad = np.deg2rad(elev_deg), np.deg2rad(azim_deg)
@@ -429,7 +444,13 @@ def animate_orbit(
         label = ax.text2D(0.02, 0.98, "", transform=ax.transAxes, ha="left", va="top")
 
     def draw(fig, i):
-        """Advance every animated artist to epoch ``i`` (a set_data pass)."""
+        """Advance every animated artist to epoch ``i`` (a set_data pass).
+
+        Args:
+            fig: Figure being animated. Unused: the artists are captured from the
+                enclosing scope.
+            i: Index of the frame to draw.
+        """
         if camera is not None:
             ax.view_init(
                 elev=camera["elev"][i],

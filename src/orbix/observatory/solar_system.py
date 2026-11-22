@@ -322,12 +322,26 @@ def planet_position_equatorial(body: str, mjd: float) -> jnp.ndarray:
 
 
 def earth_position_ecliptic(mjd: float) -> jnp.ndarray:
-    """Heliocentric ecliptic position of Earth (AU)."""
+    """Heliocentric ecliptic position of Earth (AU).
+
+    Args:
+        mjd: Modified Julian Date in days, scalar.
+
+    Returns:
+        Position vector in AU of shape (3,), heliocentric ecliptic frame.
+    """
     return planet_position_ecliptic("Earth", mjd)
 
 
 def earth_position_equatorial(mjd: float) -> jnp.ndarray:
-    """Heliocentric equatorial position of Earth (AU)."""
+    """Heliocentric equatorial position of Earth (AU).
+
+    Args:
+        mjd: Modified Julian Date in days, scalar.
+
+    Returns:
+        Position vector in AU of shape (3,), heliocentric equatorial frame.
+    """
     return planet_position_equatorial("Earth", mjd)
 
 

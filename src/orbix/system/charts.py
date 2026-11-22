@@ -48,6 +48,13 @@ def plane_to_disk(u):
 
     ``u`` has trailing axis 2 and the result is the eccentricity vector
     ``(ex, ey) = u / sqrt(1 + |u|^2)`` of the chart coordinates ``u``.
+
+    Args:
+        u: Plane coordinates, trailing axis of length 2.
+
+    Returns:
+        Eccentricity vector (ex, ey), dimensionless, with the shape of u and norm below
+        1.
     """
     return u / jnp.sqrt(1 + jnp.sum(u * u, axis=-1, keepdims=True))
 
@@ -57,6 +64,13 @@ def disk_to_plane(evec):
 
     ``evec`` is an eccentricity vector ``(ex, ey)`` with ``|evec| < 1`` on the
     trailing axis; the result is ``u = evec / sqrt(1 - |evec|^2)``.
+
+    Args:
+        evec: Eccentricity vector (ex, ey), dimensionless, trailing axis of length 2
+            with norm below 1.
+
+    Returns:
+        Plane coordinates u with the shape of evec.
     """
     return evec / jnp.sqrt(1 - jnp.sum(evec * evec, axis=-1, keepdims=True))
 
@@ -67,6 +81,17 @@ def periapsis_chart_shape(T_d, e, tp_d, epoch_d=0.0):
     ``(ex, ey) = e (cos M, -sin M)`` on the epoch mean-longitude axes, with
     ``M = n (epoch_d - tp_d)`` the epoch mean anomaly and ``n = 2 pi / T_d``
     the mean motion in radians per day. Inputs broadcast.
+
+    Args:
+        T_d: Orbital period in days.
+        e: Eccentricity, dimensionless.
+        tp_d: Time of periapsis in days.
+        epoch_d: Epoch in days. Defaults to 0.
+
+    Returns:
+        Tuple (ln n, ex, ey) with n the mean motion in radians/day and ex, ey the
+        dimensionless eccentricity-vector components, each with the broadcast shape of
+        the inputs.
     """
     n = two_pi / jnp.asarray(T_d)
     phase = n * (epoch_d - tp_d)
@@ -155,6 +180,19 @@ class AbstractChart(eqx.Module):
     arrays. ``periods`` is aligned with ``coordinate_names``: the period of each
     coordinate (the orbit depends on it only modulo the period, and the density is
     that of one cell), or ``None`` for a coordinate with no period.
+
+    Attributes:
+        n_coords: Number of coordinates on the trailing axis.
+        coordinate_names: Coordinate names in trailing-axis order, with a unit suffix
+            where the coordinate has a unit.
+        periods: Period of each coordinate in radians, or None for a coordinate without
+            one.
+        size_coordinate: Kind of size coordinate that a law's bounds can map, "ln_a",
+            "ln_n" or None.
+        eccentricity_coordinate: Kind of eccentricity coordinate that a law's bounds can
+            map, "logit", "disk" or None.
+        gauge_unit_size: Number of unit-cube coordinates that unit_coordinates consumes
+            for the gauge.
     """
 
     n_coords: eqx.AbstractClassVar[int]
@@ -170,11 +208,29 @@ class AbstractChart(eqx.Module):
 
     @abstractmethod
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
-        """Map coordinates to a bound orbit with the supplied rate and epoch."""
+        """Map coordinates to a bound orbit with the supplied rate and epoch.
+
+        Args:
+            x: Chart coordinates, shape B + (n_coords,).
+            mu_AU3_per_d2: Gravitational parameter in AU^3/day^2, positive, broadcast
+                against B.
+            epoch_d: Epoch in days of the built orbit, broadcast against B. Defaults to
+                0.
+
+        Returns:
+            FrameOrbit of batch shape B.
+        """
 
     @abstractmethod
     def from_orbit(self, orbit: FrameOrbit) -> Array:
-        """Return coordinates representing the orbit at its stored epoch."""
+        """Return coordinates representing the orbit at its stored epoch.
+
+        Args:
+            orbit: Orbit to represent, batch shape B.
+
+        Returns:
+            Coordinates at the orbit's stored epoch, shape B + (n_coords,).
+        """
 
     @abstractmethod
     def log_volume(self, x) -> Array:
@@ -182,6 +238,12 @@ class AbstractChart(eqx.Module):
 
         This is the log Jacobian from the coordinates to normalized Haar times
         dex dey times d(ln a), including the normalization of any gauge.
+
+        Args:
+            x: Chart coordinates, shape B + (n_coords,).
+
+        Returns:
+            Log density of the reference measure, shape B.
         """
 
     @abstractmethod
@@ -192,6 +254,13 @@ class AbstractChart(eqx.Module):
         ``[0, 2 pi)``; for a chart with a gauge it is ``from_orbit`` plus a draw
         from the gauge density, so that the coordinates of an orbit drawn from a
         law have the density ``law.log_prob + log_volume``.
+
+        Args:
+            key: JAX PRNG key for the gauge draw.
+            orbit: Orbit whose coordinates are wanted, batch shape B.
+
+        Returns:
+            Coordinates of the orbit, shape B + (n_coords,).
         """
 
     def unit_coordinates(self, c, orbit: FrameOrbit) -> Array:
@@ -200,6 +269,13 @@ class AbstractChart(eqx.Module):
         ``c`` has shape ``B + (gauge_unit_size,)`` with values in ``(0, 1)``; a chart
         without a gauge ignores it. The map is deterministic and its pushforward of
         uniform ``c`` is the gauge law of :meth:`sample_coordinates`.
+
+        Args:
+            c: Unit-cube values in (0, 1) for the gauge, shape B + (gauge_unit_size,).
+            orbit: Orbit whose coordinates are wanted, batch shape B.
+
+        Returns:
+            Coordinates of the orbit, shape B + (n_coords,).
         """
         if self.gauge_unit_size:
             raise NotImplementedError(f"{type(self).__name__} must draw its gauge")
@@ -214,6 +290,13 @@ class AbstractChart(eqx.Module):
         regular point there, so that densities evaluated at ``x_safe`` are finite and
         a caller can report no density at ``excluded`` without a NaN or its gradient.
         Charts without such a set return ``x`` and all false.
+
+        Args:
+            x: Chart coordinates, shape B + (n_coords,).
+
+        Returns:
+            Tuple (x_safe, excluded): the coordinates with excluded points replaced by a
+            regular point, and a boolean array of shape B marking the excluded points.
         """
         x = _coordinates(x, self.n_coords)
         return x, jnp.zeros(x.shape[:-1], bool)
@@ -228,6 +311,11 @@ class AbstractChart(eqx.Module):
         disk to radius ``high`` and ignore ``low``, leaving a disk of radius ``low`` of
         zero law density around the origin when it is above zero. The density in
         ``y`` then has no wall. An element the chart has no coordinate for is ignored.
+
+        Args:
+            y: Wall-free coordinates, shape B + (n_coords,).
+            support: Mapping from "ln_size" and "e" to (low, high) intervals that
+                broadcast against B. Each key is optional.
 
         Returns:
             The chart coordinates ``x`` (the argument of :meth:`to_orbit`) and
@@ -267,6 +355,15 @@ class AbstractChart(eqx.Module):
         the result is finite. One outside by more than ``sqrt(eps)`` of the interval
         width (of ``high`` for the eccentricity disk) has no wall-free coordinate: the
         whole row of the result is NaN.
+
+        Args:
+            x: Chart coordinates, shape B + (n_coords,).
+            support: Mapping from "ln_size" and "e" to (low, high) intervals that
+                broadcast against B, as for constrain.
+
+        Returns:
+            Wall-free coordinates, shape B + (n_coords,), NaN across a row whose
+            coordinates lie outside the bounds.
         """
         x = _coordinates(x, self.n_coords)
         y = x
@@ -322,6 +419,21 @@ class FrameChart(AbstractChart):
     -2 log(1+norm(u)^2) - norm(v)^2/2 - 2 log(2*pi), unchanged and normalized.
     Gaussian four-vector draws then give exact isotropic orientations.
     Both quaternion signs are integrated in either gauge.
+
+    Attributes:
+        n_coords: Number of coordinates on the trailing axis.
+        coordinate_names: Coordinate names in trailing-axis order, with a unit suffix
+            where the coordinate has a unit.
+        size_coordinate: Kind of size coordinate that a law's bounds can map, "ln_a".
+        eccentricity_coordinate: Kind of eccentricity coordinate that a law's bounds can
+            map, "disk".
+        periods: Period of each coordinate in radians, or None for a coordinate without
+            one.
+        gauge_unit_size: Number of unit-cube coordinates that unit_coordinates consumes
+            for the gauge.
+        gauge_sd: Standard deviation of the truncated normal gauge on the quaternion
+            length, dimensionless; None selects the chi gauge of four degrees of
+            freedom. Static under JIT.
     """
 
     n_coords: ClassVar[int] = 7
@@ -341,7 +453,18 @@ class FrameChart(AbstractChart):
     gauge_sd: float | None = eqx.field(static=True, default=0.1)
 
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
-        """Build an epoch frame directly, without eccentricity or node angles."""
+        """Build an epoch frame directly, without eccentricity or node angles.
+
+        Args:
+            x: Chart coordinates, shape B + (n_coords,).
+            mu_AU3_per_d2: Gravitational parameter in AU^3/day^2, positive, broadcast
+                against B.
+            epoch_d: Epoch in days of the built orbit, broadcast against B. Defaults to
+                0.
+
+        Returns:
+            FrameOrbit of batch shape B.
+        """
         x = _coordinates(x, self.n_coords)
         evec = plane_to_disk(x[..., 1:3])
         v = x[..., 3:]
@@ -366,7 +489,15 @@ class FrameChart(AbstractChart):
         )
 
     def from_orbit(self, orbit: FrameOrbit) -> Array:
-        """Return a canonical representative, also at circular or face-on states."""
+        """Return a canonical representative, also at circular or face-on states.
+
+        Args:
+            orbit: Orbit to represent, batch shape B.
+
+        Returns:
+            Coordinates at the orbit's stored epoch, shape B + (7,), with a unit
+            quaternion whose largest component is positive.
+        """
         u = disk_to_plane(jnp.stack([orbit.ex, orbit.ey], -1))
         quat = orbit.quat / jnp.linalg.norm(orbit.quat, axis=-1, keepdims=True)
         pivot = jnp.take_along_axis(
@@ -376,7 +507,14 @@ class FrameChart(AbstractChart):
         return jnp.concatenate([jnp.log(orbit.a_AU)[..., None], u, quat], axis=-1)
 
     def log_volume(self, x) -> Array:
-        """Return disk area density times the selected radial gauge lift."""
+        """Return disk area density times the selected radial gauge lift.
+
+        Args:
+            x: Chart coordinates, shape B + (n_coords,).
+
+        Returns:
+            Log density of the reference measure, shape B.
+        """
         x = _coordinates(x, self.n_coords)
         squared = jnp.sum(x[..., 3:] ** 2, axis=-1)
         if self.gauge_sd is None:
@@ -396,7 +534,16 @@ class FrameChart(AbstractChart):
         return _disk_log_volume(x[..., 1:3]) + gauge
 
     def sample_coordinates(self, key, orbit: FrameOrbit) -> Array:
-        """Return ``from_orbit`` with the quaternion length and sign drawn."""
+        """Return ``from_orbit`` with the quaternion length and sign drawn.
+
+        Args:
+            key: JAX PRNG key for the gauge draw.
+            orbit: Orbit whose coordinates are wanted, batch shape B.
+
+        Returns:
+            Coordinates of the orbit with the quaternion length and sign drawn, shape B
+            + (7,).
+        """
         coords = self.from_orbit(orbit)
         k_radius, k_sign = jax.random.split(key)
         shape = coords.shape[:-1]
@@ -418,6 +565,14 @@ class FrameChart(AbstractChart):
         of mean one truncated to positive values, or a chi variable of four degrees of
         freedom without ``gauge_sd``) and ``c[..., 1]`` the sign (negative above one
         half).
+
+        Args:
+            c: Unit-cube values in (0, 1), shape B + (2,): the quaternion length and the
+                sign.
+            orbit: Orbit whose coordinates are wanted, batch shape B.
+
+        Returns:
+            Coordinates of the orbit, shape B + (7,).
         """
         c = jnp.asarray(c)
         coords = self.from_orbit(orbit)
@@ -446,6 +601,16 @@ class EccentricityVectorChart(AbstractChart):
     The constant is the total Haar measure of (cos i, W, M0+w) over one
     2*pi cell for each angle. Rotation of the eccentricity
     plane by -(M0+w) preserves area, including its coupled phase dependence.
+
+    Attributes:
+        n_coords: Number of coordinates on the trailing axis.
+        coordinate_names: Coordinate names in trailing-axis order, with a unit suffix
+            where the coordinate has a unit.
+        size_coordinate: Kind of size coordinate that a law's bounds can map, "ln_a".
+        eccentricity_coordinate: Kind of eccentricity coordinate that a law's bounds can
+            map, "disk".
+        periods: Period of each coordinate in radians, or None for a coordinate without
+            one.
     """
 
     n_coords: ClassVar[int] = 6
@@ -469,7 +634,18 @@ class EccentricityVectorChart(AbstractChart):
     )
 
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
-        """Build the frame using mean longitude, without a periapsis singularity."""
+        """Build the frame using mean longitude, without a periapsis singularity.
+
+        Args:
+            x: Chart coordinates, shape B + (n_coords,).
+            mu_AU3_per_d2: Gravitational parameter in AU^3/day^2, positive, broadcast
+                against B.
+            epoch_d: Epoch in days of the built orbit, broadcast against B. Defaults to
+                0.
+
+        Returns:
+            FrameOrbit of batch shape B.
+        """
         x = _coordinates(x, self.n_coords)
         h, k = jnp.moveaxis(plane_to_disk(x[..., 1:3]), -1, 0)
         longitude = x[..., 5]
@@ -494,7 +670,14 @@ class EccentricityVectorChart(AbstractChart):
         )
 
     def from_orbit(self, orbit: FrameOrbit) -> Array:
-        """Recover node and mean longitude directly, including circular states."""
+        """Recover node and mean longitude directly, including circular states.
+
+        Args:
+            orbit: Orbit to represent, batch shape B.
+
+        Returns:
+            Coordinates at the orbit's stored epoch, shape B + (6,).
+        """
         f = rotate(orbit.quat, jnp.array([1.0, 0.0, 0.0]))
         normal = rotate(orbit.quat, jnp.array([0.0, 0.0, 1.0]))
         inc = jnp.arctan2(jnp.linalg.norm(normal[..., :2], axis=-1), -normal[..., 2])
@@ -516,7 +699,14 @@ class EccentricityVectorChart(AbstractChart):
         )
 
     def log_volume(self, x) -> Array:
-        """Return disk area and isotropic inclination Jacobians."""
+        """Return disk area and isotropic inclination Jacobians.
+
+        Args:
+            x: Chart coordinates, shape B + (n_coords,).
+
+        Returns:
+            Log density of the reference measure, shape B.
+        """
         x = _coordinates(x, self.n_coords)
         return (
             _disk_log_volume(x[..., 1:3])
@@ -525,7 +715,15 @@ class EccentricityVectorChart(AbstractChart):
         )
 
     def sample_coordinates(self, key, orbit: FrameOrbit) -> Array:
-        """Return ``from_orbit`` with the angles reduced to ``[0, 2 pi)``."""
+        """Return ``from_orbit`` with the angles reduced to ``[0, 2 pi)``.
+
+        Args:
+            key: JAX PRNG key. Unused: the chart has no gauge.
+            orbit: Orbit whose coordinates are wanted, batch shape B.
+
+        Returns:
+            Coordinates with the angles reduced to [0, 2 pi), shape B + (6,).
+        """
         return _wrap_angles(self.from_orbit(orbit), (4, 5))
 
 
@@ -542,6 +740,15 @@ class CartesianChart(AbstractChart):
     states (including w=0) have e=1 and no orbital-plane orientation.
     This measure-zero set is excluded; circular and face-on orbits are
     regular. Floating-point boundary limitations also apply.
+
+    Attributes:
+        n_coords: Number of coordinates on the trailing axis.
+        coordinate_names: Coordinate names in trailing-axis order, with a unit suffix
+            where the coordinate has a unit.
+        periods: Period of each coordinate in radians, or None for a coordinate without
+            one.
+        scale_AU: Length in AU that multiplies the position coordinates, positive.
+            Static under JIT.
     """
 
     n_coords: ClassVar[int] = 6
@@ -550,7 +757,18 @@ class CartesianChart(AbstractChart):
     scale_AU: float = eqx.field(static=True, default=1.0)
 
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
-        """Build a nonradial bound orbit from its Cartesian epoch state."""
+        """Build a nonradial bound orbit from its Cartesian epoch state.
+
+        Args:
+            x: Chart coordinates, shape B + (n_coords,).
+            mu_AU3_per_d2: Gravitational parameter in AU^3/day^2, positive, broadcast
+                against B.
+            epoch_d: Epoch in days of the built orbit, broadcast against B. Defaults to
+                0.
+
+        Returns:
+            FrameOrbit of batch shape B.
+        """
         x = _coordinates(x, self.n_coords)
         r = self.scale_AU * x[..., :3]
         escape = jnp.sqrt(2 * jnp.asarray(mu_AU3_per_d2) / jnp.linalg.norm(r, axis=-1))
@@ -562,7 +780,14 @@ class CartesianChart(AbstractChart):
         )
 
     def from_orbit(self, orbit: FrameOrbit) -> Array:
-        """Recover position and inverse-ball velocity at the stored epoch."""
+        """Recover position and inverse-ball velocity at the stored epoch.
+
+        Args:
+            orbit: Orbit to represent, batch shape B.
+
+        Returns:
+            Coordinates at the orbit's stored epoch, shape B + (6,).
+        """
         r, v = orbit.to_cartesian()
         escape = jnp.sqrt(2 * orbit.mu_AU3_per_d2 / jnp.linalg.norm(r, axis=-1))
         return jnp.concatenate(
@@ -570,7 +795,15 @@ class CartesianChart(AbstractChart):
         )
 
     def exclude(self, x) -> tuple[Array, Array]:
-        """Exclude the origin, where the escape speed is infinite."""
+        """Exclude the origin, where the escape speed is infinite.
+
+        Args:
+            x: Chart coordinates, shape B + (n_coords,).
+
+        Returns:
+            Tuple (x_safe, excluded): the coordinates with a zero position replaced by a
+            unit vector, and a boolean array of shape B marking those points.
+        """
         x = _coordinates(x, self.n_coords)
         excluded = jnp.all(x[..., :3] == 0, axis=-1)
         unit = jnp.array([1.0, 0.0, 0.0])
@@ -595,6 +828,12 @@ class CartesianChart(AbstractChart):
         s. The constant is independent of scale: log(16) against unnormalized
         Haar, so log(16/(8 pi^2)) = log(2/pi^2) against normalized Haar, which
         is what is returned.
+
+        Args:
+            x: Chart coordinates, shape B + (n_coords,).
+
+        Returns:
+            Log density of the reference measure, shape B.
         """
         x = _coordinates(x, self.n_coords)
         return (
@@ -604,7 +843,15 @@ class CartesianChart(AbstractChart):
         )
 
     def sample_coordinates(self, key, orbit: FrameOrbit) -> Array:
-        """Return ``from_orbit``; the chart has no gauge."""
+        """Return ``from_orbit``; the chart has no gauge.
+
+        Args:
+            key: JAX PRNG key. Unused: the chart has no gauge.
+            orbit: Orbit whose coordinates are wanted, batch shape B.
+
+        Returns:
+            Coordinates of the orbit, shape B + (6,).
+        """
         return self.from_orbit(orbit)
 
 
@@ -620,6 +867,16 @@ class ClassicalChart(AbstractChart):
     and Haar orientation contributes d(cos i) dW d(M0+w). The constant is the
     total Haar measure over one 2*pi cell for each angle. There is no size
     Jacobian because size is ln a.
+
+    Attributes:
+        n_coords: Number of coordinates on the trailing axis.
+        coordinate_names: Coordinate names in trailing-axis order, with a unit suffix
+            where the coordinate has a unit.
+        size_coordinate: Kind of size coordinate that a law's bounds can map, "ln_a".
+        eccentricity_coordinate: Kind of eccentricity coordinate that a law's bounds can
+            map, "logit".
+        periods: Period of each coordinate in radians, or None for a coordinate without
+            one.
     """
 
     n_coords: ClassVar[int] = 6
@@ -643,7 +900,18 @@ class ClassicalChart(AbstractChart):
     )
 
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
-        """Build from smoothly transformed classical elements."""
+        """Build from smoothly transformed classical elements.
+
+        Args:
+            x: Chart coordinates, shape B + (n_coords,).
+            mu_AU3_per_d2: Gravitational parameter in AU^3/day^2, positive, broadcast
+                against B.
+            epoch_d: Epoch in days of the built orbit, broadcast against B. Defaults to
+                0.
+
+        Returns:
+            FrameOrbit of batch shape B.
+        """
         x = _coordinates(x, self.n_coords)
         return FrameOrbit.from_classical(
             jnp.exp(x[..., 0]),
@@ -657,7 +925,15 @@ class ClassicalChart(AbstractChart):
         )
 
     def from_orbit(self, orbit: FrameOrbit) -> Array:
-        """Recover classical coordinates, with each angle reduced modulo 2*pi."""
+        """Recover classical coordinates, with each angle reduced modulo 2*pi.
+
+        Args:
+            orbit: Orbit to represent, batch shape B.
+
+        Returns:
+            Coordinates at the orbit's stored epoch, shape B + (6,), with angles in [0,
+            2 pi) radians.
+        """
         elements = orbit.to_classical()
         e = elements["e"]
         return jnp.stack(
@@ -673,7 +949,14 @@ class ClassicalChart(AbstractChart):
         )
 
     def log_volume(self, x) -> Array:
-        """Return eccentricity area, logit and isotropic inclination Jacobians."""
+        """Return eccentricity area, logit and isotropic inclination Jacobians.
+
+        Args:
+            x: Chart coordinates, shape B + (n_coords,).
+
+        Returns:
+            Log density of the reference measure, shape B.
+        """
         x = _coordinates(x, self.n_coords)
         return (
             2 * log_sigmoid(x[..., 1])
@@ -683,7 +966,15 @@ class ClassicalChart(AbstractChart):
         )
 
     def sample_coordinates(self, key, orbit: FrameOrbit) -> Array:
-        """Return ``from_orbit`` with the angles reduced to ``[0, 2 pi)``."""
+        """Return ``from_orbit`` with the angles reduced to ``[0, 2 pi)``.
+
+        Args:
+            key: JAX PRNG key. Unused: the chart has no gauge.
+            orbit: Orbit whose coordinates are wanted, batch shape B.
+
+        Returns:
+            Coordinates with the angles reduced to [0, 2 pi), shape B + (6,).
+        """
         return _wrap_angles(self.from_orbit(orbit), (3, 4, 5))
 
 
@@ -731,6 +1022,18 @@ class ThieleInnesChart(AbstractChart):
     law on orbits is the sum of the law over both sheets (ThieleInnesBlock).
     At face-on log_volume=+inf, an integrable coordinate singularity, not a
     finite density approximation.
+
+    Attributes:
+        n_coords: Number of coordinates on the trailing axis.
+        coordinate_names: Coordinate names in trailing-axis order, with a unit suffix
+            where the coordinate has a unit.
+        size_coordinate: Kind of size coordinate that a law's bounds can map, "ln_n".
+        eccentricity_coordinate: Kind of eccentricity coordinate that a law's bounds can
+            map, "disk".
+        periods: Period of each coordinate in radians, or None for a coordinate without
+            one.
+        sheet: Line-of-sight sheet, +1 or -1, selecting the sign of the
+            largest-magnitude away-row entry. Static under JIT.
     """
 
     n_coords: ClassVar[int] = 7
@@ -754,7 +1057,18 @@ class ThieleInnesChart(AbstractChart):
             raise ValueError("sheet must be +1 or -1")
 
     def to_orbit(self, x, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:
-        """Build an epoch frame, ignoring mu in favor of the coordinate rate."""
+        """Build an epoch frame, ignoring mu in favor of the coordinate rate.
+
+        Args:
+            x: Chart coordinates, shape B + (n_coords,).
+            mu_AU3_per_d2: Accepted for compatibility and ignored; the rate comes from
+                the coordinates.
+            epoch_d: Epoch in days of the built orbit, broadcast against B. Defaults to
+                0.
+
+        Returns:
+            FrameOrbit of batch shape B.
+        """
         x = _coordinates(x, self.n_coords)
         a, quat = sky_block_to_frame(*jnp.moveaxis(x[..., 3:], -1, 0), sheet=self.sheet)
         evec = plane_to_disk(x[..., 1:3])
@@ -764,7 +1078,15 @@ class ThieleInnesChart(AbstractChart):
         return FrameOrbit(a, n, ex, ey, jnp.broadcast_to(quat, (*a.shape, 4)), epoch)
 
     def from_orbit(self, orbit: FrameOrbit) -> Array:
-        """Project an orbit; inversion reproduces its declared sheet only."""
+        """Project an orbit; inversion reproduces its declared sheet only.
+
+        Args:
+            orbit: Orbit to project, batch shape B.
+
+        Returns:
+            Coordinates, shape B + (7,): ln n with n in radians/day, the disk-plane
+            pair, then A, B, F, G in AU.
+        """
         return jnp.concatenate(
             [
                 jnp.log(orbit.n_rad_per_d)[..., None],
@@ -775,20 +1097,42 @@ class ThieleInnesChart(AbstractChart):
         )
 
     def exclude(self, x) -> tuple[Array, Array]:
-        """Exclude the zero sky block, which has no size."""
+        """Exclude the zero sky block, which has no size.
+
+        Args:
+            x: Chart coordinates, shape B + (n_coords,).
+
+        Returns:
+            Tuple (x_safe, excluded): the coordinates with a zero sky block replaced by
+            ones, and a boolean array of shape B marking those points.
+        """
         x = _coordinates(x, self.n_coords)
         excluded = jnp.all(x[..., 3:] == 0, axis=-1)
         sky = jnp.where(excluded[..., None], 1.0, x[..., 3:])
         return x.at[..., 3:].set(sky), excluded
 
     def implied_mu(self, x) -> Array:
-        """Return n^2*a^3 in AU^3/day^2 with the coordinate batch shape."""
+        """Return n^2*a^3 in AU^3/day^2 with the coordinate batch shape.
+
+        Args:
+            x: Chart coordinates, shape B + (n_coords,).
+
+        Returns:
+            Implied gravitational parameter in AU^3/day^2, shape B.
+        """
         x = _coordinates(x, self.n_coords)
         a, _ = sky_block_geometry(*jnp.moveaxis(x[..., 3:], -1, 0))
         return jnp.exp(2 * x[..., 0]) * a**3
 
     def log_volume(self, x) -> Array:
-        """Return the density against Haar*dex*dey*d(ln a)*d(ln mu)."""
+        """Return the density against Haar*dex*dey*d(ln a)*d(ln mu).
+
+        Args:
+            x: Chart coordinates, shape B + (n_coords,).
+
+        Returns:
+            Log density against the reference measure extended by d(ln mu), shape B.
+        """
         x = _coordinates(x, self.n_coords)
         a, gap = sky_block_geometry(*jnp.moveaxis(x[..., 3:], -1, 0))
         # gap=a^2*(1-c^2), computed without cancellation near face-on.
@@ -801,5 +1145,13 @@ class ThieleInnesChart(AbstractChart):
         )
 
     def sample_coordinates(self, key, orbit: FrameOrbit) -> Array:
-        """Return ``from_orbit``; an orbit on either sheet maps to this sheet."""
+        """Return ``from_orbit``; an orbit on either sheet maps to this sheet.
+
+        Args:
+            key: JAX PRNG key. Unused: the chart has no gauge.
+            orbit: Orbit whose coordinates are wanted, batch shape B.
+
+        Returns:
+            Coordinates on this chart's sheet, shape B + (7,).
+        """
         return self.from_orbit(orbit)

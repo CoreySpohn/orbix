@@ -32,6 +32,19 @@ class Observability(eqx.Module):
 
     See :meth:`Observatory.observability` for resolution and missed-window
     limitations; boundary estimates need not themselves be observable.
+
+    Attributes:
+        time_d: Uniform sample times in days from the supplied epoch, shape
+            (n_samples,), including both interval endpoints.
+        is_observable: Boolean keepout decision at each sample time, shape (n_samples,).
+        fraction: Visible fraction of the interval, dimensionless in [0, 1], from
+            refined transition midpoints.
+        first_d: Earliest visible boundary estimate in days from the epoch, or inf if no
+            sample is visible.
+        last_d: Latest visible boundary estimate in days from the epoch, or -inf if no
+            sample is visible.
+        any: True if any sample is visible.
+        all: True if every sample is visible.
     """
 
     time_d: Array
@@ -51,7 +64,7 @@ class Observatory(eqx.Module):
     defaults so a bare ``Observatory(orbit=orbit)`` constructs a reasonable
     HWO-like platform.
 
-    Args:
+    Attributes:
         orbit: L2 halo orbit model.
         settling_time_d: Slew-settling time in days.
         keepout_min_deg: Minimum allowed solar elongation in degrees.
@@ -91,6 +104,16 @@ class Observatory(eqx.Module):
         retain the keepout function's permissive defaults. Conversion to MJD
         preserves the epoch's time scale, with no time-scale conversion.
         Close over ``epoch`` or mark it static when using ``jax.jit``.
+
+        Args:
+            ra_deg: Target right ascension in degrees, J2000.
+            dec_deg: Target declination in degrees, J2000.
+            epoch: Static day zero of time_d.
+            time_d: Days from epoch. Broadcasts with ra_deg and dec_deg.
+
+        Returns:
+            Boolean array of the common broadcast shape, True where the target is
+            outside the keepout zones.
         """
         return self._is_observable_mjd(ra_deg, dec_deg, epoch_mjd(epoch, time_d))
 
@@ -126,6 +149,18 @@ class Observatory(eqx.Module):
         the shortest window or keepout to resolve; for width ``w_d``, use
         ``n_samples > 1 + (stop_d-start_d)/w_d``. ``any`` and ``all`` describe
         sampled decisions and share this limitation.
+
+        Args:
+            ra_deg: Target right ascension in degrees, J2000, scalar.
+            dec_deg: Target declination in degrees, J2000, scalar.
+            epoch: Static day zero of start_d and stop_d.
+            start_d: Interval start in days from epoch, scalar.
+            stop_d: Interval end in days from epoch, scalar, at least start_d.
+            n_samples: Number of uniform grid samples including both endpoints, at least
+                2; static under JIT.
+
+        Returns:
+            Observability summary for the interval.
         """
         if n_samples < 2:
             raise ValueError("n_samples must be at least 2")

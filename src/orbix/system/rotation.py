@@ -16,6 +16,14 @@ def from_axis_angle(axis, angle_rad):
 
     axis has final dimension 3; angle_rad broadcasts over its leading shape.
     The positive rotation follows the right-hand rule.
+
+    Args:
+        axis: Unit rotation axis, last axis of length 3.
+        angle_rad: Rotation angle in radians, broadcast against the leading shape of
+            axis.
+
+    Returns:
+        Scalar-first unit quaternion (w, x, y, z), last axis of length 4.
     """
     half = jnp.asarray(angle_rad) / 2
     imaginary = jnp.sin(half)[..., None] * jnp.asarray(axis)
@@ -27,6 +35,14 @@ def rotate(quat, vector):
     """Rotate last-axis vectors by broadcast unit quaternions (w, x, y, z).
 
     Round products before adding so CPU fusion cannot depend on batch length.
+
+    Args:
+        quat: Scalar-first unit quaternions (w, x, y, z), last axis of length 4.
+        vector: Vectors to rotate, last axis of length 3.
+
+    Returns:
+        Rotated vectors, with the broadcast leading shape of the inputs and a last axis
+        of length 3.
     """
     vector = jnp.asarray(vector)
     imaginary = quat[..., 1:]
@@ -42,6 +58,16 @@ def from_basis(f, g, normal):
     Select the largest quaternion component, guarding the unused square roots
     and denominators before evaluation. The quaternion double cover requires
     chart switches, but neither face-on orientation is intrinsically singular.
+
+    Args:
+        f: First orthonormal column, last axis of length 3.
+        g: Second orthonormal column, last axis of length 3.
+        normal: Third orthonormal column, completing a right-handed basis, last axis of
+            length 3.
+
+    Returns:
+        Scalar-first unit quaternion (w, x, y, z), last axis of length 4, that rotates
+        the standard basis into (f, g, normal).
     """
     m00, m10, m20 = (f[..., j] for j in range(3))
     m01, m11, m21 = (g[..., j] for j in range(3))

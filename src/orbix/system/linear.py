@@ -24,6 +24,16 @@ def sky_block_geometry(A, B, F, G) -> tuple[Array, Array]:
     broadcast. For a projected orbit of semimajor axis a and inclination i,
     the results are a and a^2*(1 - cos(i)^2) in the input length units and
     their square. At face-on, the vanishing norm uses a zero subgradient.
+
+    Args:
+        A: North component of the first plane axis, in length units.
+        B: East component of the first plane axis, in the same units.
+        F: North component of the second plane axis, in the same units.
+        G: East component of the second plane axis, in the same units.
+
+    Returns:
+        Tuple of the largest singular value of the sky block, in the input length unit,
+        and the gap of squared singular values, in its square.
     """
     A, B, F, G = map(jnp.asarray, (A, B, F, G))
     # Sum/difference norms avoid subtracting nearly equal squared singular
@@ -41,6 +51,12 @@ def line_of_sight_sheet(orbit: FrameOrbit) -> Array:
     ``orbit.plane_basis()``; the first entry wins ties and a zero row (face-on)
     is +1. Orbits reflected through the sky plane share their sky block and
     differ only in this sign. The result has the orbit's batch shape, dtype int.
+
+    Args:
+        orbit: Orbits with batch shape B.
+
+    Returns:
+        Integer array of shape B holding +1 or -1.
     """
     away = orbit.plane_basis()[..., 2, :]
     pivot = jnp.where(jnp.abs(away[..., 0]) >= jnp.abs(away[..., 1]), 0, 1)
@@ -60,6 +76,15 @@ def reflect_line_of_sight(orbits: FrameOrbit, planet: int) -> FrameOrbit:
 
     A likelihood that tells the two sheets apart (radial velocity, phase-dependent
     photometry) is summed over them as ``logaddexp(L(orbit), L(reflected)) - log 2``.
+
+    Args:
+        orbits: Stacked orbits, batch shape (..., K), with planets on the last batch
+            axis.
+        planet: Index of the planet to reflect along the last batch axis.
+
+    Returns:
+        FrameOrbit with the same batch shape in which the selected planet is reflected
+        through the sky plane.
     """
     flip = jnp.asarray([1.0, 1.0, -1.0])
     f = rotate(orbits.quat, jnp.asarray([1.0, 0.0, 0.0])) * flip
@@ -92,6 +117,17 @@ def sky_block_to_frame(A, B, F, G, *, sheet=1) -> tuple[Array, Array]:
     eccentricity. The inverse is intrinsically non-differentiable at
     face-on (tilt is a square root of projected flattening); no smooth
     inverse there is claimed. All numerical work is host-free.
+
+    Args:
+        A: North component of the first plane axis, in AU.
+        B: East component of the first plane axis, in AU.
+        F: North component of the second plane axis, in AU.
+        G: East component of the second plane axis, in AU.
+        sheet: Line-of-sight sheet, +1 or -1. Static under JIT.
+
+    Returns:
+        Tuple of the semi-major axis in AU, shape B, and the scalar-first unit
+        quaternion, shape B + (4,).
     """
     if sheet not in (-1, 1):
         raise ValueError("sheet must be +1 or -1")
@@ -130,6 +166,13 @@ def frame_to_sky_block(a_AU, quat) -> Array:
     sky_block_to_frame inverts this projection on its declared sheet.
     No eccentricity or inclination angle is used, including at e=0 or
     either face-on orientation.
+
+    Args:
+        a_AU: Semi-major axis in AU, shape B.
+        quat: Scalar-first unit quaternion, shape B + (4,).
+
+    Returns:
+        Sky constants (A, B, F, G) in AU, shape B + (4,).
     """
     quat = jnp.asarray(quat)
     w, x, y, z = jnp.moveaxis(quat, -1, 0)
@@ -151,6 +194,14 @@ def sky_design(orbit_shape: FrameOrbit, time_d) -> Array:
     with ``(X, Y)`` the in-plane position at that time on the epoch mean-longitude
     axes. ``orbit_shape`` is an unbatched :class:`FrameOrbit`; only ``n_rad_per_d``,
     ``ex``, ``ey`` and ``epoch_d`` enter. ``time_d`` has shape ``(T,)`` in days.
+
+    Args:
+        orbit_shape: Unbatched orbit supplying the nonlinear shape.
+        time_d: Observation times in days, shape (T,).
+
+    Returns:
+        Dimensionless design matrix mapping the constants (A, B, F, G) in AU to east and
+        north offsets in AU, shape (T, 2, 4).
     """
     time = jnp.asarray(time_d)
     if orbit_shape.a_AU.ndim != 0 or time.ndim != 1:
@@ -249,6 +300,22 @@ def fit_linear_map(orbit_shape: FrameOrbit, time_d, x, y, cov_or_errors, *, mask
     is minimum norm and covariance is the pseudoinverse information on
     the estimable subspace, NOT finite uncertainty on unidentified modes.
     Zero usable rows return zeros, including chi-square and rank.
+
+    Args:
+        orbit_shape: Unbatched orbit supplying the nonlinear shape.
+        time_d: Observation times in days, shape (T,).
+        x: East offsets in AU, shape (T,).
+        y: North offsets in AU, shape (T,).
+        cov_or_errors: Covariance in AU^2 ordered east, north, shape (2, 2) or (T, 2,
+            2), or a tuple (x_err, y_err, corr) of standard deviations in AU and a
+            correlation coefficient, each scalar or shape (T,).
+        mask: Boolean array of shape (T,), False for rows to drop. Defaults to using
+            every row.
+
+    Returns:
+        Tuple (sky_block, covariance, chi_square, rank): the block [[B, G], [A, F]] in
+        AU, shape (2, 2); the covariance of (A, B, F, G) in AU^2, shape (4, 4); the
+        chi-square of the fit; and the integer numerical rank.
     """
     time, x, y = map(jnp.asarray, (time_d, x, y))
     if (

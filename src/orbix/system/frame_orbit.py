@@ -24,6 +24,17 @@ class FrameOrbit(eqx.Module):
 
     Callers supply a_AU > 0, n_rad_per_d > 0, ex**2 + ey**2 < 1 and a
     unit quaternion. Construction validates shapes only, including under JIT.
+
+    Attributes:
+        a_AU: Semi-major axis in AU, shape B.
+        n_rad_per_d: Mean motion in radians/day, shape B.
+        ex: Eccentricity-vector component along the f axis, dimensionless, shape B.
+        ey: Eccentricity-vector component along the g axis, dimensionless, shape B.
+        quat: Scalar-first unit quaternion (w, x, y, z), shape B + (4,). It rotates
+            the plane axes (1, 0, 0), (0, 1, 0), (0, 0, 1) onto the f axis, the g
+            axis and the angular-momentum direction, expressed in (east, north,
+            away).
+        epoch_d: Epoch in days at which the mean longitude is zero, shape B.
     """
 
     a_AU: Array = eqx.field(converter=jnp.asarray)
@@ -52,6 +63,21 @@ class FrameOrbit(eqx.Module):
         W_rad is measured north through east; the ascending node moves away.
         The first two columns of Rz(W) Rx(i) Rz(w+M0) have east/north swapped;
         their cross product supplies the proper right-handed third column.
+
+        Args:
+            a_AU: Semi-major axis in AU.
+            e: Eccentricity, dimensionless.
+            i_rad: Inclination in radians.
+            W_rad: Longitude of the ascending node in radians, measured north through
+                east.
+            w_rad: Argument of periapsis in radians.
+            M0_rad: Mean anomaly at epoch_d in radians.
+            mu_AU3_per_d2: Gravitational parameter in AU^3/day^2, broadcast with the
+                other inputs.
+            epoch_d: Epoch of M0_rad in days. Defaults to 0.
+
+        Returns:
+            FrameOrbit with the batch shape of the broadcast inputs.
         """
         inc, node, peri, mean = map(jnp.asarray, (i_rad, W_rad, w_rad, M0_rad))
         return cls.from_classical_trig(
@@ -98,6 +124,24 @@ class FrameOrbit(eqx.Module):
         needed. Independent trig inputs keep gradients finite at face-on
         inclination, whereas the derivative of arccos at 1 is infinite.
         For a time of periapsis tp_d, pass cos_M0=1, sin_M0=0, epoch_d=tp_d.
+
+        Args:
+            a_AU: Semi-major axis in AU.
+            e: Eccentricity, dimensionless.
+            cos_i: Cosine of the inclination.
+            sin_i: Sine of the inclination, at least zero.
+            cos_W: Cosine of the longitude of the ascending node.
+            sin_W: Sine of the longitude of the ascending node.
+            cos_w: Cosine of the argument of periapsis.
+            sin_w: Sine of the argument of periapsis.
+            cos_M0: Cosine of the mean anomaly at epoch_d.
+            sin_M0: Sine of the mean anomaly at epoch_d.
+            mu_AU3_per_d2: Gravitational parameter in AU^3/day^2, broadcast with the
+                other inputs.
+            epoch_d: Epoch of the mean anomaly in days. Defaults to 0.
+
+        Returns:
+            FrameOrbit with the batch shape of the broadcast inputs.
         """
         a, e, ci, si, cO, sO, cw, sw, cm, sm, mu, epoch = jnp.broadcast_arrays(
             *map(
@@ -139,6 +183,21 @@ class FrameOrbit(eqx.Module):
         Inclination enters as cos_i with sin_i = sqrt(1 - cos_i**2), and the
         argument of periapsis as (cos_w, sin_w); only the node W_rad is an
         angle. Equivalent to from_classical_trig with M0 = 0 and epoch tp_d.
+
+        Args:
+            a_AU: Semi-major axis in AU.
+            e: Eccentricity, dimensionless.
+            cos_i: Cosine of the inclination.
+            W_rad: Longitude of the ascending node in radians, measured north through
+                east.
+            cos_w: Cosine of the argument of periapsis.
+            sin_w: Sine of the argument of periapsis.
+            tp_d: Time of periapsis in days.
+            mu_AU3_per_d2: Gravitational parameter in AU^3/day^2, broadcast with the
+                other inputs.
+
+        Returns:
+            FrameOrbit whose epoch is tp_d and whose mean anomaly there is zero.
         """
         cos_i = jnp.asarray(cos_i)
         return cls.from_classical_trig(
@@ -163,6 +222,15 @@ class FrameOrbit(eqx.Module):
         The semi-major axis is one AU and the periapsis lies on the f axis at
         tp_d, so plane_coordinates and perifocal_coordinates give the orbit in
         units of a. Inputs broadcast to one batch shape.
+
+        Args:
+            e: Eccentricity, dimensionless.
+            tp_d: Time of periapsis in days.
+            n_rad_per_d: Mean motion in radians/day.
+
+        Returns:
+            FrameOrbit with a semi-major axis of 1 AU, periapsis on the f axis, and the
+            broadcast batch shape of the inputs.
         """
         e, tp, n = jnp.broadcast_arrays(e, tp_d, n_rad_per_d)
         return cls(
@@ -176,7 +244,17 @@ class FrameOrbit(eqx.Module):
 
     @classmethod
     def from_unit_plane_phase(cls, e, ln_period_d, tau, t_ref_d):
-        """Build a from_unit_plane orbit with periapsis at t_ref_d + tau periods."""
+        """Build a from_unit_plane orbit with periapsis at t_ref_d + tau periods.
+
+        Args:
+            e: Eccentricity, dimensionless.
+            ln_period_d: Natural logarithm of the period in days.
+            tau: Periapsis offset from t_ref_d in periods.
+            t_ref_d: Reference time in days.
+
+        Returns:
+            FrameOrbit built by from_unit_plane with periapsis at t_ref_d + tau periods.
+        """
         period = jnp.exp(ln_period_d)
         return cls.from_unit_plane(e, t_ref_d + period * tau, 2 * jnp.pi / period)
 
@@ -186,6 +264,10 @@ class FrameOrbit(eqx.Module):
         This human-readable view is undefined at e=0 or i=0, pi. It is
         not the differentiable interchange path; use to_cartesian instead.
         Angles are returned modulo 2*pi, except inclination in [0, pi].
+
+        Returns:
+            Dictionary with a_AU (AU), e, i_rad, W_rad, w_rad and M0_rad (radians), each
+            of the orbit's batch shape.
         """
         f = rotate(self.quat, jnp.array([1.0, 0.0, 0.0]))
         normal = rotate(self.quat, jnp.array([0.0, 0.0, 1.0]))
@@ -212,6 +294,18 @@ class FrameOrbit(eqx.Module):
         radius-based temporary frame avoids eccentricity and node angles.
         The eccentric-longitude sine/cosine pair never vanishes, including
         at circular and either face-on orientation (Broucke and Cefola 1972).
+
+        Args:
+            r_AU: Position vectors in AU in the (east, north, away) frame, last axis of
+                length 3.
+            v_AU_per_d: Velocity vectors in AU/day in the same frame, last axis of
+                length 3.
+            mu_AU3_per_d2: Gravitational parameter in AU^3/day^2, broadcast with the
+                other inputs.
+            epoch_d: Epoch of the state in days. Defaults to 0.
+
+        Returns:
+            FrameOrbit whose state at epoch_d equals the supplied vectors.
         """
         r, v = jnp.asarray(r_AU), jnp.asarray(v_AU_per_d)
         if r.shape[-1:] != (3,) or v.shape[-1:] != (3,):
@@ -254,11 +348,25 @@ class FrameOrbit(eqx.Module):
         )
 
     def to_cartesian(self):
-        """Return the epoch state, each vector of shape B + (3,)."""
+        """Return the epoch state, each vector of shape B + (3,).
+
+        Returns:
+            Tuple of position in AU and velocity in AU/day at the epoch, each of shape B
+            + (3,).
+        """
         return self.at_each(self.epoch_d)
 
     def at(self, time_d, *, solver=_DEFAULT_SOLVER):
-        """Evaluate the outer product: B + time_shape + (3,), AU and AU/day."""
+        """Evaluate the outer product: B + time_shape + (3,), AU and AU/day.
+
+        Args:
+            time_d: Times in days on the same axis as epoch_d.
+            solver: Value-only Kepler strategy. Defaults to Markley.
+
+        Returns:
+            Tuple of position in AU and velocity in AU/day, each of shape B + time_shape
+            + (3,), in the (east, north, away) frame.
+        """
         xy, xy_rate = self.plane_coordinates(time_d, solver=solver)
         basis = self.plane_basis().reshape(
             (*self.a_AU.shape, *(1,) * jnp.ndim(time_d), 3, 2)
@@ -276,6 +384,14 @@ class FrameOrbit(eqx.Module):
 
         The orbit's batch axes come first, then the time axes; dist_pc
         broadcasts against the batch axes.
+
+        Args:
+            time_d: Times in days on the same axis as epoch_d.
+            dist_pc: Distance in parsecs, broadcast against the batch axes.
+            solver: Value-only Kepler strategy. Defaults to Markley.
+
+        Returns:
+            Tuple of east and north offsets in arcseconds, each of shape B + time_shape.
         """
         position, _ = self.at(time_d, solver=solver)
         return offset_arcsec(position, dist_pc)
@@ -289,6 +405,10 @@ class FrameOrbit(eqx.Module):
         is the epoch minus the epoch mean anomaly over the mean motion, so it
         lies within one period before the epoch. Classical angles are
         undefined at e=0 and cos_i=+-1; the elements are for output only.
+
+        Returns:
+            Dictionary with a_AU (AU), e, cos_i, W_rad (radians), cos_w, sin_w and tp_d
+            (days), each of the orbit's batch shape.
         """
         elements = self.to_classical()
         return {
@@ -317,6 +437,10 @@ class FrameOrbit(eqx.Module):
         phi = w - u, where u locates f from that node. For from_classical,
         u = w + M0, so phi = -M0. W is north through east and the ascending
         node moves away, as in from_classical.
+
+        Returns:
+            Plane-to-sky matrix of shape B + (3, 2) in AU, with rows (east, north, away)
+            and columns the f and g axes.
         """
         f = rotate(self.quat, jnp.array([1.0, 0.0, 0.0]))
         g = rotate(self.quat, jnp.array([0.0, 1.0, 0.0]))
@@ -347,6 +471,14 @@ class FrameOrbit(eqx.Module):
         Reuses plane_coordinates, which already has the required units:
         no division by a and no additional Kepler solve is performed.
         See linear_map for the circular-safe axes and perifocal rotation.
+
+        Args:
+            time_d: Times in days on the same axis as epoch_d.
+            solver: Value-only Kepler strategy. Defaults to Markley.
+
+        Returns:
+            Tuple of dimensionless plane position and its rate in 1/day, each of shape B
+            + time_shape + (2,).
         """
         return self.plane_coordinates(time_d, solver=solver)
 
@@ -356,6 +488,14 @@ class FrameOrbit(eqx.Module):
         Both arrays have shape broadcast(B,time_shape) + (2,), as in
         at_each. Reuses that method's single eccentric-longitude solve
         and stored f,g axes; see linear_map for the axis convention.
+
+        Args:
+            time_d: Times in days, broadcast against the batch shape B.
+            solver: Value-only Kepler strategy. Defaults to Markley.
+
+        Returns:
+            Tuple of dimensionless plane position and its rate in 1/day, each of shape
+            broadcast(B, time_shape) + (2,).
         """
         return self._plane_coordinates_each(time_d, solver=solver)
 
@@ -368,6 +508,14 @@ class FrameOrbit(eqx.Module):
         time broadcasting as at. Coordinates use the nonsingular f and g
         axes of ex and ey, in units of the semi-major axis. Position and
         rate are finite and smooth at e=0; one Kepler solve supplies both.
+
+        Args:
+            time_d: Times in days on the same axis as epoch_d.
+            solver: Value-only Kepler strategy. Defaults to Markley.
+
+        Returns:
+            Tuple of dimensionless plane position, in units of the semi-major axis, and
+            its rate in 1/day, each of shape B + time_shape + (2,).
         """
         time = jnp.asarray(time_d)
         shape = self.a_AU.shape + (1,) * time.ndim
@@ -394,6 +542,14 @@ class FrameOrbit(eqx.Module):
         there both results use f and g unchanged. Guarding the angle's inputs
         makes both values and autodiff gradients finite at zero; this arbitrary
         fallback does not make the periapsis view continuous there.
+
+        Args:
+            time_d: Times in days on the same axis as epoch_d.
+            solver: Value-only Kepler strategy. Defaults to Markley.
+
+        Returns:
+            Tuple of dimensionless perifocal position, in units of the semi-major axis,
+            and its rate in 1/day, each of shape B + time_shape + (2,).
         """
         xy, xy_rate = self.plane_coordinates(time_d, solver=solver)
         nonzero = (self.ex != 0) | (self.ey != 0)
@@ -418,6 +574,14 @@ class FrameOrbit(eqx.Module):
 
         One eccentric-longitude solve supplies both position and analytic
         velocity; there is no trigonometry outside that solve.
+
+        Args:
+            time_d: Times in days, broadcast against the batch shape B.
+            solver: Value-only Kepler strategy. Defaults to Markley.
+
+        Returns:
+            Tuple of position in AU and velocity in AU/day, each of shape broadcast(B,
+            time_shape) + (3,), in the (east, north, away) frame.
         """
         xy, xy_rate = self._plane_coordinates_each(time_d, solver=solver)
         basis = self.plane_basis()
