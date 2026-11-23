@@ -126,9 +126,10 @@ log_p = block.log_prob(x, system)  # normalized density of the coordinates
 print(block.coordinate_names)
 ```
 
-Every coordinate takes any real value. A coordinate that the law bounds is mapped onto the
-real line with a logit and named with the prefix `logit_` (`logit_ln_a_AU` above), and the
-density includes the log derivative of that map. In the Thiele-Innes chart the sky
+Every coordinate takes any real value. A size coordinate that the law bounds is mapped onto
+the real line, by a logit on a finite interval or a softplus when one end is open, and named
+with the prefix `mapped_` (`mapped_ln_a_AU` above), and the density includes the log
+derivative of that map. In the Thiele-Innes chart the sky
 position of a planet is linear in the four constants `(A, B, F, G)`: `sky_design` gives the
 design matrix at a fixed orbit shape and `linear_gaussian_conditional` the exact Gaussian
 conditional of the constants under Gaussian astrometric errors.
