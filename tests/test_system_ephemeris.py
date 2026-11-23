@@ -192,8 +192,8 @@ def test_host_time_observables_and_solver_trace():
     frame = SkyFrame(10.0, Epoch(2460000.0, 0.125, "tdb"))
     dates = np.array([2460000.125, 2460001.25])
     with jax.enable_x64(False):
-        np.testing.assert_array_equal(frame.time_d(dates), [0.0, 1.125])
-        assert frame.time_d(dates).dtype == np.float64
+        np.testing.assert_array_equal(frame.time_d(jd=dates), [0.0, 1.125])
+        assert frame.time_d(jd=dates).dtype == np.float64
     assert len(jax.tree.leaves(frame)) == 1
     sys = _system()
     times = jnp.array([0.0, 200.0, 700.0])

@@ -134,19 +134,21 @@ class SkyFrame(eqx.Module):
                     f"got {self.ra_deg.shape} and {self.dec_deg.shape}"
                 )
 
-    def time_d(self, time_jd):
+    def time_d(self, time=None, *, jd=None, mjd=None):
         """Days from the epoch, in NumPy float64 on the host.
 
-        time_jd may be a numeric JD array or an object exposing jd1 and jd2
-        (for example astropy Time). Dates must use the epoch's time scale.
+        Exactly one of ``time``, ``jd`` and ``mjd`` is given; see
+        ``hwoutils.epoch.Epoch.days``. Dates must use the epoch's time scale.
 
         Args:
-            time_jd: Julian dates as a numeric array, or an object exposing jd1 and jd2.
+            time: Object exposing jd1 and jd2 (for example astropy Time).
+            jd: Julian date [d] as a number or array.
+            mjd: Modified Julian date [d] (JD - 2400000.5) as a number or array.
 
         Returns:
             Days from the epoch as a NumPy float64 array.
         """
-        return self.epoch.days(time_jd)
+        return self.epoch.days(time, jd=jd, mjd=mjd)
 
 
 class Ephemeris(eqx.Module):
