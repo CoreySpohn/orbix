@@ -4,6 +4,7 @@ See Murray and Dermott, Solar System Dynamics, for hierarchical coordinates.
 The hierarchy is a set of independent Kepler orbits, not an N-body integrator.
 """
 
+from types import MappingProxyType
 from typing import ClassVar
 
 import equinox as eqx
@@ -321,9 +322,9 @@ class System(eqx.Module):
         frame: Distance, sky position and reference epoch, shape B.
     """
 
-    tied_fields: ClassVar[dict[str, tuple[str, ...]]] = {
-        "orbits": ("star.mass_Msun", "planets.mass_Msun")
-    }
+    tied_fields: ClassVar[MappingProxyType] = MappingProxyType(
+        {"orbits": ("star.mass_Msun", "planets.mass_Msun")}
+    )
     star: Body
     planets: Body
     orbits: FrameOrbit

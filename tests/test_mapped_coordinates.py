@@ -377,16 +377,18 @@ def _far_out_is_not_nan(block, model, names, name):
         assert not np.isnan(value) and value != np.inf, (name, c, value)
 
 
-E10_E = priorities.Uniform(0.0, 0.95)
-E10_A = priorities.LogUniform(1.0, 100.0)
-E10_LAW = OrbitLaw(E10_E, a_AU=E10_A)
-INNER_E_LAW = OrbitLaw(priorities.Uniform(0.1, 0.9), a_AU=E10_A)
+BROAD_E = priorities.Uniform(0.0, 0.95)
+BROAD_A = priorities.LogUniform(1.0, 100.0)
+BROAD_LAW = OrbitLaw(BROAD_E, a_AU=BROAD_A)
+INNER_E_LAW = OrbitLaw(priorities.Uniform(0.1, 0.9), a_AU=BROAD_A)
 HALF_A_LAW = OrbitLaw(
-    E10_E,
+    BROAD_E,
     a_AU=priorities.TruncatedDistribution(priorities.LogNormal(0.0, 1.0), low=1.0),
 )
 OPEN_LAW = OrbitLaw(priorities.Uniform(0.0, 1.0), a_AU=priorities.LogNormal(1.0, 1.0))
-PERIOD_LAW = OrbitLaw(E10_E, period_d=priorities.LogUniform(300.0, 3000.0))
+PERIOD_LAW = OrbitLaw(BROAD_E, period_d=priorities.LogUniform(300.0, 3000.0))
+NEGATIVE_LOW_A = priorities.TruncatedDistribution(priorities.Normal(5.0, 3.0), low=-1.0)
+NEGATIVE_LOW_LAW = OrbitLaw(BROAD_E, a_AU=NEGATIVE_LOW_A)
 
 
 def _ti(law, mass):
@@ -401,23 +403,27 @@ def _massive_planet_model():
 
 
 WALLS = {
-    "classical-e10": (lambda: _mapped(ClassicalChart(), E10_LAW), ()),
+    "classical-broad": (lambda: _mapped(ClassicalChart(), BROAD_LAW), ()),
     "classical-inner-e": (lambda: _mapped(ClassicalChart(), INNER_E_LAW), ()),
     "classical-half-a": (lambda: _mapped(ClassicalChart(), HALF_A_LAW), ("a_AU",)),
-    "eccentricity-vector-e10": (
-        lambda: _mapped(EccentricityVectorChart(), E10_LAW),
+    "eccentricity-vector-broad": (
+        lambda: _mapped(EccentricityVectorChart(), BROAD_LAW),
         (),
     ),
-    "frame-e10": (lambda: _mapped(FrameChart(), E10_LAW), ()),
+    "frame-broad": (lambda: _mapped(FrameChart(), BROAD_LAW), ()),
     "eccentricity-vector-inner-e": (
         lambda: _mapped(EccentricityVectorChart(), INNER_E_LAW),
         ("e",),
     ),
     "frame-inner-e": (lambda: _mapped(FrameChart(), INNER_E_LAW), ("e",)),
-    "cartesian-e10": (lambda: _mapped(CartesianChart(), E10_LAW), ("a_AU", "e")),
+    "cartesian-broad": (lambda: _mapped(CartesianChart(), BROAD_LAW), ("a_AU", "e")),
     "cartesian-open": (lambda: _mapped(CartesianChart(), OPEN_LAW), ()),
-    "thiele-innes-e10": (
-        lambda: _ti(E10_LAW, priorities.Uniform(0.8, 1.2)),
+    "classical-negative-low-a": (
+        lambda: _mapped(ClassicalChart(), NEGATIVE_LOW_LAW),
+        (),
+    ),
+    "thiele-innes-broad": (
+        lambda: _ti(BROAD_LAW, priorities.Uniform(0.8, 1.2)),
         ("a_AU", "star_mass_Msun"),
     ),
     "thiele-innes-period-lognormal": (
@@ -549,7 +555,7 @@ def test_a_block_with_no_walls_has_density_at_random_coordinates(name):
     """Fails if a block with ``walls == ()`` has a zero-density region.
 
     ``log_prob`` is finite at 2000 points drawn Normal(0, 3) per coordinate (seed 0);
-    the review measured no ``-inf`` there for the classical chart, against 0.2 to 48
+    measured no ``-inf`` there for the classical chart, against 0.2 to 48
     percent for the walled blocks. Exact.
     """
     make, _ = WALLS[name]

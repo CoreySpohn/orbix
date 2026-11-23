@@ -32,7 +32,9 @@ zero-density disk around the origin (an annulus has no smooth map from the plane
 classical chart maps both bounds); and any finite edge of the Thiele-Innes star-mass
 law, zero included, since the star mass the coordinates imply is the enclosed mass
 less the planet masses and can be any real number. ``sample`` and ``from_unit`` never
-land in a zero-density region.
+land in a zero-density region. Edges are the hull of the support: a law whose support
+has an interior gap (an eccentricity mixture of disjoint intervals) has a zero-density
+region inside its edges that ``walls`` does not report.
 
 ``forward`` builds a freed row at the model's stored epoch and, for the mass-reading
 charts, at the Jacobi mu of the model's current star and planet masses. A held row keeps
@@ -140,10 +142,10 @@ class OrbitBlock(AbstractBlock):
     def walls(self) -> tuple[str, ...]:
         """The law's elements whose edges the chart does not map.
 
-        ``"a_AU"`` or ``"period_d"`` for a size edge that is neither zero nor infinite
-        when the size coordinate is not mapped, and ``"e"`` for an upper eccentricity
-        edge below 1 that is not mapped or a lower one above 0 that is not mapped by a
-        logit. Evaluated on the host.
+        ``"a_AU"`` or ``"period_d"`` for a size edge that is neither zero (or below
+        it) nor infinite when the size coordinate is not mapped, and ``"e"`` for an
+        upper eccentricity edge below 1 that is not mapped or a lower one above 0 that
+        is not mapped by a logit. Evaluated on the host.
         """
         return _orbit_walls(self.chart, self.law)
 
@@ -365,8 +367,9 @@ class ThieleInnesBlock(AbstractBlock):
     freed: one star mass cannot absorb two implied masses. The other rows take their
     mean motion from the star mass the block writes.
 
-    The block is built for the importance engines: it always declares its star-mass
-    wall (see :attr:`walls`), so a gradient sampler refuses it.
+    The block is built for the importance engines: it declares its star-mass wall for
+    any mass law with a finite edge (see :attr:`walls`), which every physical mass law
+    has, so a gradient sampler refuses it.
 
     The density against Lebesgue ``dx`` is the orbit law summed over the two
     line-of-sight sheets (the chart's inverse sends an orbit and its reflection to the
@@ -676,7 +679,7 @@ def _orbit_walls(chart, law) -> tuple[str, ...]:
     size = next((k for k in ("a_AU", "period_d") if k in edges), None)
     if size is not None and "ln_size" not in mapped:
         low, high = edges[size]
-        if _beyond(low, lambda v: np.isfinite(v) & (v != 0)) or _beyond(
+        if _beyond(low, lambda v: np.isfinite(v) & (v > 0)) or _beyond(
             high, np.isfinite
         ):
             out.append(size)

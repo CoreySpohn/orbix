@@ -76,8 +76,10 @@ class AbstractOrbitLaw(eqx.Module):
         The keys are ``"e"`` and ``"a_AU"`` or ``"period_d"``; each value is
         ``(low, high)``, infinite on an open side. Unlike :meth:`support`, an element
         bounded on one side only is reported. A block compares these with the bounds
-        its coordinates map to find its walls. The default is :meth:`support`, so a
-        law that reports no bound has no edge.
+        its coordinates map to find its walls. Edges are the hull of the support: a
+        law whose support has an interior gap (a mixture of disjoint intervals) is
+        not detected. The default is :meth:`support`, so a law that reports no bound
+        has no edge.
 
         Returns:
             Dictionary from "e" and "a_AU" or "period_d" to a (low, high) pair of
