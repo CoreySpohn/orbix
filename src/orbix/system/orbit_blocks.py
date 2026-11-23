@@ -11,30 +11,32 @@ A block composes three peers: a chart (the coordinate map and its volume), an or
 ``log_prob`` is the normalized density of the coordinates against Lebesgue ``dx``,
 ``law.log_prob`` of the orbits plus the chart volume.
 
-Coordinates have no boundary, as the block contract requires: a block maps every
-element its law bounds to a finite interval (see :meth:`AbstractOrbitLaw.support`) and
-for which its chart has a coordinate onto the whole real line, through a logit on that
-interval, and the density gains the log derivative of that map. A mapped size
-coordinate takes the prefix ``logit_`` in ``coordinate_names`` (``logit_ln_a_AU``); the
-classical eccentricity coordinate is a logit already and keeps its name, and the disk
-charts keep ``ux`` and ``uy``, the plane coordinates of the disk scaled to the law's
-upper bound. A bound that no coordinate carries stays in the law, and ``log_prob`` is
-``-inf`` beyond it at finite coordinates: a wall. Every block lists its walls in
-``walls`` (see :attr:`hwoutils.blocks.AbstractBlock.walls`), from the law's
-:meth:`AbstractOrbitLaw.edges` and the bounds the chart maps, so that a host can
-refuse a gradient sampler for the fit. The cases: a size edge that is neither zero nor
-infinite on a chart whose size coordinate does not map it (the Cartesian chart; the
-Thiele-Innes chart with an ``a_AU`` law, since its size coordinate is ``ln n``; any
-chart with a law bounded on one side only); an eccentricity edge that is neither 0 nor
-1 on a chart with no eccentricity coordinate (the Cartesian chart); a lower
-eccentricity edge above zero on a disk chart, which maps the upper bound and leaves a
-zero-density disk around the origin (an annulus has no smooth map from the plane; the
-classical chart maps both bounds); and any finite edge of the Thiele-Innes star-mass
-law, zero included, since the star mass the coordinates imply is the enclosed mass
-less the planet masses and can be any real number. ``sample`` and ``from_unit`` never
-land in a zero-density region. Edges are the hull of the support: a law whose support
-has an interior gap (an eccentricity mixture of disjoint intervals) has a zero-density
-region inside its edges that ``walls`` does not report.
+Coordinates have no boundary, as the block contract requires: a block maps every element
+its law bounds to a finite interval (see :meth:`AbstractOrbitLaw.support`) and for which
+its chart has a coordinate onto the whole real line, through a logit on that interval (a
+softplus when one end is open, as ``ln 0`` is for a size law from zero), and the density
+gains the log derivative of that map. A mapped size coordinate takes the prefix
+``mapped_`` in ``coordinate_names`` (``mapped_ln_a_AU``), whichever map applies, so the
+names do not depend on the law's values; the classical eccentricity coordinate is a
+logit already and keeps its name, and the disk charts keep ``ux`` and ``uy``, the plane
+coordinates of the disk scaled to the law's upper bound. A bound that no coordinate
+carries stays in the law, and ``log_prob`` is ``-inf`` beyond it at finite coordinates:
+a wall. Every block lists its walls in ``walls`` (see
+:attr:`hwoutils.blocks.AbstractBlock.walls`), from the law's
+:meth:`AbstractOrbitLaw.edges` and the bounds the chart maps, so that a host can refuse
+a gradient sampler for the fit. The cases: a finite size edge above zero on a chart
+whose size coordinate does not map it (the Cartesian chart; the Thiele-Innes chart with
+an ``a_AU`` law, since its size coordinate is ``ln n``; any chart with a law bounded on
+one side only); an eccentricity edge that is neither 0 nor 1 on a chart with no
+eccentricity coordinate (the Cartesian chart); a lower eccentricity edge above zero on a
+disk chart, which maps the upper bound and leaves a zero-density disk around the origin
+(an annulus has no smooth map from the plane; the classical chart maps both bounds); and
+any finite edge of the Thiele-Innes star-mass law, zero included, since the star mass
+the coordinates imply is the enclosed mass less the planet masses and can be any real
+number. ``sample`` and ``from_unit`` never land in a zero-density region. Edges are the
+hull of the support: a law whose support has an interior gap (an eccentricity mixture of
+disjoint intervals) has a zero-density region inside its edges that ``walls`` does not
+report.
 
 ``forward`` builds a freed row at the model's stored epoch and, for the mass-reading
 charts, at the Jacobi mu of the model's current star and planet masses. A held row keeps
@@ -130,7 +132,7 @@ class OrbitBlock(AbstractBlock):
 
     @property
     def coordinate_names(self) -> tuple[str, ...]:
-        """The chart's names, with ``logit_`` before a size coordinate the law maps."""
+        """The chart's names, with ``mapped_`` before a size coordinate the law maps."""
         return _coordinate_names(self.chart, self.law.support())
 
     @property
@@ -407,7 +409,7 @@ class ThieleInnesBlock(AbstractBlock):
 
     @property
     def coordinate_names(self) -> tuple[str, ...]:
-        """The chart's names, with ``logit_`` before a size coordinate the law maps."""
+        """The chart's names, with ``mapped_`` before a size coordinate the law maps."""
         return _coordinate_names(self.chart, self.law.support())
 
     @property
@@ -694,10 +696,14 @@ def _orbit_walls(chart, law) -> tuple[str, ...]:
 
 
 def _coordinate_names(chart, bounds) -> tuple[str, ...]:
-    """Chart names; a mapped size coordinate (the first) is a logit of its interval."""
+    """Chart names; a mapped size coordinate (the first) takes the prefix ``mapped_``.
+
+    The map is a logit of the interval, or a softplus when one end is open; the name
+    is the same for both, since the ends may be traced.
+    """
     names = chart.coordinate_names
     if "ln_size" in _mapped_keys(chart, bounds):
-        return (f"logit_{names[0]}", *names[1:])
+        return (f"mapped_{names[0]}", *names[1:])
     return names
 
 

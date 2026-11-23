@@ -193,19 +193,19 @@ def test_periods_name_exactly_the_coordinates_the_orbit_repeats_in(chart):
 
 
 def _expected_names(chart):
-    """Chart names with ``logit_`` before the size coordinate a bounded law maps."""
+    """Chart names with ``mapped_`` before the size coordinate a bounded law maps."""
     names = chart.coordinate_names
     if chart.size_coordinate is None:
         return names
-    return (f"logit_{names[0]}", *names[1:])
+    return (f"mapped_{names[0]}", *names[1:])
 
 
 @pytest.mark.parametrize("chart", ALL_CHARTS, ids=_id)
 def test_a_block_reports_the_names_and_periods_of_its_chart(chart):
     """Fails if a mapped size coordinate keeps the name of the unmapped one.
 
-    A bounded law maps the size coordinate through a logit, so the block calls it
-    ``logit_<name>``; a law with no bound on the size keeps the chart's name. The
+    A bounded law maps the size coordinate onto its interval, so the block calls it
+    ``mapped_<name>``; a law with no bound on the size keeps the chart's name. The
     periods follow the chart.
     """
     ti = isinstance(chart, ThieleInnesChart)

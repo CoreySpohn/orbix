@@ -201,7 +201,7 @@ def test_inverse_of_forward_recovers_the_coordinates(name):
     model = _system_model()
     block = _mapped(chart, law)
     y = {
-        "logit_ln_a_AU": jnp.array([0.7]),
+        "mapped_ln_a_AU": jnp.array([0.7]),
         "logit_e": jnp.array([-1.2]),
         "atanh_cos_i": jnp.array([0.4]),
         "W_rad": jnp.array([1.0]),
@@ -210,7 +210,7 @@ def test_inverse_of_forward_recovers_the_coordinates(name):
     }
     held = assign(model, "dynamics.orbits", block.forward(y, model)["dynamics.orbits"])
     back = block.inverse(held)
-    for n in ("logit_ln_a_AU", "logit_e", "atanh_cos_i"):
+    for n in ("mapped_ln_a_AU", "logit_e", "atanh_cos_i"):
         np.testing.assert_allclose(back[n], y[n], atol=1e-9, err_msg=n)
     for n in ("W_rad", "w_rad", "M0_rad"):
         assert float(np.max(_cell_difference(back[n], y[n], 2 * np.pi))) < 1e-9, n
@@ -242,7 +242,7 @@ def test_size_and_eccentricity_coordinates_are_logistic_under_a_uniform_law(name
     mapped = jax.vmap(lambda c: block.from_unit(c, model))(cube)
     mapped = {k: np.asarray(v[:, 0]) for k, v in mapped.items()}
     for source in (drawn, mapped):
-        for n in ("logit_ln_a_AU", "logit_e"):
+        for n in ("mapped_ln_a_AU", "logit_e"):
             assert ks_1samp(source[n], logistic.cdf).pvalue > 1e-3, (name, n)
 
 
