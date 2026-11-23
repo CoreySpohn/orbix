@@ -4,6 +4,8 @@ See Murray and Dermott, Solar System Dynamics, for hierarchical coordinates.
 The hierarchy is a set of independent Kepler orbits, not an N-body integrator.
 """
 
+from typing import ClassVar
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -303,13 +305,25 @@ class System(eqx.Module):
     masses and orbit batch have shape B + (K,). Editing masses changes the
     barycentric map only: rebuild to impose dynamically consistent rates.
 
+    The stored orbits are rated by the enclosed masses and their fields are tied
+    together (size and mean motion by Kepler's third law, the eccentricity pair inside
+    the unit disk, a unit quaternion), so ``tied_fields`` declares ``orbits`` derived
+    from the star and planet masses (see ``hwoutils.blocks.check_ties``): a fit frees
+    an orbit through a block, and a fit that frees a mass holds a block that re-rates
+    the orbits.
+
     Attributes:
+        tied_fields: Derived field to the fields it is derived from, relative to the
+            system: the orbits from the star and planet masses.
         star: Star mass, shape B.
         planets: Planet masses ordered inner to outer, shape B + (K,).
         orbits: Jacobi orbit of each planet, batch shape B + (K,).
         frame: Distance, sky position and reference epoch, shape B.
     """
 
+    tied_fields: ClassVar[dict[str, tuple[str, ...]]] = {
+        "orbits": ("star.mass_Msun", "planets.mass_Msun")
+    }
     star: Body
     planets: Body
     orbits: FrameOrbit

@@ -102,6 +102,9 @@ class OrbitBlock(AbstractBlock):
     mass (use :class:`ThieleInnesBlock`). The block reads the star and planet masses at
     ``system``; a mass that another entry frees is applied first.
 
+    A block frees every element of each listed row and re-rates the rows it holds.
+    Knowledge of the orbit plane is a law on the orientation, not a held coordinate.
+
     Attributes:
         chart: The coordinate map and its exact volume.
         law: The density of the freed orbits against the orbit reference measure.
