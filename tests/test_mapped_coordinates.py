@@ -567,3 +567,70 @@ def test_a_block_with_no_walls_has_density_at_random_coordinates(name):
     }
     values = jax.jit(jax.vmap(lambda x: block.log_prob(x, model)))(points)
     assert bool(jnp.all(jnp.isfinite(values)))
+
+
+@pytest.mark.parametrize(
+    "support",
+    [(-jnp.inf, 1.5), (-0.5, jnp.inf), (-jnp.inf, jnp.inf)],
+    ids=["open-below", "open-above", "open-both"],
+)
+def test_a_size_interval_with_an_infinite_end_maps_by_a_softplus(support):
+    """Fails if an infinite end of the size interval gives NaN or a wrong Jacobian.
+
+    ``ln 0 = -inf`` is the lower end of the size coordinate for a size law whose
+    support starts at zero (and ``ln n`` has an infinite upper end for a period law
+    from zero). The log derivative equals the automatic one to 1e-10, the inverse
+    returns ``y`` to 1e-9 for ``|y|`` up to 8, and the value stays inside the open end.
+    """
+    chart = ClassicalChart()
+    low, high = (jnp.asarray(v) for v in support)
+    bounds = {"ln_size": (low, high)}
+    for y0 in np.linspace(-8.0, 8.0, 7):
+        y = jnp.array([y0, 0.3, -0.2, 1.0, 2.0, 3.0])
+        x, log_jac = chart.constrain(y, bounds)
+        jac = jax.jacfwd(lambda v: chart.constrain(v, bounds)[0])(y)
+        np.testing.assert_allclose(jnp.linalg.slogdet(jac)[1], log_jac, atol=1e-10)
+        np.testing.assert_allclose(chart.unconstrain(x, bounds), y, atol=1e-9)
+        assert float(low) < float(x[0]) < float(high)
+
+
+ZERO_EDGE_SIZES = {
+    "upper-truncated-log-normal-a": {
+        "a_AU": priorities.TruncatedDistribution(
+            priorities.LogNormal(1.0, 1.0), high=50.0
+        )
+    },
+    "uniform-from-zero-a": {"a_AU": priorities.Uniform(0.0, 100.0)},
+    "upper-truncated-log-normal-period": {
+        "period_d": priorities.TruncatedDistribution(
+            priorities.LogNormal(7.0, 1.0), high=5000.0
+        )
+    },
+}
+
+
+@pytest.mark.parametrize("size", list(ZERO_EDGE_SIZES))
+def test_a_size_law_from_zero_has_a_finite_density_everywhere(size):
+    """Fails if a size law whose support starts at zero reads NaN or a wall.
+
+    The logit on ``(ln 0, ln high)`` gave NaN at every point on the charts that map
+    the size (measured: all of 2000 points). The lower end is the coordinate's own
+    end, so only the upper edge is mapped: ``log_prob`` is finite at 2000 points
+    drawn Normal(0, 3) per coordinate (seed 0) on the classical and Frame charts and,
+    for the period law, on the Thiele-Innes block with an unbounded mass law, and
+    no block lists a wall. Exact.
+    """
+    law = OrbitLaw(BROAD_E, **ZERO_EDGE_SIZES[size])
+    blocks = [_mapped(ClassicalChart(), law), _mapped(FrameChart(), law)]
+    if "period" in size:
+        blocks.append(_ti(law, priorities.Normal(1.0, 0.1)))
+    model = _system_model()
+    rng = np.random.default_rng(0)
+    for block in blocks:
+        assert block.walls == ()
+        points = {
+            n: jnp.asarray(rng.normal(scale=3.0, size=(2000, 1)))
+            for n in block.coordinate_names
+        }
+        values = jax.jit(jax.vmap(lambda x, b=block: b.log_prob(x, model)))(points)
+        assert bool(jnp.all(jnp.isfinite(values))), type(block.chart).__name__

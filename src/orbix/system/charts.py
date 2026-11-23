@@ -149,23 +149,66 @@ def _chi_four_icdf(q):
     return jnp.sqrt(low + high)
 
 
+def _finite_ends(low, high):
+    """Finite stand-ins for infinite ends, keeping ``low < high``, and the masks."""
+    open_low, open_high = jnp.isneginf(low), jnp.isposinf(high)
+    anchor = jnp.where(open_high, jnp.where(open_low, 0.0, low), high)
+    safe_low = jnp.where(open_low, anchor - 1.0, low)
+    safe_high = jnp.where(open_high, safe_low + 1.0, high)
+    return open_low, open_high, safe_low, safe_high
+
+
 def _interval(y, low, high):
-    """Map the real line onto ``(low, high)``: the value and its log derivative."""
+    """Map the real line onto ``(low, high)``: the value and its log derivative.
+
+    Either end may be infinite (a size law whose support starts at zero has
+    ``ln 0 = -inf`` as its lower end): a logit for two finite ends, a softplus for
+    one (``high + log_sigmoid(y)`` or ``low + softplus(y)``) and the identity for none.
+    """
+    open_low, open_high, low, high = _finite_ends(low, high)
     width = high - low
-    return low + width * sigmoid(y), jnp.log(width) + log_sigmoid(y) + log_sigmoid(-y)
+    two = low + width * sigmoid(y), jnp.log(width) + log_sigmoid(y) + log_sigmoid(-y)
+    below = high + log_sigmoid(y), log_sigmoid(-y)
+    above = low - log_sigmoid(-y), log_sigmoid(y)
+    none = y, jnp.zeros_like(y)
+
+    def pick(k):
+        return jnp.where(
+            open_low,
+            jnp.where(open_high, none[k], below[k]),
+            jnp.where(open_high, above[k], two[k]),
+        )
+
+    return pick(0), pick(1)
 
 
 def _interval_inverse(value, low, high):
     """Invert :func:`_interval`; NaN outside the interval by more than rounding.
 
-    A value within ``sqrt(eps)`` of the width of a bound is held ``eps`` inside it;
-    one further out has no coordinate and returns NaN.
+    A value within ``sqrt(eps)`` of a finite bound (relative to the width for two
+    finite ends, in the units of the value for one) is held ``eps`` inside it; one
+    further out has no coordinate and returns NaN.
     """
     eps = jnp.finfo(jnp.result_type(value, float)).eps
+    open_low, open_high, low, high = _finite_ends(low, high)
     position = (value - low) / (high - low)
     outside = (position < -jnp.sqrt(eps)) | (position > 1.0 + jnp.sqrt(eps))
     position = jnp.clip(position, eps, 1.0 - eps)
-    inverse = jnp.log(position) - jnp.log1p(-position)
+    two = jnp.log(position) - jnp.log1p(-position)
+    gap_high = jnp.minimum(value - high, -eps)
+    below = gap_high - jnp.log(-jnp.expm1(gap_high))
+    gap_low = jnp.maximum(value - low, eps)
+    above = gap_low + jnp.log(-jnp.expm1(-gap_low))
+    inverse = jnp.where(
+        open_low,
+        jnp.where(open_high, value, below),
+        jnp.where(open_high, above, two),
+    )
+    outside = jnp.where(
+        open_low,
+        ~open_high & (value - high > jnp.sqrt(eps)),
+        jnp.where(open_high, value - low < -jnp.sqrt(eps), outside),
+    )
     return jnp.where(outside, jnp.nan, inverse)
 
 
@@ -307,10 +350,12 @@ class AbstractChart(eqx.Module):
         ``support`` maps ``"ln_size"`` to the ``(low, high)`` interval of the size
         coordinate and ``"e"`` to that of the eccentricity, each optional and an array
         that broadcasts against the batch. A bounded coordinate is reached from the
-        real line by a logit on its interval; the disk charts scale the eccentricity
-        disk to radius ``high`` and ignore ``low``, leaving a disk of radius ``low`` of
-        zero law density around the origin when it is above zero. The density in
-        ``y`` then has no wall. An element the chart has no coordinate for is ignored.
+        real line by a logit on its interval, or a softplus when one end is infinite
+        (``ln 0`` for a size law whose support starts at zero); the disk charts scale
+        the eccentricity disk to radius ``high`` and ignore ``low``, leaving a disk of
+        radius ``low`` of zero law density around the origin when it is above zero. The
+        density in ``y`` then has no wall. An element the chart has no coordinate for is
+        ignored.
 
         Args:
             y: Wall-free coordinates, shape B + (n_coords,).
