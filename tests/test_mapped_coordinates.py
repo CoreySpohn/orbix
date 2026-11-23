@@ -464,7 +464,7 @@ def _orbit_point(model, block, *, a, e, enclosed=None):
     return block.inverse(assign(model, "dynamics.orbits", orbit))
 
 
-def _wall_points(block, model):
+def _wall_points(block, model, walls):
     """For each wall: coordinates just outside an edge and at the middle inside.
 
     Outside: size at half the lower edge, eccentricity midway between the upper edge
@@ -479,9 +479,9 @@ def _wall_points(block, model):
     e_mid = 0.5 * (e_lo + e_hi)
     point = lambda **kw: _orbit_point(model, block, **kw)  # noqa: E731
     out = []
-    if "a_AU" in block.walls:
+    if "a_AU" in walls:
         out.append(("a_AU", point(a=a_lo / 2, e=e_mid), point(a=a_mid, e=e_mid)))
-    if "e" in block.walls:
+    if "e" in walls:
         inside = point(a=a_mid, e=e_mid)
         mapped = "e" in block.chart_support(model)
         if e_hi < 1 and not mapped:
@@ -500,7 +500,7 @@ def _wall_points(block, model):
             )
             assert 0 < float(e[0]) < e_lo
             out.append(("e", hole, inside))
-    if "star_mass_Msun" in block.walls:
+    if "star_mass_Msun" in walls:
         inner = float(jnp.sum(model.dynamics.planets.mass_Msun[:2]))
         low = float(block.star_mass_Msun.support()[0])
         star_out = low / 2 if low > 0 else -inner / 2
@@ -534,11 +534,11 @@ def test_log_prob_is_minus_infinity_just_outside_each_wall(name):
     enclosed mass below it, so the implied star mass is negative: the zero edge of the
     mass law is a wall although the law has no finite edge but zero. Exact.
     """
-    make, _ = WALLS[name]
+    make, walls = WALLS[name]
     block = make()
     model = _massive_planet_model() if "lognormal" in name else _system_model()
-    points = _wall_points(block, model)
-    assert {wall for wall, _, _ in points} == set(block.walls)
+    points = _wall_points(block, model, walls)
+    assert {wall for wall, _, _ in points} == set(walls)
     for wall, outside, inside in points:
         assert float(block.log_prob(outside, model)) == -np.inf, wall
         assert np.isfinite(float(block.log_prob(inside, model))), wall
