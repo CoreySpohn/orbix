@@ -707,7 +707,8 @@ def _chart_support(chart, bounds, mu) -> dict:
     The eccentricity bound passes through (a disk chart uses only its upper end). The
     size bound becomes a bound on ``ln a`` (from an ``a_AU`` law, or from a period law
     at the given rate) or on ``ln n`` (from a period law only: ``n = 2 pi / P``,
-    independent of the masses).
+    independent of the masses). A size edge at or below zero is the natural end of
+    the coordinate (``ln 0``), so it is clipped at zero and that end is open.
     """
     keys = _mapped_keys(chart, bounds)
     out = {}
@@ -715,13 +716,13 @@ def _chart_support(chart, bounds, mu) -> dict:
         out["e"] = bounds["e"]
     if "ln_size" in keys:
         if chart.size_coordinate == "ln_n":
-            low, high = bounds["period_d"]
+            low, high = (jnp.maximum(b, 0.0) for b in bounds["period_d"])
             out["ln_size"] = (jnp.log(two_pi / high), jnp.log(two_pi / low))
         elif "a_AU" in bounds:
-            out["ln_size"] = tuple(jnp.log(b) for b in bounds["a_AU"])
+            out["ln_size"] = tuple(jnp.log(jnp.maximum(b, 0.0)) for b in bounds["a_AU"])
         else:
             out["ln_size"] = tuple(
-                (jnp.log(mu) + 2 * (jnp.log(b) - jnp.log(two_pi))) / 3
+                (jnp.log(mu) + 2 * (jnp.log(jnp.maximum(b, 0.0)) - jnp.log(two_pi))) / 3
                 for b in bounds["period_d"]
             )
     return out

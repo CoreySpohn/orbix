@@ -601,6 +601,12 @@ ZERO_EDGE_SIZES = {
         )
     },
     "uniform-from-zero-a": {"a_AU": priorities.Uniform(0.0, 100.0)},
+    "uniform-from-below-zero-a": {"a_AU": priorities.Uniform(-1.0, 100.0)},
+    "truncated-normal-from-below-zero-a": {
+        "a_AU": priorities.TruncatedDistribution(
+            priorities.Normal(5.0, 3.0), low=-1.0, high=50.0
+        )
+    },
     "upper-truncated-log-normal-period": {
         "period_d": priorities.TruncatedDistribution(
             priorities.LogNormal(7.0, 1.0), high=5000.0
@@ -611,11 +617,13 @@ ZERO_EDGE_SIZES = {
 
 @pytest.mark.parametrize("size", list(ZERO_EDGE_SIZES))
 def test_a_size_law_from_zero_has_a_finite_density_everywhere(size):
-    """Fails if a size law whose support starts at zero reads NaN or a wall.
+    """Fails if a size law whose support starts at or below zero reads NaN or a wall.
 
     The logit on ``(ln 0, ln high)`` gave NaN at every point on the charts that map
-    the size (measured: all of 2000 points). The lower end is the coordinate's own
-    end, so only the upper edge is mapped: ``log_prob`` is finite at 2000 points
+    the size (measured: all of 2000 points), and a lower edge below zero gave the log
+    of a negative number (all of 500 points). The lower end is the coordinate's own
+    end (a size edge at or below zero is clipped at zero), so only the upper edge is
+    mapped: ``log_prob`` is finite at 2000 points
     drawn Normal(0, 3) per coordinate (seed 0) on the classical and Frame charts and,
     for the period law, on the Thiele-Innes block with an unbounded mass law, and
     no block lists a wall. Exact.
