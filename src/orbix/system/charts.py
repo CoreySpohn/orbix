@@ -741,6 +741,10 @@ class CartesianChart(AbstractChart):
     This measure-zero set is excluded; circular and face-on orbits are
     regular. Floating-point boundary limitations also apply.
 
+    The chart has no size or eccentricity coordinate, so a law with an interior edge
+    (a size edge other than zero and infinity, an eccentricity edge other than 0 and 1)
+    is a wall on it (see ``OrbitBlock.walls``).
+
     Attributes:
         n_coords: Number of coordinates on the trailing axis.
         coordinate_names: Coordinate names in trailing-axis order, with a unit suffix

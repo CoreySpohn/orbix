@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import priorities
 import pytest
+from hwoutils.constants import GM_SUN_AU3_PER_D2
 from hwoutils.model_paths import assign
 from scipy.stats import ks_1samp, logistic
 from test_blocks import (
@@ -17,14 +18,18 @@ from test_blocks import (
 )
 
 from orbix.system import (
+    Body,
     CartesianChart,
     ClassicalChart,
     EccentricityVectorChart,
     FrameChart,
     OrbitBlock,
     OrbitLaw,
+    ThieleInnesBlock,
     ThieleInnesChart,
+    enclosed_mu,
 )
+from orbix.system.frame_orbit import FrameOrbit
 
 E0_LAW = priorities.Uniform(0.0, 0.8)
 A0_LAW = OrbitLaw(E0_LAW, a_AU=priorities.LogUniform(0.8, 3.0))
@@ -121,6 +126,7 @@ def test_a_disk_chart_with_a_lower_eccentricity_bound_keeps_a_zero_density_hole(
     """
     model = _system_model()
     block = _mapped(chart, A_LAW)
+    assert block.walls == ("e",)
     names = block.coordinate_names
     origin = {n: jnp.zeros(1) for n in names}
     assert float(block.log_prob(origin, model)) == -np.inf
@@ -369,3 +375,189 @@ def _far_out_is_not_nan(block, model, names, name):
         y = {n: jnp.asarray([v]) for n, v in c.items()}
         value = float(block.log_prob(y, model))
         assert not np.isnan(value) and value != np.inf, (name, c, value)
+
+
+E10_E = priorities.Uniform(0.0, 0.95)
+E10_A = priorities.LogUniform(1.0, 100.0)
+E10_LAW = OrbitLaw(E10_E, a_AU=E10_A)
+INNER_E_LAW = OrbitLaw(priorities.Uniform(0.1, 0.9), a_AU=E10_A)
+HALF_A_LAW = OrbitLaw(
+    E10_E,
+    a_AU=priorities.TruncatedDistribution(priorities.LogNormal(0.0, 1.0), low=1.0),
+)
+OPEN_LAW = OrbitLaw(priorities.Uniform(0.0, 1.0), a_AU=priorities.LogNormal(1.0, 1.0))
+PERIOD_LAW = OrbitLaw(E10_E, period_d=priorities.LogUniform(300.0, 3000.0))
+
+
+def _ti(law, mass):
+    return ThieleInnesBlock(law, mass, rows=(1,), system="dynamics")
+
+
+def _massive_planet_model():
+    """The test system with a 0.01 solar-mass planet on the freed row."""
+    model = _system_model()
+    masses = jnp.array([1e-3, 1e-2, 1e-4])
+    return assign(model, "dynamics.planets", Body(masses))
+
+
+WALLS = {
+    "classical-e10": (lambda: _mapped(ClassicalChart(), E10_LAW), ()),
+    "classical-inner-e": (lambda: _mapped(ClassicalChart(), INNER_E_LAW), ()),
+    "classical-half-a": (lambda: _mapped(ClassicalChart(), HALF_A_LAW), ("a_AU",)),
+    "eccentricity-vector-e10": (
+        lambda: _mapped(EccentricityVectorChart(), E10_LAW),
+        (),
+    ),
+    "frame-e10": (lambda: _mapped(FrameChart(), E10_LAW), ()),
+    "eccentricity-vector-inner-e": (
+        lambda: _mapped(EccentricityVectorChart(), INNER_E_LAW),
+        ("e",),
+    ),
+    "frame-inner-e": (lambda: _mapped(FrameChart(), INNER_E_LAW), ("e",)),
+    "cartesian-e10": (lambda: _mapped(CartesianChart(), E10_LAW), ("a_AU", "e")),
+    "cartesian-open": (lambda: _mapped(CartesianChart(), OPEN_LAW), ()),
+    "thiele-innes-e10": (
+        lambda: _ti(E10_LAW, priorities.Uniform(0.8, 1.2)),
+        ("a_AU", "star_mass_Msun"),
+    ),
+    "thiele-innes-period-lognormal": (
+        lambda: _ti(PERIOD_LAW, priorities.LogNormal(0.0, 0.2)),
+        ("star_mass_Msun",),
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(WALLS))
+def test_walls_name_the_bounds_the_coordinates_do_not_map(name):
+    """Fails if a block lists a mapped bound as a wall or misses an unmapped one.
+
+    Truth: a wall is a size edge that is neither zero nor infinite with no mapped size
+    coordinate, an eccentricity edge other than 0 and 1 that the chart does not map
+    (a lower one is mapped only by the classical logit), or any finite edge of the
+    Thiele-Innes star-mass law, zero included. Exact.
+    """
+    make, expected = WALLS[name]
+    assert make().walls == expected
+
+
+def _orbit_point(model, block, *, a, e, enclosed=None):
+    """Coordinates of ``block`` for the model's orbits, row 1 at ``a`` and ``e``.
+
+    The other elements of row 1 stay; its rate is set from ``enclosed`` (solar masses)
+    when given, else from the model's masses.
+    """
+    system = model.dynamics
+    elements = system.orbits.to_classical()
+    mu = enclosed_mu(system.star.mass_Msun, system.planets.mass_Msun)
+    if enclosed is not None:
+        mu = mu.at[1].set(GM_SUN_AU3_PER_D2 * enclosed)
+    orbit = FrameOrbit.from_classical(
+        elements["a_AU"].at[1].set(a),
+        elements["e"].at[1].set(e),
+        elements["i_rad"],
+        elements["W_rad"],
+        elements["w_rad"],
+        elements["M0_rad"],
+        mu_AU3_per_d2=mu,
+        epoch_d=system.orbits.epoch_d,
+    )
+    return block.inverse(assign(model, "dynamics.orbits", orbit))
+
+
+def _wall_points(block, model):
+    """For each wall: coordinates just outside an edge and at the middle inside.
+
+    Outside: size at half the lower edge, eccentricity midway between the upper edge
+    and 1 or at half the lower edge, implied star mass at half the lower edge (an
+    enclosed mass of half the inner planet mass when that edge is zero). Inside: the
+    same orbit with that element in the middle of its support.
+    """
+    edges = {k: tuple(float(v) for v in b) for k, b in block.law.edges().items()}
+    e_lo, e_hi = edges["e"]
+    a_lo, a_hi = edges.get("a_AU", (1.0, 100.0))
+    a_mid = np.sqrt(a_lo * a_hi) if np.isfinite(a_hi) else 2 * a_lo
+    e_mid = 0.5 * (e_lo + e_hi)
+    point = lambda **kw: _orbit_point(model, block, **kw)  # noqa: E731
+    out = []
+    if "a_AU" in block.walls:
+        out.append(("a_AU", point(a=a_lo / 2, e=e_mid), point(a=a_mid, e=e_mid)))
+    if "e" in block.walls:
+        inside = point(a=a_mid, e=e_mid)
+        mapped = "e" in block.chart_support(model)
+        if e_hi < 1 and not mapped:
+            out.append(("e", point(a=a_mid, e=0.5 * (e_hi + 1)), inside))
+        if e_lo > 0:
+            # inverse() refuses a point outside the support (NaN), so the hole point
+            # scales the disk coordinates of the inside point toward the origin
+            hole = {
+                n: v * (e_lo / 2 / e_mid) if n in ("ux", "uy") else v
+                for n, v in inside.items()
+            }
+            y = jnp.stack([hole[n] for n in block.coordinate_names], -1)
+            x, _ = chart_coordinates(block, model, y)
+            e = jnp.linalg.norm(x[..., 1:3], axis=-1) / jnp.sqrt(
+                1 + jnp.sum(x[..., 1:3] ** 2, -1)
+            )
+            assert 0 < float(e[0]) < e_lo
+            out.append(("e", hole, inside))
+    if "star_mass_Msun" in block.walls:
+        inner = float(jnp.sum(model.dynamics.planets.mass_Msun[:2]))
+        low = float(block.star_mass_Msun.support()[0])
+        star_out = low / 2 if low > 0 else -inner / 2
+
+        def mass_point(enclosed):
+            if "a_AU" in edges:
+                return point(a=a_mid, e=e_mid, enclosed=enclosed)
+            # a period law is mapped: keep the period at the middle of its support
+            period = np.sqrt(np.prod(edges["period_d"]))
+            mu = GM_SUN_AU3_PER_D2 * enclosed
+            a = (mu * (period / (2 * np.pi)) ** 2) ** (1 / 3)
+            return point(a=a, e=e_mid, enclosed=enclosed)
+
+        out.append(
+            (
+                "star_mass_Msun",
+                mass_point(star_out + inner),
+                mass_point(1.0 + inner),
+            )
+        )
+    return out
+
+
+@pytest.mark.parametrize("name", [k for k, (_, w) in WALLS.items() if w])
+def test_log_prob_is_minus_infinity_just_outside_each_wall(name):
+    """Fails if a declared wall is not where the density drops to zero.
+
+    For every wall, ``log_prob`` is ``-inf`` at a constructed point whose element lies
+    just outside the edge and finite at the same orbit with that element inside. The
+    Thiele-Innes log-normal mass case uses a planet of 0.01 solar masses and an
+    enclosed mass below it, so the implied star mass is negative: the zero edge of the
+    mass law is a wall although the law has no finite edge but zero. Exact.
+    """
+    make, _ = WALLS[name]
+    block = make()
+    model = _massive_planet_model() if "lognormal" in name else _system_model()
+    points = _wall_points(block, model)
+    assert {wall for wall, _, _ in points} == set(block.walls)
+    for wall, outside, inside in points:
+        assert float(block.log_prob(outside, model)) == -np.inf, wall
+        assert np.isfinite(float(block.log_prob(inside, model))), wall
+
+
+@pytest.mark.parametrize("name", [k for k, (_, w) in WALLS.items() if not w])
+def test_a_block_with_no_walls_has_density_at_random_coordinates(name):
+    """Fails if a block with ``walls == ()`` has a zero-density region.
+
+    ``log_prob`` is finite at 2000 points drawn Normal(0, 3) per coordinate (seed 0);
+    the review measured no ``-inf`` there for the classical chart, against 0.2 to 48
+    percent for the walled blocks. Exact.
+    """
+    make, _ = WALLS[name]
+    block, model = make(), _system_model()
+    rng = np.random.default_rng(0)
+    points = {
+        n: jnp.asarray(rng.normal(scale=3.0, size=(2000, 1)))
+        for n in block.coordinate_names
+    }
+    values = jax.jit(jax.vmap(lambda x: block.log_prob(x, model)))(points)
+    assert bool(jnp.all(jnp.isfinite(values)))

@@ -70,6 +70,21 @@ class AbstractOrbitLaw(eqx.Module):
         """
         return {}
 
+    def edges(self) -> dict[str, tuple[Array, Array]]:
+        """Edges of the support of each scalar element, bounded on any side or not.
+
+        The keys are ``"e"`` and ``"a_AU"`` or ``"period_d"``; each value is
+        ``(low, high)``, infinite on an open side. Unlike :meth:`support`, an element
+        bounded on one side only is reported. A block compares these with the bounds
+        its coordinates map to find its walls. The default is :meth:`support`, so a
+        law that reports no bound has no edge.
+
+        Returns:
+            Dictionary from "e" and "a_AU" or "period_d" to a (low, high) pair of
+            arrays.
+        """
+        return self.support()
+
     @property
     def unit_size(self) -> int | None:
         """Unit-cube length per orbit of :meth:`from_unit`, or ``None``."""
@@ -252,6 +267,27 @@ class OrbitLaw(AbstractOrbitLaw):
         if size.bounds == "interval":
             out[key] = size.support()
         return out
+
+    def edges(self) -> dict[str, tuple[Array, Array]]:
+        """The scalar laws' own supports, the eccentricity clipped to ``[0, 1]``.
+
+        A law bounded on one side, which :meth:`support` leaves out, is reported
+        here with an infinite other edge.
+
+        Returns:
+            Dictionary from "e" and "a_AU" or "period_d" to a (low, high) pair of
+            arrays.
+        """
+        low, high = self.eccentricity.support()
+        key, size = (
+            ("a_AU", self.a_AU)
+            if self.a_AU is not None
+            else ("period_d", self.period_d)
+        )
+        return {
+            "e": (jnp.clip(low, 0.0, 1.0), jnp.clip(high, 0.0, 1.0)),
+            key: size.support(),
+        }
 
     @property
     def unit_size(self) -> int | None:

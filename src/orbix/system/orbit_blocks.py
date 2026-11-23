@@ -18,13 +18,21 @@ interval, and the density gains the log derivative of that map. A mapped size
 coordinate takes the prefix ``logit_`` in ``coordinate_names`` (``logit_ln_a_AU``); the
 classical eccentricity coordinate is a logit already and keeps its name, and the disk
 charts keep ``ux`` and ``uy``, the plane coordinates of the disk scaled to the law's
-upper bound. Where no coordinate carries a bound, it stays in the law and ``log_prob``
-returns ``-inf`` there, with no error. Two cases exist. A disk eccentricity chart with a
-lower eccentricity bound above zero maps the upper bound and leaves a zero-density disk
-around the origin (an annulus has no smooth map from the plane; the classical chart is
-the choice that maps both bounds). A Thiele-Innes chart with a bounded ``a_AU`` law
-leaves the walls of that law, since its size coordinate is ``ln n``. ``sample`` and
-``from_unit`` never land in a zero-density region.
+upper bound. A bound that no coordinate carries stays in the law, and ``log_prob`` is
+``-inf`` beyond it at finite coordinates: a wall. Every block lists its walls in
+``walls`` (see :attr:`hwoutils.blocks.AbstractBlock.walls`), from the law's
+:meth:`AbstractOrbitLaw.edges` and the bounds the chart maps, so that a host can
+refuse a gradient sampler for the fit. The cases: a size edge that is neither zero nor
+infinite on a chart whose size coordinate does not map it (the Cartesian chart; the
+Thiele-Innes chart with an ``a_AU`` law, since its size coordinate is ``ln n``; any
+chart with a law bounded on one side only); an eccentricity edge that is neither 0 nor
+1 on a chart with no eccentricity coordinate (the Cartesian chart); a lower
+eccentricity edge above zero on a disk chart, which maps the upper bound and leaves a
+zero-density disk around the origin (an annulus has no smooth map from the plane; the
+classical chart maps both bounds); and any finite edge of the Thiele-Innes star-mass
+law, zero included, since the star mass the coordinates imply is the enclosed mass
+less the planet masses and can be any real number. ``sample`` and ``from_unit`` never
+land in a zero-density region.
 
 ``forward`` builds a freed row at the model's stored epoch and, for the mass-reading
 charts, at the Jacobi mu of the model's current star and planet masses. A held row keeps
@@ -124,6 +132,17 @@ class OrbitBlock(AbstractBlock):
     def periods(self) -> tuple[float | None, ...]:
         """The chart's periods: ``2 pi`` on each plain angle, ``None`` elsewhere."""
         return self.chart.periods
+
+    @property
+    def walls(self) -> tuple[str, ...]:
+        """The law's elements whose edges the chart does not map.
+
+        ``"a_AU"`` or ``"period_d"`` for a size edge that is neither zero nor infinite
+        when the size coordinate is not mapped, and ``"e"`` for an upper eccentricity
+        edge below 1 that is not mapped or a lower one above 0 that is not mapped by a
+        logit. Evaluated on the host.
+        """
+        return _orbit_walls(self.chart, self.law)
 
     @property
     def owns(self) -> str:
@@ -343,6 +362,9 @@ class ThieleInnesBlock(AbstractBlock):
     freed: one star mass cannot absorb two implied masses. The other rows take their
     mean motion from the star mass the block writes.
 
+    The block is built for the importance engines: it always declares its star-mass
+    wall (see :attr:`walls`), so a gradient sampler refuses it.
+
     The density against Lebesgue ``dx`` is the orbit law summed over the two
     line-of-sight sheets (the chart's inverse sends an orbit and its reflection to the
     same coordinates), plus the star mass law, the chart volume and ``log(M_enclosed)``
@@ -386,6 +408,21 @@ class ThieleInnesBlock(AbstractBlock):
     def periods(self) -> tuple[float | None, ...]:
         """The chart's periods: ``2 pi`` on each plain angle, ``None`` elsewhere."""
         return self.chart.periods
+
+    @property
+    def walls(self) -> tuple[str, ...]:
+        """The orbit law's walls, as for :attr:`OrbitBlock.walls`, and the star mass.
+
+        ``"star_mass_Msun"`` is listed whenever either edge of the star-mass law is
+        finite, zero included: the implied star mass is the enclosed mass less the
+        planet masses, so for a model with a massive planet it reaches every real
+        value at finite coordinates. Evaluated on the host.
+        """
+        low, high = self.star_mass_Msun.support()
+        mass = _beyond(low, np.isfinite) or _beyond(high, np.isfinite)
+        return _orbit_walls(self.chart, self.law) + (
+            ("star_mass_Msun",) if mass else ()
+        )
 
     @property
     def owns(self) -> str:
@@ -619,6 +656,35 @@ def _mapped_keys(chart, bounds) -> frozenset[str]:
     ) or (chart.size_coordinate == "ln_n" and "period_d" in bounds):
         keys.add("ln_size")
     return frozenset(keys)
+
+
+def _beyond(edge, test) -> bool:
+    """Whether ``test`` holds for any element of an edge; a traced edge counts."""
+    if isinstance(edge, jax.core.Tracer):
+        return True
+    return bool(np.any(test(np.asarray(edge))))
+
+
+def _orbit_walls(chart, law) -> tuple[str, ...]:
+    """Names of the law's elements whose edges the chart's coordinates do not map."""
+    edges = law.edges()
+    mapped = _mapped_keys(chart, law.support())
+    out = []
+    size = next((k for k in ("a_AU", "period_d") if k in edges), None)
+    if size is not None and "ln_size" not in mapped:
+        low, high = edges[size]
+        if _beyond(low, lambda v: np.isfinite(v) & (v != 0)) or _beyond(
+            high, np.isfinite
+        ):
+            out.append(size)
+    if "e" in edges:
+        low, high = edges["e"]
+        logit = "e" in mapped and chart.eccentricity_coordinate == "logit"
+        if ("e" not in mapped and _beyond(high, lambda v: v < 1)) or (
+            not logit and _beyond(low, lambda v: v > 0)
+        ):
+            out.append("e")
+    return tuple(out)
 
 
 def _coordinate_names(chart, bounds) -> tuple[str, ...]:
