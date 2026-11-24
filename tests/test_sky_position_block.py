@@ -264,6 +264,59 @@ def test_every_offset_on_the_field_gives_a_bound_orbit_there():
     np.testing.assert_allclose(offsets, jnp.stack([east, north], -1), atol=1e-10)
 
 
+def test_an_exact_zero_offset_is_nan_and_a_nearby_one_is_regular():
+    """Fails if a zero separation gives a finite orbit or a nearby one a NaN gradient.
+
+    At a projected separation of exactly zero the rotation about the line of sight is
+    undefined, so the freed row is NaN and the held rows are untouched (exact). At
+    1e-9 arcsec the row is finite, the planet sits at its offset (1e-12 arcsec,
+    float64 rounding at that scale), and the derivative of its position at
+    ``time_d`` with respect to the coordinates is the distance times the identity,
+    in forward and reverse mode. Truth: the parsec (1 arcsec at 10 pc is 10 AU), to
+    1e-8 AU per arcsec, 1e-9 of the diagonal (measured 4e-15). Row 0 is freed, so
+    its Jacobi origin is the star.
+    """
+    model = _system_model()
+    block = _block((0,))
+    zero = {"east_arcsec": jnp.zeros(1), "north_arcsec": jnp.zeros(1)}
+    orbits = block.forward(zero, model)[block.owns]
+    assert bool(jnp.all(jnp.isnan(orbits.a_AU[0]) & jnp.isnan(orbits.quat[0])))
+    assert jnp.array_equal(orbits.ex[1:], model.dynamics.orbits.ex[1:])
+
+    def position(flat):
+        x = {"east_arcsec": flat[:1], "north_arcsec": flat[1:]}
+        moved = block.forward(x, model)[block.owns]
+        return moved.at_each(jnp.asarray(TIME))[0][0, :2]
+
+    near = jnp.array([1e-9, -1e-9])
+    np.testing.assert_allclose(position(near), 10.0 * near, rtol=0, atol=1e-12)
+    for jacobian in (jax.jacfwd, jax.jacrev):
+        np.testing.assert_allclose(
+            jax.jit(jacobian(position))(near), 10.0 * jnp.eye(2), rtol=0, atol=1e-8
+        )
+
+
+def test_freeing_an_inner_row_moves_the_held_outer_rows_with_the_center():
+    """Fails if a held outer planet does not ride on the inner center of mass.
+
+    Truth from the masses: a held Jacobi row keeps its vector from the center of mass
+    of the star and the planets inside it, and moving planet 0 by ``D`` moves that
+    center, and so every outer planet, by ``m0 / (M + m0) D`` (``M`` the star mass);
+    here about 2.7e-3 of a displacement of about 0.6 arcsec. Tolerance 1e-13 arcsec,
+    float64 rounding of offsets near 1 arcsec (measured 1e-16).
+    """
+    model = _system_model()
+    block = _block((0,))
+    x = {"east_arcsec": jnp.array([0.5]), "north_arcsec": jnp.array([0.5])}
+    before = _offsets(model, (0, 1, 2))
+    after = _offsets(_apply(model, block, x), (0, 1, 2))
+    step = after[0] - before[0]
+    ratio = MASSES[0] / (1.1 + MASSES[0])
+    shift = after[1:] - before[1:]
+    assert float(jnp.min(jnp.linalg.norm(shift, axis=-1))) > 1e-3
+    np.testing.assert_allclose(shift, jnp.stack([ratio * step] * 2), atol=1e-13)
+
+
 LAWS = {
     "interval-real": BOUNDED,
     "lower-upper": (
@@ -275,17 +328,23 @@ LAWS = {
 
 @pytest.mark.parametrize("laws", list(LAWS))
 def test_log_prob_is_the_density_of_the_offsets_and_is_normalized(laws):
-    """Fails if the density is not the two laws carried onto the coordinates.
+    """Fails if the density is not the two offset laws carried onto the coordinates.
 
-    Truth: the change of variables from the offsets to the coordinates. The offsets
-    are read back through ``System.solve`` and differentiated by ``jax.jacfwd``, an
-    independent path from the block's own map; ``log_prob`` equals the sum of the
-    laws at those offsets plus ``log |det d offset / d x|`` to 1e-9 (float64 through
-    the Kepler solve; measured 9e-16). Each row's offsets depend only on its own
-    coordinates, so the off-diagonal blocks of the Jacobian are zero (1e-12). Second
-    truth: normalization over the plane, by the trapezoid rule on a 401 by 401 grid
-    over +-20 for one row, to 1e-6 (the integrand decays at least as ``exp(-|x|)``;
-    measured 1e-13).
+    The density is a prior on the offsets at one time; no orbit prior is involved, and
+    none is checked. Two checks:
+
+    - The log derivative of the coordinate map. ``log_prob`` adds the analytic
+      derivative of the logit or softplus to the laws; here the offsets are read back
+      through ``forward`` and ``System.solve`` and differentiated by ``jax.jacfwd``,
+      so the analytic derivative is compared with autodiff through the whole orbit
+      path. Truth: the change of variables; ``log_prob`` equals the laws at those
+      offsets plus ``log |det d offset / d x|`` to 1e-9 (float64 through the Kepler
+      solve; measured 9e-16). Each row's offsets depend only on its own coordinates,
+      so the off-diagonal blocks of the Jacobian are zero (1e-12).
+    - Normalization over the plane, by the trapezoid rule on a 401 by 401 grid over
+      +-20 for one row, to 1e-6 (the integrand decays at least as ``exp(-|x|)``;
+      measured 1e-13). ``log_prob`` does not read the orbit, so this half checks the
+      interval map and the laws only.
     """
     east_law, north_law = LAWS[laws]
     model = _system_model()

@@ -689,8 +689,18 @@ class SkyPositionBlock(AbstractBlock):
     ``s R p`` and ``w`` to ``R w``, so ``p_z / rho`` and ``R(-theta) w`` (with
     ``rho, theta`` the polar form of ``(p_x, p_y)``) are held and only ``(p_x, p_y)``
     is replaced. Circular and face-on orbits are regular points of this map. It is
-    undefined where the projected separation of the Jacobi position is zero, before or
-    after the move: a set of measure zero.
+    undefined where the projected separation of the Jacobi position is exactly zero,
+    before or after the move: there the freed row is written as NaN (a set of measure
+    zero, which cannot raise under a trace), and the value and gradient stay finite at
+    any nonzero separation.
+
+    The outer rows ride on the inner ones. A Jacobi orbit is relative to the center of
+    mass of the star and the planets inside it, so moving a freed planet moves every
+    held planet outside it by the freed planet's sky displacement times its mass over
+    the mass of the star and the planets out to it, itself included: about 1e-3 of the
+    displacement for a Jupiter-mass planet around a solar-mass star. A held outer
+    planet keeps its orbit about that center, not its star-relative offset; a freed
+    outer planet is placed at its own coordinates.
 
     A Jacobi orbit is relative to the center of mass of the star and the planets inside
     it, so the block subtracts the sky offset of that center from the star, freed rows
@@ -712,7 +722,9 @@ class SkyPositionBlock(AbstractBlock):
         east_arcsec: Scalar law on the east offset in arcseconds; parameters broadcast
             over the freed rows.
         north_arcsec: Scalar law on the north offset in arcseconds, likewise.
-        time_d: Time of the offsets, in days on the axis of the System's epochs.
+        time_d: Time of the offsets in days from the System's static reference
+            epoch (``frame.epoch``), the axis of the orbits' ``epoch_d`` and of
+            :meth:`System.solve`, so a relative time that float32 resolves finely.
         rows: The freed Jacobi indices.
         system: Path of the :class:`System` in the model.
     """
@@ -731,7 +743,7 @@ class SkyPositionBlock(AbstractBlock):
         for name, law in self._named_laws:
             if law.event_dim != 0:
                 raise ValueError(f"{name} must be a scalar law")
-            if law.support()[0].shape not in ((), (len(self.rows),)):
+            if jnp.shape(law.support()[0]) not in ((), (len(self.rows),)):
                 raise ValueError(
                     f"{name} parameters must be scalars or have shape "
                     f"({len(self.rows)},), one per freed row"
@@ -878,7 +890,7 @@ class SkyPositionBlock(AbstractBlock):
         """
         n = len(self.rows)
         draws = [
-            law.sample(k, (n,) if law.support()[0].shape == () else ())
+            law.sample(k, (n,) if jnp.shape(law.support()[0]) == () else ())
             for k, (_, law) in zip(jax.random.split(key), self._named_laws, strict=True)
         ]
         return self._coordinates(jnp.stack(draws, -1))
@@ -962,22 +974,35 @@ class SkyPositionBlock(AbstractBlock):
         return self.same_layout(other) and _same_bounds(bounds(self), bounds(other))
 
 
+def _polar(x, y):
+    """Projected separation and its unit direction; separation 1 where it is zero.
+
+    The second ``where`` keeps the gradient finite near the origin; the caller marks
+    the zero itself.
+    """
+    squared = x * x + y * y
+    nonzero = squared > 0
+    rho = jnp.sqrt(jnp.where(nonzero, squared, 1.0))
+    return rho, x / rho, y / rho, nonzero
+
+
 def _similar_state(r, v, mu, sky) -> Array:
     """CartesianChart coordinates of the state ``(r, v)`` moved to sky position ``sky``.
 
     ``p_z / rho`` and ``R(-theta) w`` are invariant under a rotation about the line of
-    sight and a dilation, so they are held while ``(p_x, p_y)`` becomes ``sky``.
+    sight and a dilation, so they are held while ``(p_x, p_y)`` becomes ``sky``. Where
+    the old or the new projected separation is exactly zero the similarity is
+    undefined and every coordinate is NaN.
     """
     w = disk_to_plane(v / jnp.sqrt(2 * mu / jnp.linalg.norm(r)))
-    rho = jnp.hypot(r[0], r[1])
-    c, s = r[0] / rho, r[1] / rho
+    rho, c, s, old_ok = _polar(r[0], r[1])
     zeta = r[2] / rho
     u = jnp.stack([c * w[0] + s * w[1], c * w[1] - s * w[0], w[2]])
-    rho_new = jnp.hypot(sky[0], sky[1])
-    c, s = sky[0] / rho_new, sky[1] / rho_new
-    return jnp.stack(
+    rho_new, c, s, new_ok = _polar(sky[0], sky[1])
+    state = jnp.stack(
         [sky[0], sky[1], zeta * rho_new, c * u[0] - s * u[1], s * u[0] + c * u[1], u[2]]
     )
+    return jnp.where(old_ok & new_ok, state, jnp.nan)
 
 
 def _mapped_keys(chart, bounds) -> frozenset[str]:
