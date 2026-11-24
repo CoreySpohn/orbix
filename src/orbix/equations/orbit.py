@@ -278,17 +278,10 @@ def _safe_norm(x):
     but evaluates the norm on a nonzero stand-in whenever ``x`` is zero,
     so the local derivative is finite; the ``jnp.where`` then zeroes the
     corresponding cotangent, giving a well-defined (zero) gradient.
-
-    The vector is divided by its largest absolute component first, so a
-    nonzero vector whose squared components underflow (float32 components
-    near 1e-23) keeps a nonzero norm and a finite derivative. The norm is
-    exactly invariant to that scale, so the scale carries no gradient.
     """
-    scale = lax.stop_gradient(jnp.max(jnp.abs(x)))
-    is_zero = scale == 0.0
-    scale_safe = jnp.where(is_zero, 1.0, scale)
-    x_safe = jnp.where(is_zero, jnp.ones_like(x), x / scale_safe)
-    return jnp.where(is_zero, 0.0, scale_safe * jnp.linalg.norm(x_safe))
+    is_zero = jnp.all(x == 0.0)
+    x_safe = jnp.where(is_zero, jnp.ones_like(x), x)
+    return jnp.where(is_zero, 0.0, jnp.linalg.norm(x_safe))
 
 
 def _oriented_angle(cosine, sine):
@@ -351,6 +344,16 @@ def state_vector_to_keplerian(r, v, mu):
     classical_order = jnp.array([1, 0, 2])
     r = jnp.asarray(r)[classical_order]
     v = jnp.asarray(v)[classical_order]
+    # Work in units of |r| and |v|: every element is homogeneous in these two
+    # scales, so constant (stop-gradient) scales leave the derivatives exact
+    # while keeping float32 SI products and their squares in range.
+    length = lax.stop_gradient(_safe_norm(r))
+    length = jnp.where(length > 0, length, 1.0)
+    speed = lax.stop_gradient(_safe_norm(v))
+    speed = jnp.where(speed > 0, speed, 1.0)
+    r = r / length
+    v = v / speed
+    mu = mu / (length * speed**2)
     r_mag = jnp.linalg.norm(r)
     v_mag = jnp.linalg.norm(v)
 
@@ -393,8 +396,7 @@ def state_vector_to_keplerian(r, v, mu):
         0.0,
         jnp.dot(n, e_vec) / (n_mag_safe * e_safe),
     )
-    # In AU/seconds near a circle, squaring the dimensional denominator in
-    # reverse mode underflows. Normalize before forming the triple product.
+    # Unit vectors keep the triple product and its derivative of order one.
     sin_w = jnp.dot(jnp.cross(n / n_mag_safe, e_vec / e_safe), h / h_mag_safe)
     w_inclined = _oriented_angle(cos_w, sin_w)
 
@@ -424,7 +426,7 @@ def state_vector_to_keplerian(r, v, mu):
         0.0,
         jnp.dot(n, r) / (n_mag_safe * r_mag),
     )
-    # Unit vectors avoid a dimensional triple product that overflows in float32 SI.
+    # Unit vectors keep the triple product and its derivative of order one.
     sin_u = jnp.dot(jnp.cross(n / n_mag_safe, r / r_mag), h / h_mag_safe)
     u_inclined = _oriented_angle(cos_u, sin_u)
 
@@ -450,4 +452,4 @@ def state_vector_to_keplerian(r, v, mu):
     M = M % (2 * jnp.pi)
     M = jnp.where(e < 1.0, M, jnp.nan)
 
-    return a, e, i, W, w, M
+    return a * length, e, i, W, w, M

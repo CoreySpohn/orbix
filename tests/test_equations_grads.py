@@ -226,3 +226,72 @@ def test_float32_near_equatorial_gradients_finite(inclination):
         assert all(
             np.isfinite(x).all() for x in jax.tree.leaves(evaluate(r, v, mu_input))
         )
+
+
+@pytest.mark.parametrize("eccentricity", [0.0, 0.3], ids=["circular", "eccentric"])
+@pytest.mark.parametrize("phase", [3 * np.pi / 2, 0.8])
+def test_float32_si_derivatives_match_float64(eccentricity, phase):
+    """Truth: the float64 Jacobian of the same float32 SI state.
+
+    Each derivative is made dimensionless by multiplying by the norm of
+    its input (a logarithmic derivative). Per element, the float32 result
+    must be within 1e-3 of the float64 one, relative to the float64 norm
+    over r, v and mu, which allows float32 rounding amplified by the
+    conversion's condition number. A product whose square leaves the
+    float32 range would instead drop a derivative term entirely. The
+    circular case compares a, i and W only: rounding leaves e near 1e-7,
+    where e, w and M have derivatives near 1/e that float32 cannot resolve.
+    """
+    mu = GM_SUN_AU3_PER_D2
+    orbit = FrameOrbit.from_classical(
+        1.0, eccentricity, 0.7, 1.1, 0.4, phase, mu_AU3_per_d2=mu
+    )
+    r, v = orbit.at(0.0)
+    inputs = (
+        jnp.asarray(r * AU2m, dtype=jnp.float32),
+        jnp.asarray(v * AU2m / d2s, dtype=jnp.float32),
+        jnp.asarray(mu * AU2m**3 / d2s**2, dtype=jnp.float32),
+    )
+    derivative = jax.jacrev(state_vector_to_keplerian, argnums=(0, 1, 2))
+    single = derivative(*inputs)
+    double = derivative(*(x.astype(jnp.float64) for x in inputs))
+    if eccentricity == 0.0:
+        single, double = (tuple(x[i] for i in (0, 2, 3)) for x in (single, double))
+    scales = [np.linalg.norm(x.astype(jnp.float64)) for x in inputs]
+    for got, expected in zip(single, double, strict=True):
+        assert all(x.dtype == jnp.float32 for x in got)
+        error = np.sqrt(
+            sum(
+                np.sum((np.asarray(g, np.float64) - x) ** 2) * s**2
+                for g, x, s in zip(got, expected, scales, strict=True)
+            )
+        )
+        norm = np.sqrt(
+            sum(
+                np.sum(np.asarray(x) ** 2) * s**2
+                for x, s in zip(expected, scales, strict=True)
+            )
+        )
+        assert error <= 1e-3 * norm
+
+
+def test_float32_si_exact_circle_takes_circular_branch():
+    """Truth: an exactly circular SI-scale orbit at argument of latitude 3*pi/2.
+
+    Powers of two make r, v and mu = |r| |v|^2 exact in float32, so the
+    eccentricity is exactly zero and the circular inclined branch runs. Its
+    magnitudes (|r| = 2**37 m, |h| = 2**52 m^2/s) match a 1 AU solar orbit.
+    The phase tolerance of 1e-6 rad is a few float32 ulps of 3*pi/2;
+    derivatives must be finite, with no numerical tolerance.
+    """
+    length, speed = 2.0**37, 2.0**15
+    r = jnp.array([0.0, 0.0, -length], dtype=jnp.float32)
+    v = jnp.array([speed, 0.0, 0.0], dtype=jnp.float32)
+    mu = jnp.asarray(length * speed**2, dtype=jnp.float32)
+    a, e, inc, _, periapsis, mean = state_vector_to_keplerian(r, v, mu)
+    assert float(e) == 0.0 and float(periapsis) == 0.0
+    np.testing.assert_allclose([float(a), float(inc)], [length, np.pi / 2], rtol=1e-6)
+    assert abs(float(mean) - 3 * np.pi / 2) < 1e-6
+    derivative = jax.jacrev(state_vector_to_keplerian, argnums=(0, 1, 2))
+    for evaluate in (derivative, jax.jit(derivative)):
+        assert all(np.isfinite(x).all() for x in jax.tree.leaves(evaluate(r, v, mu)))
