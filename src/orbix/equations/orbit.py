@@ -2,6 +2,7 @@
 
 import jax.numpy as jnp
 from hwoutils.constants import G, two_pi
+from jax import lax
 
 two_pi_G = two_pi * G
 
@@ -277,10 +278,17 @@ def _safe_norm(x):
     but evaluates the norm on a nonzero stand-in whenever ``x`` is zero,
     so the local derivative is finite; the ``jnp.where`` then zeroes the
     corresponding cotangent, giving a well-defined (zero) gradient.
+
+    The vector is divided by its largest absolute component first, so a
+    nonzero vector whose squared components underflow (float32 components
+    near 1e-23) keeps a nonzero norm and a finite derivative. The norm is
+    exactly invariant to that scale, so the scale carries no gradient.
     """
-    is_zero = jnp.all(x == 0.0)
-    x_safe = jnp.where(is_zero, jnp.ones_like(x), x)
-    return jnp.where(is_zero, 0.0, jnp.linalg.norm(x_safe))
+    scale = lax.stop_gradient(jnp.max(jnp.abs(x)))
+    is_zero = scale == 0.0
+    scale_safe = jnp.where(is_zero, 1.0, scale)
+    x_safe = jnp.where(is_zero, jnp.ones_like(x), x / scale_safe)
+    return jnp.where(is_zero, 0.0, scale_safe * jnp.linalg.norm(x_safe))
 
 
 def _oriented_angle(cosine, sine):
@@ -356,7 +364,7 @@ def state_vector_to_keplerian(r, v, mu):
         jnp.where(has_h, _safe_norm(h[:2]), 1.0), jnp.where(has_h, h[2], 0.0)
     )
 
-    k = jnp.array([0.0, 0.0, 1.0])
+    k = jnp.array([0.0, 0.0, 1.0], dtype=h.dtype)
     n = jnp.cross(k, h)
     n_mag = _safe_norm(n)
 
@@ -385,7 +393,9 @@ def state_vector_to_keplerian(r, v, mu):
         0.0,
         jnp.dot(n, e_vec) / (n_mag_safe * e_safe),
     )
-    sin_w = jnp.dot(jnp.cross(n, e_vec), h) / (n_mag_safe * e_safe * h_mag_safe)
+    # In AU/seconds near a circle, squaring the dimensional denominator in
+    # reverse mode underflows. Normalize before forming the triple product.
+    sin_w = jnp.dot(jnp.cross(n / n_mag_safe, e_vec / e_safe), h / h_mag_safe)
     w_inclined = _oriented_angle(cos_w, sin_w)
 
     e_xy_mag = _safe_norm(e_vec[:2])
@@ -414,7 +424,8 @@ def state_vector_to_keplerian(r, v, mu):
         0.0,
         jnp.dot(n, r) / (n_mag_safe * r_mag),
     )
-    sin_u = jnp.dot(jnp.cross(n, r), h) / (n_mag_safe * r_mag * h_mag_safe)
+    # Unit vectors avoid a dimensional triple product that overflows in float32 SI.
+    sin_u = jnp.dot(jnp.cross(n / n_mag_safe, r / r_mag), h / h_mag_safe)
     u_inclined = _oriented_angle(cos_u, sin_u)
 
     r_xy_mag = _safe_norm(r[:2])

@@ -3,6 +3,7 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from hwoutils.constants import GM_SUN_AU3_PER_D2, AU2m, d2s
 
 from orbix.equations.orbit import state_vector_to_keplerian
@@ -154,3 +155,71 @@ def test_elements_state_round_trip_degenerate_grid():
             expected, axis=-1
         )
         assert np.all(relative < 1e-10)
+
+
+@pytest.mark.parametrize("phase", [3 * np.pi / 2, 0.8])
+@pytest.mark.parametrize("length", [AU2m, 1.0], ids=["si", "au_seconds"])
+def test_float32_circular_state_and_gradients(phase, length):
+    """Truth: a float64 solar circle converted to SI or AU/seconds.
+
+    Relative vector and angular tolerances of 1e-5 allow float32 rounding
+    through inversion. The circular phase is w + M since rounding can
+    produce a small eccentricity and a nonzero periapsis. Every reverse
+    derivative must be finite, with no numerical tolerance.
+    """
+    mu = GM_SUN_AU3_PER_D2
+    orbit = FrameOrbit.from_classical(1.0, 0.0, 0.7, 1.1, 0.0, phase, mu_AU3_per_d2=mu)
+    r, v = orbit.at(0.0)
+    r = jnp.asarray(r * length, dtype=jnp.float32)
+    v = jnp.asarray(v * length / d2s, dtype=jnp.float32)
+    mu_input = jnp.asarray(mu * length**3 / d2s**2, dtype=jnp.float32)
+    elements = state_vector_to_keplerian(r, v, mu_input)
+    assert all(x.dtype == jnp.float32 for x in elements)
+    a, e, inc, node, periapsis, mean = (x.astype(jnp.float64) for x in elements)
+    rebuilt = FrameOrbit.from_classical(
+        a / length, e, inc, node, periapsis, mean, mu_AU3_per_d2=mu
+    )
+    for actual, expected in zip(
+        rebuilt.at(0.0),
+        (r.astype(jnp.float64) / length, v.astype(jnp.float64) * d2s / length),
+        strict=True,
+    ):
+        relative = np.linalg.norm(actual - expected) / np.linalg.norm(expected)
+        assert relative < 1e-5
+    delta = periapsis + mean - phase
+    assert abs(np.arctan2(np.sin(delta), np.cos(delta))) < 1e-5
+    derivative = jax.jacrev(state_vector_to_keplerian, argnums=(0, 1))
+    for evaluate in (derivative, jax.jit(derivative)):
+        assert all(
+            np.isfinite(x).all() for x in jax.tree.leaves(evaluate(r, v, mu_input))
+        )
+
+
+@pytest.mark.parametrize("inclination", [1e-16, np.pi], ids=["prograde", "retrograde"])
+def test_float32_near_equatorial_gradients_finite(inclination):
+    """Truth: a float64 solar ellipse in AU/seconds, cast to float32.
+
+    The float64 construction leaves out-of-plane components near 1e-23,
+    whose squares underflow float32. The 1e-5 relative state tolerance
+    allows float32 rounding through inversion. Every reverse derivative
+    must be finite, with no numerical tolerance.
+    """
+    mu = GM_SUN_AU3_PER_D2
+    orbit = FrameOrbit.from_classical(
+        1.0, 0.3, inclination, 1.1, 0.4, 0.3, mu_AU3_per_d2=mu
+    )
+    r, v = orbit.at(0.0)
+    r = jnp.asarray(r, dtype=jnp.float32)
+    v = jnp.asarray(v / d2s, dtype=jnp.float32)
+    mu_input = jnp.asarray(mu / d2s**2, dtype=jnp.float32)
+    assert 0.0 < abs(float(v[2])) < 1e-19
+    elements = state_vector_to_keplerian(r, v, mu_input)
+    elements = [x.astype(jnp.float64) for x in elements]
+    rebuilt = FrameOrbit.from_classical(*elements, mu_AU3_per_d2=mu).at(0.0)[0]
+    expected = r.astype(jnp.float64)
+    assert np.linalg.norm(rebuilt - expected) / np.linalg.norm(expected) < 1e-5
+    derivative = jax.jacrev(state_vector_to_keplerian, argnums=(0, 1))
+    for evaluate in (derivative, jax.jit(derivative)):
+        assert all(
+            np.isfinite(x).all() for x in jax.tree.leaves(evaluate(r, v, mu_input))
+        )
