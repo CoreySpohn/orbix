@@ -149,40 +149,34 @@ def _batch_shape(*parts) -> tuple[int, ...]:
     return jnp.broadcast_shapes(*shapes)
 
 
-def _expand(
-    dist: priorities.AbstractDistribution, batch
-) -> priorities.AbstractDistribution:
-    """The law with its parameters broadcast to ``batch``, a mixture's components kept.
-
-    A mixture's weights and components carry a trailing component axis, so they are
-    broadcast to ``batch`` plus that axis.
-    """
-    if isinstance(dist, priorities.Mixture):
-        full = (*batch, dist.mixing_logits.shape[-1])
-        return eqx.tree_at(
-            lambda m: (m.mixing_logits, m.component_distribution),
-            dist,
-            (
-                jnp.broadcast_to(dist.mixing_logits, full),
-                _expand(dist.component_distribution, full),
-            ),
-        )
-    return jax.tree_util.tree_map(
-        lambda leaf: jnp.broadcast_to(jnp.asarray(leaf), batch), dist
-    )
-
-
 def _draw(dist: priorities.AbstractDistribution, key, batch) -> Array:
-    """Draw a scalar distribution at the batch shape, one variate per element.
+    """Draw a scalar law at ``batch``, one independent variate per element.
 
-    A law with no parameter batch is drawn at ``batch`` directly. Otherwise its
-    parameters are broadcast to ``batch`` (so an axis of length one is the same law for
-    each element, never one shared draw) and each element is drawn once.
+    The law's own batch broadcasts to ``batch``. Sample axes are requested exactly
+    where the law has no axis or an axis of length one, so an axis of length one is the
+    same law for each element, never one shared draw. Only the shape rule of
+    ``sample`` (``sample_shape + batch``) is used; no parameter is touched.
     """
     batch = tuple(batch)
-    if dist.support()[0].shape == ():
-        return dist.sample(key, batch)
-    return _expand(dist, batch).sample(key, ())
+    own = dist.support()[0].shape
+    lead = len(batch) - len(own)
+    fresh = tuple(i for i in range(len(batch)) if i < lead or own[i - lead] != batch[i])
+    shape = tuple(batch[i] for i in fresh)
+    name = type(dist).__name__
+    try:
+        out = dist.sample(key, shape)
+    except (ValueError, TypeError, IndexError) as err:
+        raise ValueError(
+            f"{name}.sample failed for sample_shape {shape} with batch shape {own}; "
+            "a law must return draws of shape sample_shape + batch"
+        ) from err
+    if jnp.shape(out) != shape + own:
+        raise ValueError(
+            f"{name}.sample returned shape {jnp.shape(out)} for sample_shape {shape}; "
+            f"expected {shape + own} (sample_shape + batch)"
+        )
+    out = out.squeeze(tuple(len(shape) + i - lead for i in fresh if i >= lead))
+    return jnp.moveaxis(out, range(len(shape)), fresh)
 
 
 def size_term(log_p, log_volume) -> Array:
@@ -210,7 +204,9 @@ class OrbitLaw(AbstractOrbitLaw):
     Parameters are array leaves, so one law serves several rows through a trailing
     rows axis. Parameter shapes broadcast against each other and the masses, and each
     element of the broadcast batch gets its own independent draw: a parameter of shape
-    ``(1,)`` means the same law for each planet.
+    ``(1,)`` means the same law for each planet. A custom law must follow the shape
+    rule of ``priorities.AbstractDistribution.sample``; a law that does not is refused
+    when it is drawn.
 
     Attributes:
         eccentricity: Scalar law on the eccentricity, supported on ``[0, 1)``.

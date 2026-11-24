@@ -159,22 +159,173 @@ def test_laws_without_a_planet_axis_still_draw_each_planet_independently(size_la
         assert jnp.any(a < 2.0) and jnp.any(a > 5.0)
 
 
-@pytest.mark.parametrize("shape", [(64,), (64, 64)])
-def test_a_batched_law_is_drawn_once_per_element_not_as_a_cross_product(shape):
-    """Fails if drawing a (K,) or (B, K) law at (B, K) generates more than B K variates.
+class _Spy(priorities.AbstractDistribution):
+    """A law that records every ``sample_shape`` it is asked for, then delegates."""
 
-    Truth: one variate per element is 8 B K bytes of float64 output; a draw of the full
-    sample shape against every parameter element is K (or B K) times that. The compiled
-    temporary storage at (B, K) = (64, 64) is measured at 1.5 times the output (a
-    spike); the bound is 4 times, far below the 64-fold cross product. ``_draw`` is
-    called directly because it owns the draw; ``OrbitLaw.sample`` adds its own arrays.
+    inner: priorities.AbstractDistribution
+    calls: list = eqx.field(static=True)
+    event_dim = 0
+    bounds = "interval"
+    has_icdf = True
+
+    def support(self):
+        return self.inner.support()
+
+    def log_prob(self, value):
+        return self.inner.log_prob(value)
+
+    def sample(self, key, sample_shape=()):
+        self.calls.append(tuple(sample_shape))
+        return self.inner.sample(key, sample_shape)
+
+    def cdf(self, value):
+        return self.inner.cdf(value)
+
+    def icdf(self, q):
+        return self.inner.icdf(q)
+
+
+class _Tuple(priorities.AbstractDistribution):
+    """A custom law whose bounds are static tuples, one per planet, and a spare leaf.
+
+    It follows the shape rule ``sample_shape + batch`` (batch ``(2,)``) unless
+    ``obey`` is false, in which case it ignores ``sample_shape``.
     """
-    batch = (64, 64)
-    dist = priorities.Uniform(jnp.ones(shape), 2.0 * jnp.ones(shape))
-    draw = jax.jit(lambda d, k: _draw(d, k, batch))
-    stats = draw.lower(dist, KEY).compile().memory_analysis()
-    assert stats.temp_size_in_bytes <= 4 * stats.output_size_in_bytes
-    assert draw(dist, KEY).shape == batch
+
+    spare: jax.Array
+    lows: tuple = eqx.field(static=True, default=(1.0, 10.0))
+    highs: tuple = eqx.field(static=True, default=(2.0, 20.0))
+    obey: bool = eqx.field(static=True, default=True)
+    event_dim = 0
+    bounds = "interval"
+    has_icdf = True
+
+    def support(self):
+        return jnp.array(self.lows), jnp.array(self.highs)
+
+    def log_prob(self, value):
+        low, high = self.support()
+        return -jnp.log(high - low) + 0.0 * value
+
+    def sample(self, key, sample_shape=()):
+        low, high = self.support()
+        shape = (tuple(sample_shape) if self.obey else ()) + low.shape
+        return jax.random.uniform(key, shape, minval=low, maxval=high)
+
+    def cdf(self, value):
+        low, high = self.support()
+        return (value - low) / (high - low)
+
+    def icdf(self, q):
+        low, high = self.support()
+        return low + q * (high - low)
+
+
+@pytest.mark.parametrize("own", [(), (1,), (64,), (64, 1), (64, 64)])
+def test_a_batched_law_is_drawn_once_per_element_not_as_a_cross_product(own):
+    """Fails if a law of batch ``own`` is drawn at (64, 64) with extra variates.
+
+    Truth: one variate per element is a count, independent of the compiler. The
+    recording law must be asked exactly once, and the variates requested (the product
+    of the sample shape and the law's batch) must be 64 * 64 = 4096. A draw of the
+    whole batch followed by a diagonal asks for 64 * 64 * prod(own).
+    """
+    calls = []
+    inner = priorities.Uniform(jnp.ones(own), 2.0 * jnp.ones(own))
+    out = _draw(_Spy(inner, calls), KEY, (64, 64))
+    assert out.shape == (64, 64)
+    assert len(calls) == 1
+    assert np.prod(calls[0]) * np.prod(own) == 4096
+
+
+@pytest.mark.parametrize("own", [(3, 1), (1, 2)])
+def test_each_axis_of_a_batched_law_lands_where_the_law_carries_it(own):
+    """Fails if a drawn axis is moved or squeezed onto the wrong planet axis.
+
+    A law of batch (3, 1) with three disjoint supports, or (1, 2) with two, drawn at
+    (3, 2): every element must lie in the support of its own row, or its own column.
+    """
+    low = jnp.arange(np.prod(own), dtype=float).reshape(own) * 10.0
+    out = _draw(priorities.Uniform(low, low + 1.0), KEY, (3, 2))
+    expected = jnp.broadcast_to(low, (3, 2))
+    assert jnp.all((out >= expected) & (out <= expected + 1.0))
+
+
+@pytest.mark.parametrize("jit", [False, True])
+def test_a_custom_law_with_static_bounds_draws_each_planet_independently(jit):
+    """Fails if a law whose per-planet bounds are not array leaves shares one draw.
+
+    Three systems of two planets: six distinct continuous sizes (equal with
+    probability zero), each inside its own planet's support, eager and compiled.
+    """
+    law = OrbitLaw(E_LAW, a_AU=_Tuple(jnp.zeros(3)))
+    sample = lambda k, mu: law.sample(k, mu_AU3_per_d2=mu).a_AU  # noqa: E731
+    sample = eqx.filter_jit(sample) if jit else sample
+    a = sample(KEY, jnp.full((3, 2), GM))
+    assert a.shape == (3, 2) and len(set(np.asarray(a).ravel())) == 6
+    assert jnp.all((a[:, 0] >= 1.0) & (a[:, 0] <= 2.0))
+    assert jnp.all((a[:, 1] >= 10.0) & (a[:, 1] <= 20.0))
+
+
+class _Spare(priorities.AbstractDistribution):
+    """A scalar uniform law on [1, 2] that carries an unrelated (3,) array leaf."""
+
+    spare: jax.Array
+    event_dim = 0
+    bounds = "interval"
+    has_icdf = True
+
+    def support(self):
+        return jnp.asarray(1.0), jnp.asarray(2.0)
+
+    def log_prob(self, value):
+        return jnp.zeros_like(value)
+
+    def sample(self, key, sample_shape=()):
+        return jax.random.uniform(key, tuple(sample_shape), minval=1.0, maxval=2.0)
+
+    def cdf(self, value):
+        return value - 1.0
+
+    def icdf(self, q):
+        return 1.0 + q
+
+
+def test_a_spare_array_leaf_of_a_law_is_not_a_batch_axis():
+    """Fails if a non-parameter array leaf is broadcast to the target batch.
+
+    A law with a (3,) leaf outside its support is drawn at (4, 2) under jit: shape
+    (4, 2) and eight distinct variates (equal with probability zero).
+    """
+    draw = eqx.filter_jit(lambda d, k: _draw(d, k, (4, 2)))
+    out = draw(_Spare(jnp.zeros(3)), KEY)
+    assert out.shape == (4, 2) and len(set(np.asarray(out).ravel())) == 8
+
+
+def test_a_law_that_ignores_the_sample_shape_is_refused():
+    """Fails if a law off the shape rule is broadcast instead of refused.
+
+    Its (2,) draw would be shared by the three systems; the draw must raise.
+    """
+    law = OrbitLaw(E_LAW, a_AU=_Tuple(jnp.zeros(3), obey=False))
+    with pytest.raises(ValueError, match="sample returned shape"):
+        law.sample(KEY, mu_AU3_per_d2=jnp.full((3, 2), GM))
+
+
+def test_a_mixture_with_per_planet_weights_and_shared_components_is_refused():
+    """Fails if the shape-rule failure is not reported by law name and rule.
+
+    Weights (2, 2) over components of batch (2,) make ``Mixture.sample`` break the
+    shape rule inside priorities. This case becomes an independence test when
+    priorities draws mixtures over the joint batch of weights and components.
+    """
+    mix = priorities.Mixture(
+        jnp.zeros((2, 2)),
+        priorities.Uniform(jnp.array([1.0, 3.0]), jnp.array([2.0, 4.0])),
+    )
+    law = OrbitLaw(E_LAW, a_AU=mix)
+    with pytest.raises(ValueError, match="must return draws of shape sample_shape"):
+        law.sample(KEY, mu_AU3_per_d2=jnp.full((3, 2), GM))
 
 
 def test_a_vector_event_law_is_refused_for_the_shape_and_the_size():
