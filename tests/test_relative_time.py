@@ -16,10 +16,12 @@ import pytest
 from hwoutils.epoch import Epoch
 from hwoutils.leaves import check_tree
 
-from orbix.observatory import Observatory, ObservatoryL2Halo
+from orbix.observatory import Observatory, ObservatoryL2Halo, sun_ecliptic_longitude_deg
 from orbix.observatory.orbit import epoch_mjd
 from orbix.observatory.solar_system import earth_position_ecliptic
 
+# Regenerate the reference with scripts/make_relative_time_reference.py (see its
+# docstring); it runs the absolute-MJD sources of orbix commit f88a329.
 _REFERENCE = json.loads(
     (Path(__file__).parent / "reference" / "relative_time_base_x64.json").read_text()
 )
@@ -150,6 +152,29 @@ def test_x32_positions_agree_with_x64_truth(tmp_path):
                 err = np.abs(np.asarray(got, dtype=np.float64) - rec[want]).max()
                 worst = max(worst, float(err))
     assert worst < 5e-6, worst
+
+
+def test_x32_sun_longitude_agrees_with_x64():
+    """Fails if the Sun's longitude forms an absolute date in float32.
+
+    Truth: the same function in float64, whose own error is below 1e-6 deg.
+    Tolerance basis: spike plus spacing. The Sun moves 0.986 deg/d and the
+    float32 step of a relative time of 1000 d is 6.1e-5 d (6e-5 deg); the
+    measured worst case over 401 times to 1000 d and three epochs is 2.0e-4 deg
+    (the angle and Kepler arithmetic add a few steps), and the bound of 3e-4 deg
+    is five steps. The absolute-date implementation errs by about 1e-3 deg.
+    """
+    times = np.linspace(0.0, 1000.0, 401)
+    worst = 0.0
+    for epoch in (*_EPOCHS.values(), _LATE_ODD):
+        want = np.asarray(sun_ecliptic_longitude_deg(epoch, times))
+        with jax.enable_x64(False):
+            got = np.asarray(
+                sun_ecliptic_longitude_deg(epoch, times.astype(np.float32)),
+                dtype=np.float64,
+            )
+        worst = max(worst, float(np.abs((want - got + 180.0) % 360.0 - 180.0).max()))
+    assert worst < 3e-4, worst
 
 
 def test_epoch_mjd_is_host_only():
