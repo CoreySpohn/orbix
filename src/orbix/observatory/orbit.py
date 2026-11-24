@@ -29,8 +29,9 @@ from orbix.observatory.solar_system import earth_position_ecliptic
 def epoch_mjd(epoch: Epoch, time_d: ArrayLike) -> np.ndarray:
     """Modified Julian Date of ``time_d`` days from ``epoch``, for host use only.
 
-    An absolute date does not belong under a trace: in float32 it resolves only
-    a quarter of a day. The traced methods take ``(epoch, time_d)`` instead, and
+    An absolute date does not belong under a trace: in float32 a Julian date
+    near 2.5e6 d resolves only a quarter of a day and an MJD near 6e4 d only
+    0.004 d. The traced methods take ``(epoch, time_d)`` instead, and
     this helper serves plotting and reporting on concrete values.
 
     Args:
@@ -180,7 +181,10 @@ class ObservatoryL2Halo(eqx.Module):
     def _halo_time(self, epoch: Epoch, time_d: ArrayLike) -> Array:
         """Periodic halo time in years at ``time_d`` days from ``epoch``."""
         period_d = years_to_days(self._period_yr)
-        return days_to_years((self._phase0_d(epoch) + time_d) % period_d)
+        # Reduce time_d first so the sum stays below two periods: a sum of
+        # phase0 and a time of 1000 d would double the float32 spacing.
+        phase_d = (self._phase0_d(epoch) + time_d % period_d) % period_d
+        return days_to_years(phase_d)
 
     def position_ecliptic(self, epoch: Epoch, time_d: ArrayLike) -> jnp.ndarray:
         """Heliocentric ecliptic position of the telescope at ``time_d`` from ``epoch``.
