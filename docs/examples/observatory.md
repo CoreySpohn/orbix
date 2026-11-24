@@ -20,9 +20,10 @@ given time, and for what fraction of an interval is it. The same module also
 gives the two angles that the local zodiacal light depends on.
 
 Times are days from a static `Epoch`, not absolute dates: a float32 number
-cannot hold a date to better than about a quarter of a day, while a few hundred
-days from a fixed epoch it keeps a few seconds. The target is
-given by its right ascension and declination in degrees, J2000.
+cannot hold a Julian date to better than about a quarter of a day (a modified
+Julian date, about 0.004 d), while a few hundred days from a fixed epoch it
+keeps a few seconds. The target is given by its right ascension and declination
+in degrees, J2000.
 
 ```{code-cell} ipython3
 import jax
