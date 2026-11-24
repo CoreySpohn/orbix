@@ -15,6 +15,7 @@ from orbix.system import (
     IsotropicInclination,
     OrbitLaw,
 )
+from orbix.system.laws import _draw
 
 KEY = jax.random.PRNGKey(3)
 E_LAW = priorities.Uniform(0.05, 0.8)
@@ -156,6 +157,39 @@ def test_laws_without_a_planet_axis_still_draw_each_planet_independently(size_la
     assert jnp.all(jnp.isfinite(law.log_prob(law.sample(KEY, mu_AU3_per_d2=GM))))
     if size_law is _mixture:
         assert jnp.any(a < 2.0) and jnp.any(a > 5.0)
+
+
+@pytest.mark.parametrize("shape", [(64,), (64, 64)])
+def test_a_batched_law_is_drawn_once_per_element_not_as_a_cross_product(shape):
+    """Fails if drawing a (K,) or (B, K) law at (B, K) generates more than B K variates.
+
+    Truth: one variate per element is 8 B K bytes of float64 output; a draw of the full
+    sample shape against every parameter element is K (or B K) times that. The compiled
+    temporary storage at (B, K) = (64, 64) is measured at 1.5 times the output (a
+    spike); the bound is 4 times, far below the 64-fold cross product. ``_draw`` is
+    called directly because it owns the draw; ``OrbitLaw.sample`` adds its own arrays.
+    """
+    batch = (64, 64)
+    dist = priorities.Uniform(jnp.ones(shape), 2.0 * jnp.ones(shape))
+    draw = jax.jit(lambda d, k: _draw(d, k, batch))
+    stats = draw.lower(dist, KEY).compile().memory_analysis()
+    assert stats.temp_size_in_bytes <= 4 * stats.output_size_in_bytes
+    assert draw(dist, KEY).shape == batch
+
+
+def test_a_vector_event_law_is_refused_for_the_shape_and_the_size():
+    """Fails if a law with an event axis is accepted as a planet batch.
+
+    A 2-D multivariate normal has event_dim 1; its event axis would be read as two
+    planets and the covariance discarded.
+    """
+    vector = priorities.MultivariateNormal(jnp.zeros(2), jnp.eye(2))
+    with pytest.raises(ValueError, match="eccentricity must be a scalar"):
+        OrbitLaw(vector, a_AU=priorities.Uniform(1.0, 2.0))
+    with pytest.raises(ValueError, match="a_AU must be a scalar"):
+        OrbitLaw(E_LAW, a_AU=vector)
+    with pytest.raises(ValueError, match="period_d must be a scalar"):
+        OrbitLaw(E_LAW, period_d=vector)
 
 
 @pytest.mark.parametrize("chart", [ClassicalChart(), FrameChart(), FrameChart(None)])

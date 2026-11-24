@@ -149,23 +149,40 @@ def _batch_shape(*parts) -> tuple[int, ...]:
     return jnp.broadcast_shapes(*shapes)
 
 
+def _expand(
+    dist: priorities.AbstractDistribution, batch
+) -> priorities.AbstractDistribution:
+    """The law with its parameters broadcast to ``batch``, a mixture's components kept.
+
+    A mixture's weights and components carry a trailing component axis, so they are
+    broadcast to ``batch`` plus that axis.
+    """
+    if isinstance(dist, priorities.Mixture):
+        full = (*batch, dist.mixing_logits.shape[-1])
+        return eqx.tree_at(
+            lambda m: (m.mixing_logits, m.component_distribution),
+            dist,
+            (
+                jnp.broadcast_to(dist.mixing_logits, full),
+                _expand(dist.component_distribution, full),
+            ),
+        )
+    return jax.tree_util.tree_map(
+        lambda leaf: jnp.broadcast_to(jnp.asarray(leaf), batch), dist
+    )
+
+
 def _draw(dist: priorities.AbstractDistribution, key, batch) -> Array:
     """Draw a scalar distribution at the batch shape, one variate per element.
 
-    The law's own batch (the shape of its support) broadcasts against ``batch``: a
-    parameter axis of length one is the same law for each element, never one draw
-    shared among them, and a law with no parameters is drawn once per element. The
-    sample shape is the whole ``batch``, so every element is its own variate, and an
-    own axis longer than one is read on the diagonal.
+    A law with no parameter batch is drawn at ``batch`` directly. Otherwise its
+    parameters are broadcast to ``batch`` (so an axis of length one is the same law for
+    each element, never one shared draw) and each element is drawn once.
     """
     batch = tuple(batch)
-    own = dist.support()[0].shape
-    drawn = dist.sample(key, batch)
-    grid = jnp.indices(batch, sparse=True)
-    offset = len(batch) - len(own)
-    own_index = tuple(grid[offset + j] if size > 1 else 0 for j, size in enumerate(own))
-    identity = tuple(jnp.broadcast_to(g, batch) for g in jnp.indices(batch))
-    return drawn[(*identity, *own_index)]
+    if dist.support()[0].shape == ():
+        return dist.sample(key, batch)
+    return _expand(dist, batch).sample(key, ())
 
 
 def size_term(log_p, log_volume) -> Array:
@@ -206,9 +223,13 @@ class OrbitLaw(AbstractOrbitLaw):
     period_d: priorities.AbstractDistribution | None = None
 
     def __check_init__(self):
-        """Require exactly one size law."""
+        """Require exactly one size law, and scalar laws for the size and shape."""
         if (self.a_AU is None) == (self.period_d is None):
             raise ValueError("give exactly one of a_AU and period_d")
+        for name in ("eccentricity", "a_AU", "period_d"):
+            law = getattr(self, name)
+            if law is not None and law.event_dim != 0:
+                raise ValueError(f"{name} must be a scalar law (event_dim 0)")
 
     def log_prob(self, orbit: FrameOrbit) -> Array:
         """Return ``log p_e(e) - log(2 pi e)`` plus the size term, per orbit.
