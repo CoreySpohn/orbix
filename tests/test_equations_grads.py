@@ -295,3 +295,64 @@ def test_float32_si_exact_circle_takes_circular_branch():
     derivative = jax.jacrev(state_vector_to_keplerian, argnums=(0, 1, 2))
     for evaluate in (derivative, jax.jit(derivative)):
         assert all(np.isfinite(x).all() for x in jax.tree.leaves(evaluate(r, v, mu)))
+
+
+def test_float32_periapsis_derivative_near_node_matches_float64():
+    """Truth: float64 central differences on the same float32 AU/s states.
+
+    Periapses within 1e-3 rad of the ascending node put the periapsis
+    cosine within a few float32 ulps of one, where recovering the angle
+    from the cosine alone loses the derivative. The derivative of the
+    periapsis with respect to velocity is compared per state, relative to
+    its float64 norm. The 1e-4 tolerance covers float32 rounding through
+    the conversion (5.3e-7 measured); the float64 differences, with a
+    step of 1e-6 of the speed, contribute about 1e-10. Recovering the
+    angles from their cosines with arccos fails at 3.5e-2. The rebuilt state
+    must match within 1e-5 relative, as in the other float32 tests.
+    """
+    mu = GM_SUN_AU3_PER_D2
+    periapsis, mean_anomaly = np.meshgrid(
+        [-1e-3, -1e-4, 0.0, 1e-4, 1e-3], [3 * np.pi / 2, 4.5, 4.85]
+    )
+    orbit = FrameOrbit.from_classical(
+        1.0, 0.3, 0.7, 0.6, periapsis.ravel(), mean_anomaly.ravel(), mu_AU3_per_d2=mu
+    )
+    r, v = orbit.at(0.0)
+    r = jnp.asarray(r, dtype=jnp.float32)
+    v = jnp.asarray(v / d2s, dtype=jnp.float32)
+    mu_input = jnp.asarray(mu / d2s**2, dtype=jnp.float32)
+
+    def periapsis_of(r, v, mu):
+        return state_vector_to_keplerian(r, v, mu)[4]
+
+    batched = jax.jit(jax.vmap(periapsis_of, in_axes=(0, 0, None)))
+    gradient = jax.jit(jax.vmap(jax.grad(periapsis_of, argnums=1), (0, 0, None)))
+    single = gradient(r, v, mu_input)
+    assert single.dtype == jnp.float32
+    single = np.asarray(single, dtype=np.float64)
+
+    r64, v64 = r.astype(jnp.float64), v.astype(jnp.float64)
+    mu64 = mu_input.astype(jnp.float64)
+    step = 1e-6 * np.linalg.norm(np.asarray(v64), axis=-1)
+    expected = np.empty_like(single)
+    for axis in range(3):
+        offset = np.zeros_like(single)
+        offset[:, axis] = step
+        change = batched(r64, v64 + offset, mu64) - batched(r64, v64 - offset, mu64)
+        change = np.arctan2(np.sin(change), np.cos(change))
+        expected[:, axis] = change / (2 * step)
+    relative = np.linalg.norm(single - expected, axis=-1) / np.linalg.norm(
+        expected, axis=-1
+    )
+    assert np.all(relative < 1e-4)
+
+    elements = jax.jit(jax.vmap(state_vector_to_keplerian, in_axes=(0, 0, None)))(
+        r, v, mu_input
+    )
+    elements = [x.astype(jnp.float64) for x in elements]
+    rebuilt = FrameOrbit.from_classical(*elements, mu_AU3_per_d2=mu).at(0.0)[0]
+    expected_r = r.astype(jnp.float64)
+    error = np.linalg.norm(rebuilt - expected_r, axis=-1) / np.linalg.norm(
+        expected_r, axis=-1
+    )
+    assert np.all(error < 1e-5)

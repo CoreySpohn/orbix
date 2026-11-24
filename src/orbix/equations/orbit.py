@@ -267,7 +267,6 @@ def thiele_innes_constants_reduced(sinW, cosW, sinw, cosw, sinwcosi, coswcosi):
 
 _TOL_E = 1e-9
 _TOL_N = 1e-9
-_ARC_EPS = 1e-7
 
 
 def _safe_norm(x):
@@ -285,19 +284,16 @@ def _safe_norm(x):
 
 
 def _oriented_angle(cosine, sine):
-    """Use atan2 near anomaly axes, retaining arccos arithmetic elsewhere.
+    """Angle from its cosine and sine through a guarded atan2.
 
-    Guard both inactive branches: arccos has an infinite derivative at +/-1,
-    and atan2 must never receive (0, 0) from an unused circular-orbit branch.
+    Recovering the angle with arccos amplifies rounding in the cosine near
+    the axes, where its derivative diverges; atan2 uses both components and
+    keeps the derivative well conditioned in float32. An unused
+    circular-orbit branch can pass (0, 0), where the atan2 derivative is
+    NaN; any pair whose squared length underflows is replaced by (1, 0).
     """
-    near_axis = jnp.abs(cosine) >= 1.0 - _ARC_EPS
-    safe_cosine = jnp.where(near_axis, 0.0, cosine)
-    angle = jnp.arccos(jnp.clip(safe_cosine, -1.0, 1.0))
-    angle = jnp.where(sine < 0, 2 * jnp.pi - angle, angle)
-    axis_angle = jnp.arctan2(
-        jnp.where(near_axis, sine, 0.0), jnp.where(near_axis, cosine, 1.0)
-    )
-    return jnp.where(near_axis, axis_angle, angle)
+    is_zero = cosine * cosine + sine * sine == 0.0
+    return jnp.arctan2(jnp.where(is_zero, 0.0, sine), jnp.where(is_zero, 1.0, cosine))
 
 
 def state_vector_to_keplerian(r, v, mu):
