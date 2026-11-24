@@ -340,8 +340,10 @@ def test_jacobi_inverse_removes_only_barycenter(planet_count):
 def test_system_from_cartesian_epoch_round_trip(batch_shape):
     """Truth: input Cartesian snapshot; 1e-12 AU and AU/day allow x64 solves.
 
-    A translated origin and velocity boost cancel in star-relative states.
-    JIT construction and batched solves exercise traced per-system leaves.
+    Measured: 1.8e-15 AU in position and 4.3e-18 AU/day in velocity, so
+    the epoch round trip is exact to rounding. A translated origin and
+    velocity boost cancel in star-relative states. JIT construction and
+    batched solves exercise traced per-system leaves.
     """
     epoch = 23.0
     base = _system().solve(jnp.asarray(epoch))
@@ -383,19 +385,16 @@ def test_cartesian_chain_against_nbody(record_property):
 
     Two initially circular Jupiter-mass planets at 1 and 5.2 AU share a
     60-degree inclination with phases 90 degrees apart, at 10 pc. The
-    chain of Kepler orbits omits the planet-planet forcing, so it departs
-    from N-body by a residual that grows with time. Order of magnitude:
-    the inner pair's quadrupole forces the outer orbit at a fraction
-    (m/M)(a_in/a_out)^2 = 3.5e-5, about 0.1 mas of phase drift at 10 pc
-    over the 0.84 outer orbits of 10 yr; starting from osculating rather
-    than mean elements adds a comparable term for both planets. Basis,
-    measured: 0.014 mas at 1 yr and at most 0.17 mas at 10 yr here, at
-    most 0.015 and 0.20 mas over a grid of inclinations (0 to 85 deg)
-    and phase separations (0 to 180 deg); the limits are 0.05 mas at 1 yr
-    and 0.3 mas (1.5 times the grid maximum) at 5 and 10 yr. Treating
-    the planets as star-relative misses by 0.65, 2.4 and 1.4 mas at 1, 5
-    and 10 yr in this geometry. Halving the 0.75-day RK4 step must move
-    every star-relative sky offset by less than 0.001 mas.
+    chain of Kepler orbits omits the planet-planet pull, so it departs
+    from N-body by a residual that grows with time. Basis, from a spike:
+    in this geometry the residual measured 0.014/0.151 mas (inner) and
+    0.002/0.171 mas (outer) at 1/10 yr; over the probed geometries
+    (inclinations 0 to 85 deg, phase separations 0 to 180 deg) it ranged
+    0.04 to 0.20 mas at 10 yr and stayed within 0.015 mas at 1 yr. The
+    limits are 0.05 mas at 1 yr and 0.3 mas at 5 and 10 yr; all three
+    kill a chain that treats the planets as star-relative
+    (0.65/2.4/1.4 mas). Halving the 0.75-day RK4 step must move every
+    star-relative sky offset by less than 0.001 mas.
     """
     masses = np.array([1.0, Mjup2kg / Msun2kg, Mjup2kg / Msun2kg])
     inclination = np.deg2rad(60.0)
