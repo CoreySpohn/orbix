@@ -2,8 +2,11 @@
 
 import jax
 import jax.numpy as jnp
+import numpy as np
+from hwoutils.constants import GM_SUN_AU3_PER_D2, AU2m, d2s
 
 from orbix.equations.orbit import state_vector_to_keplerian
+from orbix.system import FrameOrbit
 
 jax.config.update("jax_enable_x64", True)
 
@@ -79,3 +82,75 @@ def test_values_unchanged_for_generic_orbit():
     assert jnp.isclose(W, expected_W, rtol=1e-10)
     assert jnp.isclose(w, expected_w, rtol=1e-10)
     assert jnp.isclose(M, expected_M, rtol=1e-10)
+
+
+def test_circular_elements_independent_of_units():
+    """Truth: a constructed solar circle; 1e-12 allows unit-conversion roundoff.
+
+    The circular convention absorbs periapsis into the mean anomaly;
+    compare that phase and all orientation angles to 1e-12 radians.
+    """
+    mu = GM_SUN_AU3_PER_D2
+    orbit = FrameOrbit.from_classical(1.0, 0.0, 0.7, 1.1, 0.0, 0.8, mu_AU3_per_d2=mu)
+    r, v = orbit.at(0.0)
+    for length, time in ((1.0, 1.0), (1.0, d2s), (AU2m, d2s)):
+        a, e, *angles = state_vector_to_keplerian(
+            r * length, v * length / time, mu * length**3 / time**2
+        )
+        np.testing.assert_allclose(a / length, 1.0, rtol=1e-12, atol=0)
+        assert e < 1e-12
+        delta = np.asarray(angles) - [0.7, 1.1, 0.0, 0.8]
+        np.testing.assert_allclose(
+            np.arctan2(np.sin(delta), np.cos(delta)), 0.0, atol=1e-12, rtol=0
+        )
+
+
+def test_face_on_inclination_endpoints():
+    """Truth: classical h along +/-z; exact zero and one ULP at pi suffice.
+
+    A radial state (no angular momentum) keeps the i = pi/2 convention.
+    """
+    r = jnp.array([0.0, 1.0, 0.0])
+    v = jnp.array([1.0, 0.0, 0.0])
+    assert state_vector_to_keplerian(r, v, 1.0)[2] == 0.0
+    np.testing.assert_allclose(
+        state_vector_to_keplerian(r, -v, 1.0)[2],
+        np.pi,
+        atol=np.spacing(np.pi),
+        rtol=0,
+    )
+    radial = state_vector_to_keplerian(r, jnp.array([0.0, 0.5, 0.0]), 1.0)[2]
+    assert radial == np.pi / 2
+
+
+def test_elements_state_round_trip_degenerate_grid():
+    """Truth: FrameOrbit forward states; 1e-10 relative covers x64 inversion.
+
+    Compare vector norms so zero components need no dimensional floor.
+    Circular and equatorial angle choices must preserve the physical state.
+    The second mean anomaly puts a circular body 1e-6 rad past its
+    reference direction (w + M = 1e-6), checking that no clipped cosine
+    moves an angle near zero.
+    """
+    eccentricity, inclination, mean_anomaly = np.meshgrid(
+        [0.0, 0.3, 0.9], [0.0, 0.7, np.pi], [0.8, 2 * np.pi - 0.6 + 1e-6]
+    )
+    orbit = FrameOrbit.from_classical(
+        1.7,
+        eccentricity.ravel(),
+        inclination.ravel(),
+        0.4,
+        0.6,
+        mean_anomaly.ravel(),
+        mu_AU3_per_d2=GM_SUN_AU3_PER_D2,
+    )
+    r, v = orbit.at(0.0)
+    elements = jax.jit(jax.vmap(state_vector_to_keplerian, in_axes=(0, 0, None)))(
+        r, v, GM_SUN_AU3_PER_D2
+    )
+    rebuilt = FrameOrbit.from_classical(*elements, mu_AU3_per_d2=GM_SUN_AU3_PER_D2)
+    for actual, expected in zip(rebuilt.at(0.0), (r, v), strict=True):
+        relative = np.linalg.norm(actual - expected, axis=-1) / np.linalg.norm(
+            expected, axis=-1
+        )
+        assert np.all(relative < 1e-10)

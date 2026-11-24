@@ -146,6 +146,43 @@ result = viz.plot_sky_track(
 The shaded disk is an inner working angle: the region a coronagraph
 cannot see into, in the same arcsecond units as the track.
 
+## Building a system from Cartesian states
+
+A Jacobi orbit is relative to the barycenter of the star and every interior
+planet. Installing a star-relative orbit as an outer Jacobi orbit shifts its
+position and velocity by the interior planets' contribution to that barycenter.
+`System.from_cartesian` performs this conversion for the bodies supplied; an
+omitted body is absent from the dynamics. Solved at the snapshot epoch, the
+system returns the input star-relative positions; this page runs in single
+precision, so they agree to float32 rounding.
+
+```{code-cell} ipython3
+from hwoutils.constants import GM_SUN_AU3_PER_D2, Mjup2kg, Msun2kg
+
+jupiter_mass = Mjup2kg / Msun2kg
+origin_AU = jnp.array([2.0, -3.0, 0.7])
+origin_velocity = jnp.array([0.01, -0.02, 0.03])
+input_position = origin_AU + jnp.array(
+    [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 5.2, 0.0]]
+)
+speeds = jnp.sqrt(GM_SUN_AU3_PER_D2 * (1.0 + jupiter_mass) / jnp.array([1.0, 5.2]))
+input_velocity = jnp.zeros((3, 3)).at[1:, 0].set(speeds) + origin_velocity
+snapshot_epoch_d = 23.0
+cartesian_system = System.from_cartesian(
+    Body(1.0),
+    Body(jnp.array([jupiter_mass, jupiter_mass])),
+    SkyFrame(10.0),
+    position_AU=input_position,
+    velocity_AU_per_d=input_velocity,
+    epoch_d=snapshot_epoch_d,
+)
+snapshot = cartesian_system.solve(snapshot_epoch_d)
+input_relative = input_position[1:] - input_position[0]
+reproduced = snapshot.position_AU[1:] - snapshot.position_AU[0]
+print("Input (east, north, away) AU | Reproduced (east, north, away) AU")
+print(np.round(np.asarray(jnp.concatenate([input_relative, reproduced], axis=-1)), 5))
+```
+
 ## A posterior fan
 
 A `(K,)`-batched orbit draws as a fan of candidate tracks, faded by
