@@ -129,6 +129,7 @@ def test_elements_state_round_trip_degenerate_grid():
 
     Compare vector norms so zero components need no dimensional floor.
     Circular and equatorial angle choices must preserve the physical state.
+    Equatorial nodes are exactly zero by the documented element convention.
     The second mean anomaly puts a circular body 1e-6 rad past its
     reference direction (w + M = 1e-6), checking that no clipped cosine
     moves an angle near zero.
@@ -155,6 +156,8 @@ def test_elements_state_round_trip_degenerate_grid():
             expected, axis=-1
         )
         assert np.all(relative < 1e-10)
+    equatorial = (inclination.ravel() == 0.0) | (inclination.ravel() == np.pi)
+    np.testing.assert_array_equal(elements[3][equatorial], 0.0)
 
 
 @pytest.mark.parametrize("phase", [3 * np.pi / 2, 0.8])
