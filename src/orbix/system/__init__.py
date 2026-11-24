@@ -16,6 +16,7 @@ from orbix.system.core import (
     Ephemeris,
     SkyFrame,
     System,
+    barycentric_to_jacobi,
     enclosed_mu,
     jacobi_to_barycentric,
 )
@@ -61,6 +62,7 @@ __all__ = [
     "System",
     "ThieleInnesBlock",
     "ThieleInnesChart",
+    "barycentric_to_jacobi",
     "disk_to_plane",
     "distance_AU",
     "enclosed_mu",

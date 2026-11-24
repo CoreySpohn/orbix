@@ -4,6 +4,7 @@ See Murray and Dermott, Solar System Dynamics, for hierarchical coordinates.
 The hierarchy is a set of independent Kepler orbits, not an N-body integrator.
 """
 
+import dataclasses
 from types import MappingProxyType
 from typing import ClassVar
 
@@ -87,6 +88,45 @@ def jacobi_to_barycentric(relative, star_mass_Msun, planet_mass_Msun):
     )
 
 
+def barycentric_to_jacobi(values, star_mass_Msun, planet_mass_Msun):
+    """Map B + (K+1,) + time_shape + (3,) to B + (K,) + time_shape + (3,).
+
+    Each planet is measured from the center of mass of the star and all
+    preceding planets, using ordered inner-to-outer sums. Positions or
+    velocities may use any common origin, since only differences enter.
+
+    Args:
+        values: Positions or velocities, star first and planets inner to outer,
+            shape B + (K+1,) + time_shape + (3,), in any consistent units.
+        star_mass_Msun: Star mass in solar masses, shape B.
+        planet_mass_Msun: Planet masses in solar masses, shape B + (K,).
+
+    Returns:
+        Jacobi vectors in the units of values, shape B + (K,) + time_shape + (3,).
+    """
+    values = jnp.asarray(values)
+    masses = jnp.asarray(planet_mass_Msun)
+    axis = masses.ndim - 1
+    relative = jnp.moveaxis(values, axis, 0)
+    relative = relative[1:] - relative[0]
+    _, cumulative_mass = _ordered_sum(jnp.moveaxis(masses, -1, 0))
+    preceding_mass = jnp.concatenate(
+        [jnp.zeros_like(cumulative_mass[:1]), cumulative_mass], axis=0
+    )[:-1]
+    enclosed = jnp.asarray(star_mass_Msun) + preceding_mass
+    weights = jnp.moveaxis(masses, -1, 0).reshape(
+        (masses.shape[-1], *masses.shape[:-1]) + (1,) * (relative.ndim - masses.ndim)
+    )
+    _, cumulative = _ordered_sum(relative * weights)
+    preceding = jnp.concatenate([jnp.zeros_like(cumulative[:1]), cumulative], axis=0)[
+        :-1
+    ]
+    center = preceding / enclosed.reshape(
+        enclosed.shape + (1,) * (relative.ndim - enclosed.ndim)
+    )
+    return jnp.moveaxis(relative - center, 0, axis)
+
+
 class Body(eqx.Module):
     """Body masses in solar masses, with a free batch shape.
 
@@ -155,25 +195,62 @@ class SkyFrame(eqx.Module):
 
 
 class Ephemeris(eqx.Module):
-    """Barycentric vectors of shape (K+1,) + time_shape + (3,).
+    """Barycentric vectors of shape B + (K+1,) + time_shape + (3,).
 
     Index zero is the star. reference is a body index or "barycenter".
-    Distance broadcasts against time_shape. All observables reuse these
-    stored states and perform no further orbital solve.
+    All observables reuse these stored states and perform no further
+    orbital solve. There is one distance per system: dist_pc has exactly
+    the batch shape B. Its rank batch_ndim is derived from dist_pc and only
+    declared (and checked) at construction (zero for one system). A distance
+    history is not supported. Construction checks run in __post_init__, so
+    a subclass must not define its own __init__.
 
     Attributes:
-        position_AU: Barycentric positions in AU, shape (K+1,) + time_shape + (3,), in
-            the (east, north, away) frame.
+        position_AU: Barycentric positions in AU, shape B + (K+1,) + time_shape + (3,),
+            in the (east, north, away) frame.
         velocity_AU_per_d: Barycentric velocities in AU/day, same shape as position_AU.
-        dist_pc: Distance to the system in parsecs, broadcast against time_shape.
+        dist_pc: Distance to each system in parsecs, shape exactly B.
+        batch_ndim: Rank of B, derived from dist_pc. The construction keyword
+            declares this rank and defaults to 0, one system.
     """
 
     position_AU: Array = eqx.field(converter=jnp.asarray)
     velocity_AU_per_d: Array = eqx.field(converter=jnp.asarray)
     dist_pc: Array = eqx.field(converter=jnp.asarray)
+    batch_ndim: dataclasses.InitVar[int] = dataclasses.field(default=0, kw_only=True)
+
+    def __post_init__(self, batch_ndim):
+        """Validate the declared batch rank and one distance per system.
+
+        Args:
+            batch_ndim: Declared rank of the leading batch shape B.
+
+        Raises:
+            ValueError: The rank is not an integer in [0, vector ndim - 2], or
+                dist_pc does not have exactly the batch shape B.
+        """
+        position_shape = jnp.shape(jnp.asarray(self.position_AU))
+        if len(position_shape) < 2:
+            raise ValueError("Ephemeris vectors must share shape (bodies, ..., 3)")
+        if (
+            not isinstance(batch_ndim, int)
+            or isinstance(batch_ndim, bool)
+            or not 0 <= batch_ndim <= len(position_shape) - 2
+        ):
+            raise ValueError(
+                "batch_ndim must be an integer between 0 and vector ndim - 2"
+            )
+        batch = position_shape[:batch_ndim]
+        distance_shape = jnp.shape(jnp.asarray(self.dist_pc))
+        if distance_shape != batch:
+            raise ValueError(
+                "A distance history is not supported; dist_pc must have exactly "
+                f"the batch shape B = {batch} (batch_ndim={batch_ndim}); "
+                f"got {distance_shape}"
+            )
 
     def __check_init__(self):
-        """Validate the body and vector shape contract."""
+        """Validate the batch, body and vector shape contract."""
         if (
             self.position_AU.ndim < 2
             or self.position_AU.shape[-1] != 3
@@ -298,6 +375,13 @@ class Ephemeris(eqx.Module):
         )
 
 
+# Install after dataclass construction so the property is not the InitVar default.
+Ephemeris.batch_ndim = property(
+    lambda self: self.dist_pc.ndim,
+    doc="Rank of the system batch, derived from dist_pc.",
+)
+
+
 class System(eqx.Module):
     """A Jacobi chain ordered inner to outer by the caller.
 
@@ -378,6 +462,60 @@ class System(eqx.Module):
         )
         return cls(star, planets, orbits, frame)
 
+    @classmethod
+    def from_cartesian(
+        cls, star, planets, frame, *, position_AU, velocity_AU_per_d, epoch_d=0.0
+    ):
+        """Build a Jacobi chain from a Cartesian snapshot in any common origin.
+
+        The chain is built from the bodies given only; a body left out is
+        absent from the dynamics. Each orbit is relative to the barycenter
+        of its interior bodies and rated by its enclosed mass.
+
+        Args:
+            star: Body with stellar mass, shape B.
+            planets: Body with planet masses, shape B + (K,), inner to outer.
+            frame: SkyFrame with distance, sky position and reference epoch.
+            position_AU: Positions in AU in the (east, north, away) frame,
+                shape B + (K+1, 3), star first and planets inner to outer.
+                Each Jacobi state (planet relative to the barycenter of its
+                interior bodies) must be bound and nonradial, as required by
+                FrameOrbit.from_cartesian.
+            velocity_AU_per_d: Velocities in AU/day, same shape and frame.
+            epoch_d: One snapshot epoch per system in days, either a scalar
+                or an array of shape exactly B. Defaults to 0.
+
+        Returns:
+            System reproducing the snapshot relative to the star at epoch_d.
+
+        Raises:
+            ValueError: Mass, Cartesian or epoch shapes do not match B and K.
+        """
+        batch = star.mass_Msun.shape
+        if planets.mass_Msun.ndim < 1 or planets.mass_Msun.shape[:-1] != batch:
+            raise ValueError("Planet masses must have shape B + (K,) for star shape B")
+        expected = (*batch, planets.mass_Msun.shape[-1] + 1, 3)
+        position = jnp.asarray(position_AU)
+        velocity = jnp.asarray(velocity_AU_per_d)
+        if position.shape != expected or velocity.shape != expected:
+            raise ValueError(
+                "Cartesian positions and velocities must have shape B + (K+1, 3) "
+                f"= {expected}; got {position.shape} and {velocity.shape}"
+            )
+        epoch = jnp.asarray(epoch_d)
+        if epoch.shape not in ((), batch):
+            raise ValueError(
+                "epoch_d must be a scalar or have exactly the batch shape B"
+            )
+        epoch = jnp.broadcast_to(epoch[..., None], planets.mass_Msun.shape)
+        orbits = FrameOrbit.from_cartesian(
+            barycentric_to_jacobi(position, star.mass_Msun, planets.mass_Msun),
+            barycentric_to_jacobi(velocity, star.mass_Msun, planets.mass_Msun),
+            mu_AU3_per_d2=enclosed_mu(star.mass_Msun, planets.mass_Msun),
+            epoch_d=epoch,
+        )
+        return cls(star, planets, orbits, frame)
+
     def solve(self, time_d, *, solver=_DEFAULT_SOLVER):
         """Solve once at all times; return (K+1,) + time_shape + (3,) states.
 
@@ -401,7 +539,13 @@ class System(eqx.Module):
 
             for _ in batch:
                 solve = jax.vmap(solve, in_axes=(0, 0 if paired else None))
-            return solve(self, time)
+            solved = solve(self, time)
+            return Ephemeris(
+                solved.position_AU,
+                solved.velocity_AU_per_d,
+                solved.dist_pc,
+                batch_ndim=len(batch),
+            )
         r, v = self.orbits.at(time_d, solver=solver)
         return Ephemeris(
             jacobi_to_barycentric(r, self.star.mass_Msun, self.planets.mass_Msun),

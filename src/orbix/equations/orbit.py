@@ -2,6 +2,7 @@
 
 import jax.numpy as jnp
 from hwoutils.constants import G, two_pi
+from jax import lax
 
 two_pi_G = two_pi * G
 
@@ -266,7 +267,6 @@ def thiele_innes_constants_reduced(sinW, cosW, sinw, cosw, sinwcosi, coswcosi):
 
 _TOL_E = 1e-9
 _TOL_N = 1e-9
-_ARC_EPS = 1e-7
 
 
 def _safe_norm(x):
@@ -284,19 +284,16 @@ def _safe_norm(x):
 
 
 def _oriented_angle(cosine, sine):
-    """Use atan2 near anomaly axes, retaining arccos arithmetic elsewhere.
+    """Angle from its cosine and sine through a guarded atan2.
 
-    Guard both inactive branches: arccos has an infinite derivative at +/-1,
-    and atan2 must never receive (0, 0) from an unused circular-orbit branch.
+    Recovering the angle with arccos amplifies rounding in the cosine near
+    the axes, where its derivative diverges; atan2 uses both components and
+    keeps the derivative well conditioned in float32. An unused
+    circular-orbit branch can pass (0, 0), where the atan2 derivative is
+    NaN; any pair whose squared length underflows is replaced by (1, 0).
     """
-    near_axis = jnp.abs(cosine) >= 1.0 - _ARC_EPS
-    safe_cosine = jnp.where(near_axis, 0.0, cosine)
-    angle = jnp.arccos(jnp.clip(safe_cosine, -1.0, 1.0))
-    angle = jnp.where(sine < 0, 2 * jnp.pi - angle, angle)
-    axis_angle = jnp.arctan2(
-        jnp.where(near_axis, sine, 0.0), jnp.where(near_axis, cosine, 1.0)
-    )
-    return jnp.where(near_axis, axis_angle, angle)
+    is_zero = cosine * cosine + sine * sine == 0.0
+    return jnp.arctan2(jnp.where(is_zero, 0.0, sine), jnp.where(is_zero, 1.0, cosine))
 
 
 def state_vector_to_keplerian(r, v, mu):
@@ -311,11 +308,20 @@ def state_vector_to_keplerian(r, v, mu):
     Robust implementation handling edge cases (circular, equatorial,
     and non-bound orbits) using ``jnp.where`` for JIT compatibility.
 
+    Circular orbits use ``w = 0`` and the anomaly is the argument of
+    latitude from the node, or the true longitude if also equatorial.
+    Equatorial orbits use ``W = 0``; ``w`` (or the circular true longitude)
+    is measured from north toward east and multiplied by the sign of
+    ``h_z`` in the classical (north, east, away) component order.
+
     Unit-agnostic: ``r``, ``v``, and ``mu`` must be expressed in one
     consistent unit system (e.g. meters / m/s / m^3 s^-2, or the AU / day
     units used elsewhere in this library); the function does not enforce
     or convert any particular unit system, and ``a`` is returned in the
-    same length unit as ``r``.
+    same length unit as ``r``. Every degeneracy test is dimensionless (the
+    energy against ``mu / r``, the angular momentum against ``r * v``, the
+    node vector against the angular momentum), so the elements do not
+    depend on the choice of units.
 
     Args:
         r: Star-centered (east, north, away) position vector ``(3,)``,
@@ -334,16 +340,30 @@ def state_vector_to_keplerian(r, v, mu):
     classical_order = jnp.array([1, 0, 2])
     r = jnp.asarray(r)[classical_order]
     v = jnp.asarray(v)[classical_order]
+    # Work in units of |r| and |v|: every element is homogeneous in these two
+    # scales, so constant (stop-gradient) scales leave the derivatives exact
+    # while keeping float32 SI products and their squares in range.
+    length = lax.stop_gradient(_safe_norm(r))
+    length = jnp.where(length > 0, length, 1.0)
+    speed = lax.stop_gradient(_safe_norm(v))
+    speed = jnp.where(speed > 0, speed, 1.0)
+    r = r / length
+    v = v / speed
+    mu = mu / (length * speed**2)
     r_mag = jnp.linalg.norm(r)
     v_mag = jnp.linalg.norm(v)
 
     h = jnp.cross(r, v)
     h_mag = _safe_norm(h)
-    h_mag_safe = jnp.where(h_mag > _TOL_N, h_mag, 1.0)
+    has_h = h_mag > _TOL_N * r_mag * v_mag
+    h_mag_safe = jnp.where(has_h, h_mag, 1.0)
 
-    i = jnp.arccos(jnp.clip(h[2] / h_mag_safe, -1.0 + _ARC_EPS, 1.0 - _ARC_EPS))
+    # A radial state (no angular momentum) keeps the i = pi/2 convention.
+    i = jnp.arctan2(
+        jnp.where(has_h, _safe_norm(h[:2]), 1.0), jnp.where(has_h, h[2], 0.0)
+    )
 
-    k = jnp.array([0.0, 0.0, 1.0])
+    k = jnp.array([0.0, 0.0, 1.0], dtype=h.dtype)
     n = jnp.cross(k, h)
     n_mag = _safe_norm(n)
 
@@ -351,30 +371,32 @@ def state_vector_to_keplerian(r, v, mu):
     e = _safe_norm(e_vec)
 
     E_energy = 0.5 * v_mag**2 - mu / r_mag
-    E_energy_safe = jnp.where(jnp.abs(E_energy) > 1e-10, E_energy, 1.0)
-    a = jnp.where(jnp.abs(E_energy) > 1e-10, -mu / (2 * E_energy_safe), jnp.inf)
+    non_parabolic = jnp.abs(E_energy * r_mag / mu) > 1e-10
+    E_energy_safe = jnp.where(non_parabolic, E_energy, 1.0)
+    a = jnp.where(non_parabolic, -mu / (2 * E_energy_safe), jnp.inf)
 
     TOL_E = _TOL_E
     TOL_I = _TOL_N
     is_circular = e < TOL_E
-    is_inclined = n_mag > TOL_I
+    is_inclined = has_h & (n_mag > TOL_I * h_mag)
 
     n0_safe = jnp.where(is_inclined, n[0], 1.0)
     n1_safe = jnp.where(is_inclined, n[1], 0.0)
     W = jnp.where(is_inclined, jnp.arctan2(n1_safe, n0_safe), 0.0)
 
     e_safe = jnp.where(e > _TOL_E, e, 1.0)
-    n_mag_safe = jnp.where(n_mag > _TOL_N, n_mag, 1.0)
+    n_mag_safe = jnp.where(is_inclined, n_mag, 1.0)
 
     cos_w = jnp.where(
         is_circular | ~is_inclined,
         0.0,
         jnp.dot(n, e_vec) / (n_mag_safe * e_safe),
     )
-    sin_w = jnp.dot(jnp.cross(n, e_vec), h) / (n_mag_safe * e_safe * h_mag_safe)
+    # Unit vectors keep the triple product and its derivative of order one.
+    sin_w = jnp.dot(jnp.cross(n / n_mag_safe, e_vec / e_safe), h / h_mag_safe)
     w_inclined = _oriented_angle(cos_w, sin_w)
 
-    e_xy_mag = jnp.sqrt(e_vec[0] ** 2 + e_vec[1] ** 2)
+    e_xy_mag = _safe_norm(e_vec[:2])
     is_e_xy_safe = e_xy_mag > _TOL_E
     ex_safe = jnp.where(is_e_xy_safe, e_vec[0], 1.0)
     ey_safe = jnp.where(is_e_xy_safe, e_vec[1], 0.0)
@@ -400,11 +422,12 @@ def state_vector_to_keplerian(r, v, mu):
         0.0,
         jnp.dot(n, r) / (n_mag_safe * r_mag),
     )
-    u_inclined = jnp.arccos(jnp.clip(cos_u, -1.0 + _ARC_EPS, 1.0 - _ARC_EPS))
-    u_inclined = jnp.where(r[2] < 0, 2 * jnp.pi - u_inclined, u_inclined)
+    # Unit vectors keep the triple product and its derivative of order one.
+    sin_u = jnp.dot(jnp.cross(n / n_mag_safe, r / r_mag), h / h_mag_safe)
+    u_inclined = _oriented_angle(cos_u, sin_u)
 
-    r_xy_mag = jnp.sqrt(r[0] ** 2 + r[1] ** 2)
-    is_r_xy_safe = r_xy_mag > _TOL_N
+    r_xy_mag = _safe_norm(r[:2])
+    is_r_xy_safe = r_xy_mag > _TOL_N * r_mag
     rx_safe = jnp.where(is_r_xy_safe, r[0], 1.0)
     ry_safe = jnp.where(is_r_xy_safe, r[1], 0.0)
     nu_equatorial = jnp.arctan2(ry_safe, rx_safe)
@@ -425,4 +448,4 @@ def state_vector_to_keplerian(r, v, mu):
     M = M % (2 * jnp.pi)
     M = jnp.where(e < 1.0, M, jnp.nan)
 
-    return a, e, i, W, w, M
+    return a * length, e, i, W, w, M
