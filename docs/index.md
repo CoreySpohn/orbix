@@ -41,9 +41,10 @@ together:
   isotropic orientation and uniform phase.
 - A block combines a chart, a law and the rows of a `System` it frees. `OrbitBlock` works
   with every chart except the Thiele-Innes one, and `ThieleInnesBlock` frees one row
-  through the Thiele-Innes chart and writes the star mass its coordinates imply. Both
-  follow the `hwoutils.blocks.AbstractBlock` contract, which is how photomancy fits use
-  them.
+  through the Thiele-Innes chart and writes the star mass its coordinates imply.
+  `SkyPositionBlock` frees instead the star-relative sky offsets of some planets at one
+  time and holds the shape of each orbit, for a fit of a single image. All three follow
+  the `hwoutils.blocks.AbstractBlock` contract, which is how photomancy fits use them.
 
 ```python
 import jax
