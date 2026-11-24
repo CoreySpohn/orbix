@@ -14,10 +14,11 @@ from pathlib import Path
 
 import equinox as eqx
 import interpax
+import jax
 import jax.numpy as jnp
 import numpy as np
 from hwoutils.constants import MJD_ZERO_JD
-from hwoutils.conversions import days_to_years
+from hwoutils.conversions import days_to_years, years_to_days
 from hwoutils.epoch import Epoch
 from jaxtyping import Array, ArrayLike
 
@@ -25,20 +26,32 @@ from orbix.observatory.keepout import body_angle_deg
 from orbix.observatory.solar_system import earth_position_ecliptic
 
 
-def epoch_mjd(epoch: Epoch, time_d: ArrayLike) -> Array:
-    """Modified Julian Date of ``time_d`` days from ``epoch``, on the epoch's scale.
+def epoch_mjd(epoch: Epoch, time_d: ArrayLike) -> np.ndarray:
+    """Modified Julian Date of ``time_d`` days from ``epoch``, for host use only.
+
+    An absolute date does not belong under a trace: in float32 it resolves only
+    a quarter of a day. The traced methods take ``(epoch, time_d)`` instead, and
+    this helper serves plotting and reporting on concrete values.
 
     Args:
         epoch: Static day zero of time_d.
-        time_d: Days from epoch, any shape.
+        time_d: Days from epoch, any shape, concrete.
 
     Returns:
-        Modified Julian Date in days on the epoch's time scale, with the shape of
-        time_d.
+        Modified Julian Date in days on the epoch's time scale, NumPy float64,
+        with the shape of time_d.
+
+    Raises:
+        TypeError: If ``time_d`` is a traced value.
     """
-    return epoch.days_between(Epoch(MJD_ZERO_JD, scale=epoch.scale)) + jnp.asarray(
-        time_d
-    )
+    if isinstance(time_d, jax.core.Tracer):
+        raise TypeError(
+            "epoch_mjd is host-only: it would round an absolute date in the "
+            "active dtype under a trace; pass (epoch, time_d) to the traced "
+            "method instead"
+        )
+    offset = epoch.days_between(Epoch(MJD_ZERO_JD, scale=epoch.scale))
+    return offset + np.asarray(time_d, dtype=np.float64)
 
 
 def _load_default_halo_data() -> dict:
@@ -62,24 +75,26 @@ class ObservatoryL2Halo(eqx.Module):
     The orbit is parameterized as a periodic interpolation of a ~6-month halo
     around the Sun-Earth L2 point.
 
-    Args:
-        equinox_mjd: Reference equinox epoch in MJD (default: 60575.25).
-        halo_start_day: Offset into halo orbit at mission start (days).
+    The reference equinox and the start offset only feed a host-side reduction
+    of the halo phase at the query epoch, so they are static; the interpolators
+    are the only array leaves.
 
     Example:
         >>> obs = ObservatoryL2Halo.from_default()
-        >>> pos = obs.position_ecliptic(60000.0)  # AU, shape (3,)
+        >>> epoch = Epoch(2400000.5, 60000.0)
+        >>> pos = obs.position_ecliptic(epoch, 10.0)  # AU, shape (3,)
     """
 
     # Pre-built interpolators for halo position components
     _interp_x: interpax.Interpolator1D
     _interp_y: interpax.Interpolator1D
     _interp_z: interpax.Interpolator1D
-    _period_yr: float  # halo period in years
-    _L2_dist_AU: float  # L2 distance from Sun in AU
-    _mu: float  # mass ratio
-    _equinox_mjd: float  # reference equinox (MJD)
-    _halo_start_yr: float  # offset into halo at mission start (years)
+    _period_yr: float = eqx.field(static=True)  # halo period in years
+    _L2_dist_AU: float = eqx.field(static=True)  # L2 distance from Sun in AU
+    _mu: float = eqx.field(static=True)  # mass ratio
+    # reference equinox, a date on whatever scale the query epoch carries
+    _equinox: Epoch = eqx.field(static=True)
+    _halo_start_yr: float = eqx.field(static=True)  # halo offset at day zero (yr)
 
     @classmethod
     def from_default(
@@ -106,7 +121,7 @@ class ObservatoryL2Halo(eqx.Module):
             _period_yr=float(data["period_yr"]),
             _L2_dist_AU=float(data["L2_dist_AU"]),
             _mu=float(data["mu"]),
-            _equinox_mjd=equinox_mjd,
+            _equinox=Epoch(MJD_ZERO_JD, equinox_mjd),
             _halo_start_yr=days_to_years(halo_start_day),
         )
 
@@ -137,7 +152,7 @@ class ObservatoryL2Halo(eqx.Module):
             _period_yr=float(data["period_yr"]),
             _L2_dist_AU=float(data["L2_dist_AU"]),
             _mu=float(data["mu"]),
-            _equinox_mjd=equinox_mjd,
+            _equinox=Epoch(MJD_ZERO_JD, equinox_mjd),
             _halo_start_yr=days_to_years(halo_start_day),
         )
 
@@ -151,21 +166,35 @@ class ObservatoryL2Halo(eqx.Module):
         """Sun-L2 distance in AU."""
         return self._L2_dist_AU
 
-    def _halo_time(self, mjd: float) -> float:
-        """Convert MJD to periodic halo time in years."""
-        dt_yr = days_to_years(mjd - self._equinox_mjd) + self._halo_start_yr
-        return dt_yr % self._period_yr
+    def _phase0_d(self, epoch: Epoch) -> float:
+        """Halo phase at ``time_d = 0`` in days, reduced on the host in float64.
 
-    def position_ecliptic(self, mjd: float) -> jnp.ndarray:
-        """Heliocentric ecliptic position of the telescope at time ``mjd``.
+        ``(days from the equinox to the epoch + the start offset) mod period``:
+        a number smaller than the period, however far the epoch is from the
+        equinox.
+        """
+        equinox = Epoch(self._equinox.jd1, self._equinox.jd2, scale=epoch.scale)
+        offset_d = epoch.days_between(equinox) + years_to_days(self._halo_start_yr)
+        return offset_d % years_to_days(self._period_yr)
+
+    def _halo_time(self, epoch: Epoch, time_d: ArrayLike) -> Array:
+        """Periodic halo time in years at ``time_d`` days from ``epoch``."""
+        period_d = years_to_days(self._period_yr)
+        return days_to_years((self._phase0_d(epoch) + time_d) % period_d)
+
+    def position_ecliptic(self, epoch: Epoch, time_d: ArrayLike) -> jnp.ndarray:
+        """Heliocentric ecliptic position of the telescope at ``time_d`` from ``epoch``.
 
         Args:
-            mjd: Modified Julian Date (scalar).
+            epoch: Static day zero of ``time_d`` (close over it or mark it
+                static under ``jax.jit``); the time scale is not converted.
+            time_d: Days from ``epoch``, scalar; vmap over times.
 
         Returns:
             Position vector in heliocentric ecliptic frame (AU), shape ``(3,)``.
         """
-        t_halo = self._halo_time(mjd)
+        time_d = jnp.asarray(time_d)
+        t_halo = self._halo_time(epoch, time_d)
 
         # Evaluate pre-built interpolators
         r_halo_x = self._interp_x(t_halo)
@@ -173,7 +202,7 @@ class ObservatoryL2Halo(eqx.Module):
         r_halo_z = self._interp_z(t_halo)
 
         # Get Earth position
-        r_earth = earth_position_ecliptic(mjd)
+        r_earth = earth_position_ecliptic(epoch, time_d)
         r_earth_norm = jnp.sqrt(r_earth[0] ** 2 + r_earth[1] ** 2)
 
         # Add radial offset (Earth distance) to halo x component
@@ -184,11 +213,11 @@ class ObservatoryL2Halo(eqx.Module):
         # convention [[cos, sin], [-sin, cos]], giving the effective
         # rotation: x' = cos(lon)*x - sin(lon)*y
         #           y' = sin(lon)*x + cos(lon)*y
-        lon = jnp.sign(r_earth[1]) * jnp.arccos(
-            r_earth[0] / jnp.maximum(r_earth_norm, 1e-30)
-        )
-        cos_lon = jnp.cos(lon)
-        sin_lon = jnp.sin(lon)
+        # cos(lon) and sin(lon) come straight from the Earth vector: an arccos
+        # of the ratio loses half the digits near lon = 0 or pi (3.5e-4 rad in
+        # float32).
+        cos_lon = r_earth[0] / jnp.maximum(r_earth_norm, 1e-30)
+        sin_lon = r_earth[1] / jnp.maximum(r_earth_norm, 1e-30)
 
         # Apply rotation about z-axis (matches EXOSIMS sign convention)
         x = cos_lon * r_halo_x - sin_lon * r_halo_y
@@ -214,5 +243,5 @@ class ObservatoryL2Halo(eqx.Module):
         Returns:
             Solar elongation in degrees, [0, 180].
         """
-        obs_pos = self.position_ecliptic(epoch_mjd(epoch, time_d))
+        obs_pos = self.position_ecliptic(epoch, time_d)
         return body_angle_deg(obs_pos, jnp.zeros(3), ra_deg, dec_deg)

@@ -19,8 +19,10 @@ answers two questions about one target: is it outside the keepout zones at a
 given time, and for what fraction of an interval is it. The same module also
 gives the two angles that the local zodiacal light depends on.
 
-Times are days from a static `Epoch`. The target is given by its right
-ascension and declination in degrees, J2000.
+Times are days from a static `Epoch`, not absolute dates: a float32 number
+cannot hold a date to better than about a quarter of a day, while a few hundred
+days from a fixed epoch it keeps a few seconds. The target is
+given by its right ascension and declination in degrees, J2000.
 
 ```{code-cell} ipython3
 import jax
@@ -41,6 +43,13 @@ observatory = Observatory(
 )
 time_d = jnp.array([0.0, 91.0, 182.0, 273.0])
 print(observatory.is_observable_at(ra_deg, dec_deg, epoch, time_d))
+```
+
+The telescope position on its halo orbit takes the same two arguments, an epoch
+and days from it, and returns the heliocentric ecliptic position in AU.
+
+```{code-cell} ipython3
+print(observatory.orbit.position_ecliptic(epoch, 91.0))
 ```
 
 The keepout limits are solar elongations: the target must lie at least

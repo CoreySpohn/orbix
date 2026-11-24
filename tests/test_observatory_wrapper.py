@@ -66,30 +66,31 @@ def test_observatory_delegates_orbit_method():
     orbit = ObservatoryL2Halo.from_default()
     obs = Observatory(orbit=orbit)
 
-    pos = obs.orbit.position_ecliptic(jnp.asarray(60000.0))
+    pos = obs.orbit.position_ecliptic(_EPOCH, 10.0)
     assert pos.shape == (3,)
 
 
-def test_is_observable_at_matches_mjd(keepout_observatory):
+def test_is_observable_at_matches_scalar_calls(keepout_observatory):
     """Fails if epoch conversion, broadcasting, or configured keepouts drift.
 
-    Truth: the scalar MJD API; boolean equality is exact (no tolerance).
+    Truth: scalar per-element calls of the epoch-relative API; boolean equality
+    is exact (no tolerance).
     The split epoch and nonzero/negative day offsets detect lost epoch parts.
     """
     obs = keepout_observatory
     ra = jnp.array([[0.0], [100.0]])
     dec = jnp.array([0.0, 17.0, 63.0])
     time = jnp.array([-30.25, 95.125, 400.75])
-    mjd = jnp.asarray(_EPOCH.jd(time) - 2400000.5)
     expected = jnp.stack(
         [
             jnp.stack(
                 [
                     is_observable(
-                        obs.orbit.position_ecliptic(mjd[k]),
+                        obs.orbit.position_ecliptic(_EPOCH, time[k]),
                         r,
                         dec[k],
-                        mjd[k],
+                        _EPOCH,
+                        time[k],
                         ko_sun_min_deg=obs.keepout_min_deg,
                         ko_sun_max_deg=obs.keepout_max_deg,
                     )
@@ -117,7 +118,7 @@ def test_is_observable_at_matches_mjd(keepout_observatory):
 def test_annual_observability_against_dense_grid(keepout_observatory):
     """Fails if duration uses sample counts or refined boundaries are misplaced.
 
-    Truth: 10^4 direct MJD decisions over a year for an ecliptic target.
+    Truth: 10^4 direct per-time decisions over a year for an ecliptic target.
     With 16 coarse samples and 8 bisections, delta=365.25/(15*256) d.
     Each midpoint errs by delta/2. Dense first/last samples err by at most
     h=365.25/9999 d < delta/2, so delta bounds their disagreement.
@@ -127,18 +128,18 @@ def test_annual_observability_against_dense_grid(keepout_observatory):
     year = 365.25
     result = _interval(obs, 180.0, 0.0, _EPOCH, 0.0, year, n_samples=16)
     times = jnp.linspace(0.0, year, 10000)
-    mjds = jnp.asarray(_EPOCH.jd(times) - 2400000.5)
     direct = jax.jit(
         jax.vmap(
-            lambda mjd: is_observable(
-                obs.orbit.position_ecliptic(mjd),
+            lambda t: is_observable(
+                obs.orbit.position_ecliptic(_EPOCH, t),
                 180.0,
                 0.0,
-                mjd,
+                _EPOCH,
+                t,
                 ko_sun_min_deg=45.0,
             )
         )
-    )(mjds)
+    )(times)
     dense = np.asarray(direct)
     times = np.asarray(times)
     transitions = np.count_nonzero(dense[1:] != dense[:-1])

@@ -14,7 +14,7 @@ from hwoutils.epoch import Epoch
 from jaxtyping import Array, ArrayLike
 
 from orbix.observatory.keepout import is_observable
-from orbix.observatory.orbit import ObservatoryL2Halo, epoch_mjd
+from orbix.observatory.orbit import ObservatoryL2Halo
 
 _BISECTION_STEPS = 8
 
@@ -76,16 +76,17 @@ class Observatory(eqx.Module):
     keepout_min_deg: float = 0.0
     keepout_max_deg: float = 180.0
 
-    def _is_observable_mjd(self, ra_deg, dec_deg, mjd) -> Array:
+    def _is_observable_rel(self, ra_deg, dec_deg, epoch, time_d) -> Array:
         """Broadcast inputs and map the scalar keepout geometry over them."""
-        ra, dec, time = jnp.broadcast_arrays(ra_deg, dec_deg, mjd)
+        ra, dec, time = jnp.broadcast_arrays(ra_deg, dec_deg, time_d)
 
-        def evaluate(r, d, m):
+        def evaluate(r, d, t):
             return is_observable(
-                self.orbit.position_ecliptic(m),
+                self.orbit.position_ecliptic(epoch, t),
                 r,
                 d,
-                m,
+                epoch,
+                t,
                 ko_sun_min_deg=self.keepout_min_deg,
                 ko_sun_max_deg=self.keepout_max_deg,
             )
@@ -101,8 +102,8 @@ class Observatory(eqx.Module):
 
         RA, Dec (degrees, J2000), and ``time_d`` broadcast to one common output shape.
         Uses this observatory's orbit and solar keepout limits; Earth limits
-        retain the keepout function's permissive defaults. Conversion to MJD
-        preserves the epoch's time scale, with no time-scale conversion.
+        retain the keepout function's permissive defaults. No time-scale
+        conversion is applied.
         Close over ``epoch`` or mark it static when using ``jax.jit``.
 
         Args:
@@ -115,7 +116,7 @@ class Observatory(eqx.Module):
             Boolean array of the common broadcast shape, True where the target is
             outside the keepout zones.
         """
-        return self._is_observable_mjd(ra_deg, dec_deg, epoch_mjd(epoch, time_d))
+        return self._is_observable_rel(ra_deg, dec_deg, epoch, time_d)
 
     def observability(
         self,
@@ -167,7 +168,7 @@ class Observatory(eqx.Module):
         time = jnp.linspace(start_d, stop_d, n_samples)
 
         def evaluate(t):
-            return self._is_observable_mjd(ra_deg, dec_deg, epoch_mjd(epoch, t))
+            return self._is_observable_rel(ra_deg, dec_deg, epoch, t)
 
         visible = evaluate(time)
         left, right = time[:-1], time[1:]

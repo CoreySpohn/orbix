@@ -9,7 +9,8 @@ Moon is dropped as negligible against the L2 geometry; see ``is_observable``).
 from __future__ import annotations
 
 import jax.numpy as jnp
-from jaxtyping import Array
+from hwoutils.epoch import Epoch
+from jaxtyping import Array, ArrayLike
 
 from orbix.observatory.solar_system import (
     earth_position_ecliptic,
@@ -72,7 +73,8 @@ def is_observable(
     obs_pos_eclip: jnp.ndarray,
     ra_deg: float,
     dec_deg: float,
-    mjd: float,
+    epoch: Epoch,
+    time_d: ArrayLike,
     ko_sun_min_deg: float = 45.0,
     ko_sun_max_deg: float = 180.0,
     ko_earth_min_deg: float = 0.0,
@@ -84,7 +86,8 @@ def is_observable(
         obs_pos_eclip: Observatory heliocentric ecliptic position (AU), shape ``(3,)``.
         ra_deg: Target right ascension [deg], J2000.
         dec_deg: Target declination [deg], J2000.
-        mjd: Modified Julian Date, used for Earth's position.
+        epoch: Static day zero of ``time_d``.
+        time_d: Days from ``epoch``, scalar, used for Earth's position.
         ko_sun_min_deg: Minimum Sun keepout angle (degrees).
         ko_sun_max_deg: Maximum Sun keepout angle (degrees).
         ko_earth_min_deg: Minimum Earth keepout angle (degrees).
@@ -99,7 +102,7 @@ def is_observable(
     sun_ok = (sun_angle_deg >= ko_sun_min_deg) & (sun_angle_deg <= ko_sun_max_deg)
 
     # Earth
-    earth_pos = earth_position_ecliptic(mjd)
+    earth_pos = earth_position_ecliptic(epoch, time_d)
     earth_angle_deg = body_angle_deg(obs_pos_eclip, earth_pos, ra_deg, dec_deg)
     earth_ok = (earth_angle_deg >= ko_earth_min_deg) & (
         earth_angle_deg <= ko_earth_max_deg

@@ -66,24 +66,24 @@ class TestSolarSystemEphemerides:
 
     def test_earth_distance_j2000(self):
         """Earth should be ~1 AU from Sun at J2000."""
-        r = earth_position_ecliptic(51544.5)
+        r = earth_position_ecliptic(_J2000, 0.0)
         dist = jnp.linalg.norm(r)
         assert jnp.isclose(dist, 1.0, atol=0.02)
 
     def test_earth_in_ecliptic_plane(self):
         """Earth z-component in ecliptic should be ~0."""
-        r = earth_position_ecliptic(51544.5)
+        r = earth_position_ecliptic(_J2000, 0.0)
         assert jnp.abs(r[2]) < 1e-3
 
     def test_mars_distance(self):
         """Mars should be 1.3-1.7 AU from Sun."""
-        r = planet_position_ecliptic("Mars", 51544.5)
+        r = planet_position_ecliptic("Mars", _J2000, 0.0)
         dist = jnp.linalg.norm(r)
         assert 1.3 < float(dist) < 1.7
 
     def test_jupiter_distance(self):
         """Jupiter should be ~5.2 AU from Sun."""
-        r = planet_position_ecliptic("Jupiter", 51544.5)
+        r = planet_position_ecliptic("Jupiter", _J2000, 0.0)
         dist = jnp.linalg.norm(r)
         assert 4.9 < float(dist) < 5.5
 
@@ -125,20 +125,20 @@ class TestSolarSystemEphemerides:
 
     def test_jit_planet_position(self):
         """Planet position should be JIT-compilable."""
-        f = jax.jit(lambda t: planet_position_ecliptic("Earth", t))
-        r = f(51544.5)
+        f = jax.jit(lambda t: planet_position_ecliptic("Earth", _J2000, t))
+        r = f(0.0)
         assert r.shape == (3,)
         assert jnp.isfinite(r).all()
 
-    def test_planet_position_ecliptic_scalar_mjd_ok(self):
-        """Scalar mjd should work as before."""
-        r = planet_position_ecliptic("Earth", 51544.5)
+    def test_planet_position_ecliptic_scalar_time_ok(self):
+        """A scalar time_d works."""
+        r = planet_position_ecliptic("Earth", _J2000, 0.0)
         assert r.shape == (3,)
 
-    def test_planet_position_ecliptic_array_mjd_raises(self):
-        """Array mjd should raise instead of silently returning wrong results."""
+    def test_planet_position_ecliptic_array_time_raises(self):
+        """Array time_d should raise instead of silently returning wrong results."""
         with pytest.raises(ValueError):
-            planet_position_ecliptic("Earth", jnp.array([51544.5, 51545.5]))
+            planet_position_ecliptic("Earth", _J2000, jnp.array([0.0, 1.0]))
 
     def test_equatorial_to_ecliptic_deg(self):
         """The ecliptic pole is at RA 270 deg, Dec 90 deg minus the obliquity."""
@@ -167,13 +167,13 @@ class TestObservatoryL2Halo:
 
     def test_position_distance(self, obs):
         """Observatory should be ~1.01 AU from Sun (near L2)."""
-        pos = obs.position_ecliptic(51544.5)
+        pos = obs.position_ecliptic(_J2000, 0.0)
         dist = jnp.linalg.norm(pos)
         assert 0.98 < float(dist) < 1.05
 
     def test_position_3d(self, obs):
         """Position should be a 3-vector."""
-        pos = obs.position_ecliptic(51544.5)
+        pos = obs.position_ecliptic(_J2000, 0.0)
         assert pos.shape == (3,)
 
     def test_period(self, obs):
@@ -188,13 +188,13 @@ class TestObservatoryL2Halo:
     def test_jit_position(self, obs):
         """Position should work with eqx.filter_jit."""
         f = eqx.filter_jit(obs.position_ecliptic)
-        pos = f(51544.5)
+        pos = f(_J2000, 0.0)
         assert jnp.isfinite(pos).all()
 
     def test_vmap_over_time(self, obs):
         """Vmap over multiple times should work."""
-        mjds = jnp.linspace(51544.5, 51544.5 + 365, 20)
-        positions = jax.vmap(obs.position_ecliptic)(mjds)
+        times = jnp.linspace(0.0, 365.0, 20)
+        positions = jax.vmap(lambda t: obs.position_ecliptic(_J2000, t))(times)
         assert positions.shape == (20, 3)
         assert jnp.isfinite(positions).all()
 
@@ -288,9 +288,7 @@ class TestObservatoryGeometryInvariants:
         The halo orbit moves the telescope off the Sun-Earth line by up to
         about 0.01 AU, shifting the Sun's direction by at most about 0.35 deg.
         """
-        position = jax.vmap(
-            lambda t: obs.position_ecliptic(60575.25 + t)  # equinox MJD plus offset
-        )(time_d)
+        position = jax.vmap(lambda t: obs.position_ecliptic(_EQUINOX, t))(time_d)
         halo_lon = jnp.degrees(jnp.arctan2(-position[:, 1], -position[:, 0]))
         geo_lon = sun_ecliptic_longitude_deg(_EQUINOX, time_d)
         diff = (halo_lon - geo_lon + 180.0) % 360.0 - 180.0
@@ -309,22 +307,20 @@ class TestKeepout:
         """A target lying along the Sun direction from the observatory is blocked."""
         # Observatory at ~(1.01, 0, 0) AU, Sun at origin.
         obs_pos = jnp.array([1.01, 0.0, 0.0])
-        mjd = 60000.0
         # Target at RA=180 deg, Dec=0: looking back toward the Sun.
-        blocked = is_observable(obs_pos, 180.0, 0.0, mjd)
+        blocked = is_observable(obs_pos, 180.0, 0.0, _J2000, 0.0)
         assert not bool(blocked)
 
     def test_anti_solar_pointing_is_observable(self):
         """A target opposite the Sun direction from the observatory is observable."""
         obs_pos = jnp.array([1.01, 0.0, 0.0])
-        mjd = 60000.0
         # Target at RA=0, Dec=0: anti-solar direction.
-        ok = is_observable(obs_pos, 0.0, 0.0, mjd)
+        ok = is_observable(obs_pos, 0.0, 0.0, _J2000, 0.0)
         assert bool(ok)
 
     def test_keepout_jit(self):
         """Keepout should be JIT-compilable."""
         obs_pos = jnp.array([1.01, 0.0, 0.0])
-        f = jax.jit(lambda: is_observable(obs_pos, 57.0, 29.0, 51544.5))
+        f = jax.jit(lambda: is_observable(obs_pos, 57.0, 29.0, _J2000, 0.0))
         result = f()
         assert isinstance(result, jax.Array)

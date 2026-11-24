@@ -42,8 +42,9 @@ def ecliptic_pointing(
     Returns:
         ``(ecliptic_latitude_deg, helioecliptic_longitude_deg)``. Close over
         ``epoch`` or mark it static under ``jax.jit``. Resolution is about
-        1e-3 deg in float32 (the Sun's mean longitude is about 1e4 deg from
-        J2000) and below 1e-6 deg in float64. The Sun's longitude is the
+        1e-4 deg in float32 for ``|time_d|`` up to 1000 d (the ephemeris is
+        re-expanded about ``epoch`` in float64 on the host) and below 1e-6 deg
+        in float64. The Sun's longitude is the
         geometric direction from the Vallado ephemeris (the apparent longitude is
         about 0.006 deg smaller, from aberration).
         The result is not defined at the ecliptic poles, where the longitude is

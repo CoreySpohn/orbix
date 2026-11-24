@@ -13,6 +13,7 @@ interpolation (interpax vs scipy) and Earth position (Vallado vs JPL).
 # -- orbix imports --
 import numpy as np
 import pytest
+from hwoutils.epoch import Epoch
 
 from orbix.observatory import ObservatoryL2Halo
 from orbix.observatory.solar_system import OBLIQUITY_J2000_DEG
@@ -34,6 +35,8 @@ try:
     HAS_EXOSIMS = True
 except ImportError:
     HAS_EXOSIMS = False
+
+_MJD_EPOCH = Epoch(2400000.5, 0.0, scale="tai")  # time_d is then the MJD itself
 
 skip_no_exosims = pytest.mark.skipif(not HAS_EXOSIMS, reason="EXOSIMS not installed")
 
@@ -76,7 +79,7 @@ class TestPlanetPositions:
     @pytest.mark.parametrize("mjd", [51544.5, 55000.0, 58000.0, 60000.0])
     def test_planet_ecliptic(self, exo_obs, body, atol, mjd):
         """Planet position should be within Vallado accuracy vs JPL."""
-        r_orbix = np.array(orbix_planet(body, float(mjd)))
+        r_orbix = np.array(orbix_planet(body, _MJD_EPOCH, float(mjd)))
 
         t = Time(np.array([mjd]), format="mjd", scale="tai")
         r_exo = exo_obs.solarSystem_body_position(t, body, eclip=True).to_value(u.AU)[0]
@@ -114,7 +117,7 @@ class TestL2HaloOrbit:
         Differences arise from interpax vs scipy interpolation and
         Vallado vs JPL Earth position.
         """
-        r_orbix = np.array(orbix_obs.position_ecliptic(float(mjd)))
+        r_orbix = np.array(orbix_obs.position_ecliptic(_MJD_EPOCH, float(mjd)))
 
         t = Time(np.array([mjd]), format="mjd", scale="tai")
         r_exo = exo_obs.orbit(t, eclip=True).to_value(u.AU)[0]
@@ -129,7 +132,7 @@ class TestL2HaloOrbit:
     def test_orbit_distance_from_sun(self, orbix_obs):
         """Observatory should be ~1.01 AU from Sun."""
         for mjd in [60575.25, 60600.0, 60700.0, 60800.0]:
-            r = np.array(orbix_obs.position_ecliptic(float(mjd)))
+            r = np.array(orbix_obs.position_ecliptic(_MJD_EPOCH, float(mjd)))
             dist = np.linalg.norm(r)
             assert 0.99 < dist < 1.03, f"Distance = {dist} AU at MJD {mjd}"
 

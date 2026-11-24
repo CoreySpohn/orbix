@@ -2,7 +2,10 @@
 
 Positions use Vallado (2013) static ephemerides. All positions are
 heliocentric ecliptic (J2000 mean ecliptic and equinox), in AU.  Body
-positions take MJD; the Sun's longitude takes an ``Epoch`` and ``time_d``.
+positions and the Sun's longitude take a static ``Epoch`` and ``time_d``, days
+from that epoch.  The element polynomials are re-expanded about the epoch on the
+host in float64, so traced code only ever sees times of the order of the
+observation span and float32 keeps its resolution.
 This module holds the one equatorial-to-ecliptic rotation, a fixed J2000
 rotation, shared by the keepout, observatory and pointing geometry.
 
@@ -16,22 +19,19 @@ Reference:
 
 from __future__ import annotations
 
+from functools import lru_cache
+from math import comb
+
 import jax.numpy as jnp
+import numpy as np
 from hwoutils.constants import J2000_JD
-from hwoutils.conversions import jd_to_mjd, years_to_days
+from hwoutils.conversions import years_to_days
 from hwoutils.epoch import Epoch
 from jaxtyping import Array, ArrayLike
 
 from orbix.kepler import kepler
 
-# ---------------------------------------------------------------------------
-# Time helpers
-# ---------------------------------------------------------------------------
-
-
-def _mjd_to_julian_centuries(mjd: float) -> float:
-    """Convert MJD to Julian centuries since J2000."""
-    return (mjd - jd_to_mjd(J2000_JD)) / years_to_days(100.0)
+_DAYS_PER_CENTURY = years_to_days(100.0)
 
 
 # ---------------------------------------------------------------------------
@@ -224,18 +224,47 @@ _EPHEM: dict[str, jnp.ndarray] = {
 }
 
 
-def _eval_elements(coeffs: jnp.ndarray, TDB: float) -> jnp.ndarray:
+@lru_cache(maxsize=64)
+def _epoch_coefficients(body: str, epoch: Epoch) -> np.ndarray:
+    """Element polynomials of ``body`` re-expanded about ``epoch``, on the host.
+
+    The polynomials in Julian centuries since J2000 are shifted to centuries
+    since ``epoch`` in float64 (a cubic shift is exact algebra), and the angle
+    constants (O, w, lM) are reduced modulo 360 deg, so the traced evaluation
+    sees a small argument and small constants. Host-side NumPy float64 on
+    purpose: this is the one place a large absolute date is subtracted, and it
+    must not round in the active dtype.
+
+    Args:
+        body: Planet name.
+        epoch: Static day zero of the traced times.
+
+    Returns:
+        Read-only float64 array of shape ``(6, NCOEFF)``, rows a, e, I, O, w, lM.
+    """
+    t0 = epoch.days_between(Epoch(J2000_JD, scale=epoch.scale)) / _DAYS_PER_CENTURY
+    raw = np.asarray(_EPHEM[body], dtype=np.float64)
+    shifted = np.zeros_like(raw)
+    for k in range(_NCOEFF):
+        for j in range(k, _NCOEFF):
+            shifted[:, k] += raw[:, j] * comb(j, k) * t0 ** (j - k)
+    shifted[3:, 0] = np.mod(shifted[3:, 0], 360.0)
+    shifted.setflags(write=False)
+    return shifted
+
+
+def _eval_elements(coeffs: jnp.ndarray, tau: float) -> jnp.ndarray:
     """Evaluate all 6 orbital element polynomials at once.
 
     Args:
         coeffs: Shape ``(6, NCOEFF)`` -- rows are [a, e, I, O, w, lM].
-        TDB: Julian centuries since J2000.
+        tau: Julian centuries since the epoch the coefficients are expanded about.
 
     Returns:
         Shape ``(6,)`` -- [a, e, I_deg, O_deg, w_deg, lM_deg].
     """
-    TDB_powers = jnp.array([1.0, TDB, TDB**2, TDB**3])
-    return coeffs @ TDB_powers  # (6, 4) @ (4,) -> (6,)
+    powers = jnp.stack([jnp.ones_like(tau), tau, tau**2, tau**3])
+    return coeffs @ powers  # (6, 4) @ (4,) -> (6,)
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +272,7 @@ def _eval_elements(coeffs: jnp.ndarray, TDB: float) -> jnp.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def planet_position_ecliptic(body: str, mjd: float) -> jnp.ndarray:
+def planet_position_ecliptic(body: str, epoch: Epoch, time_d: ArrayLike) -> jnp.ndarray:
     """Heliocentric ecliptic position of a solar system body.
 
     Uses Vallado (2013) Algorithms 2 and 10 -- Keplerian elements propagated
@@ -252,25 +281,28 @@ def planet_position_ecliptic(body: str, mjd: float) -> jnp.ndarray:
 
     Args:
         body: Planet name (e.g. ``"Earth"``, ``"Jupiter"``).
-        mjd: Modified Julian Date (scalar).
+        epoch: Static day zero of ``time_d`` (close over it or mark it static
+            under ``jax.jit``); the time scale is not converted.
+        time_d: Days from ``epoch``, scalar; vmap over times.
 
     Returns:
         Position vector in heliocentric ecliptic frame (AU), shape ``(3,)``.
     """
-    mjd = jnp.asarray(mjd)
-    if mjd.ndim != 0:
+    time_d = jnp.asarray(time_d)
+    if time_d.ndim != 0:
         raise ValueError(
-            "planet_position_ecliptic takes a scalar mjd; vmap over times instead"
+            "planet_position_ecliptic takes a scalar time_d; vmap over times instead"
         )
-    return _planet_position_ecliptic_tdb(body, _mjd_to_julian_centuries(mjd))
+    return _planet_position_ecliptic_rel(body, epoch, time_d)
 
 
-def _planet_position_ecliptic_tdb(body: str, TDB: ArrayLike) -> Array:
-    """Heliocentric ecliptic position at ``TDB`` Julian centuries from J2000."""
-    coeffs = _EPHEM[body]  # (6, 4) JAX array
+def _planet_position_ecliptic_rel(body: str, epoch: Epoch, time_d: ArrayLike) -> Array:
+    """Heliocentric ecliptic position at ``time_d`` days from ``epoch``."""
+    coeffs = jnp.asarray(_epoch_coefficients(body, epoch))  # (6, 4), active dtype
+    tau = jnp.asarray(time_d, dtype=coeffs.dtype) / _DAYS_PER_CENTURY
 
     # Evaluate all 6 polynomials at once: [a, e, I_deg, O_deg, w_deg, lM_deg]
-    elems = _eval_elements(coeffs, TDB)
+    elems = _eval_elements(coeffs, tau)
     a = elems[0]
     e = elems[1]
     inc = jnp.radians(elems[2])
@@ -307,42 +339,47 @@ def _planet_position_ecliptic_tdb(body: str, TDB: ArrayLike) -> Array:
     return jnp.array([x, y, z])
 
 
-def planet_position_equatorial(body: str, mjd: float) -> jnp.ndarray:
+def planet_position_equatorial(
+    body: str, epoch: Epoch, time_d: ArrayLike
+) -> jnp.ndarray:
     """Heliocentric equatorial position of a solar system body.
 
     Args:
         body: Planet name (e.g. ``"Earth"``).
-        mjd: Modified Julian Date (scalar).
+        epoch: Static day zero of ``time_d``.
+        time_d: Days from ``epoch``, scalar.
 
     Returns:
         Position vector in heliocentric equatorial frame (AU), shape ``(3,)``.
     """
-    r_eclip = planet_position_ecliptic(body, mjd)
+    r_eclip = planet_position_ecliptic(body, epoch, time_d)
     return eclip2equat(r_eclip)
 
 
-def earth_position_ecliptic(mjd: float) -> jnp.ndarray:
+def earth_position_ecliptic(epoch: Epoch, time_d: ArrayLike) -> jnp.ndarray:
     """Heliocentric ecliptic position of Earth (AU).
 
     Args:
-        mjd: Modified Julian Date in days, scalar.
+        epoch: Static day zero of ``time_d``.
+        time_d: Days from ``epoch``, scalar.
 
     Returns:
         Position vector in AU of shape (3,), heliocentric ecliptic frame.
     """
-    return planet_position_ecliptic("Earth", mjd)
+    return planet_position_ecliptic("Earth", epoch, time_d)
 
 
-def earth_position_equatorial(mjd: float) -> jnp.ndarray:
+def earth_position_equatorial(epoch: Epoch, time_d: ArrayLike) -> jnp.ndarray:
     """Heliocentric equatorial position of Earth (AU).
 
     Args:
-        mjd: Modified Julian Date in days, scalar.
+        epoch: Static day zero of ``time_d``.
+        time_d: Days from ``epoch``, scalar.
 
     Returns:
         Position vector in AU of shape (3,), heliocentric equatorial frame.
     """
-    return planet_position_equatorial("Earth", mjd)
+    return planet_position_equatorial("Earth", epoch, time_d)
 
 
 # ---------------------------------------------------------------------------
@@ -368,10 +405,9 @@ def sun_ecliptic_longitude_deg(epoch: Epoch, time_d: ArrayLike) -> Array:
     Returns:
         Longitude in degrees in [0, 360), the shape of ``time_d``.
     """
-    days = jnp.asarray(time_d) + epoch.days_between(Epoch(J2000_JD, scale=epoch.scale))
 
     def longitude(d):
-        r_earth = _planet_position_ecliptic_tdb("Earth", d / years_to_days(100.0))
+        r_earth = _planet_position_ecliptic_rel("Earth", epoch, d)
         return jnp.degrees(jnp.arctan2(-r_earth[1], -r_earth[0]))
 
-    return jnp.mod(jnp.vectorize(longitude)(days), 360.0)
+    return jnp.mod(jnp.vectorize(longitude)(jnp.asarray(time_d)), 360.0)
