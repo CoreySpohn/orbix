@@ -208,6 +208,7 @@ class OrbitBlock(AbstractBlock):
             Dictionary from "ln_size" and "e" to (low, high) bounds in chart
             coordinates, for the coordinates the law bounds and the chart maps.
         """
+        _owned(self, model)
         mu = self._mu(model)[..., jnp.asarray(self.rows)]
         return _chart_support(self.chart, self.law.support(), mu)
 
@@ -816,6 +817,11 @@ class SkyPositionBlock(AbstractBlock):
         outside = jnp.any(jnp.isnan(coords), axis=-1, keepdims=True)
         return _unstack(self.coordinate_names, jnp.where(outside, jnp.nan, coords))
 
+    def _check_rows(self, model) -> None:
+        """Refuse a freed row the model's System lacks, when a model is given."""
+        if model is not None:
+            _owned(self, model)
+
     def _held(self, model):
         """The stacked orbits, the masses and the Jacobi mu of every row."""
         orbits = _owned(self, model)
@@ -866,11 +872,13 @@ class SkyPositionBlock(AbstractBlock):
 
         Args:
             x: Coordinates keyed by coordinate_names, each of shape (len(rows),).
-            model: Model holding the System at the block's system path; not read.
+            model: Model holding the System at the block's system path; read only to
+                check that the freed rows exist.
 
         Returns:
             Scalar log density of the coordinates against Lebesgue measure.
         """
+        self._check_rows(model)
         offsets, log_jac = self._offsets(x)
         return jnp.sum(
             self.east_arcsec.log_prob(offsets[:, 0])
@@ -883,11 +891,13 @@ class SkyPositionBlock(AbstractBlock):
 
         Args:
             key: JAX PRNG key.
-            model: Model holding the System at the block's system path; not read.
+            model: Model holding the System at the block's system path; read only to
+                check that the freed rows exist.
 
         Returns:
             Coordinates keyed by coordinate_names, each of shape (len(rows),).
         """
+        self._check_rows(model)
         n = len(self.rows)
         draws = [
             law.sample(k, (n,) if jnp.shape(law.support()[0]) == () else ())
@@ -924,11 +934,13 @@ class SkyPositionBlock(AbstractBlock):
 
         Args:
             c: Unit-cube point in (0, 1), shape (unit_size,), laid out row by row.
-            model: Model holding the System at the block's system path; not read.
+            model: Model holding the System at the block's system path; read only to
+                check that the freed rows exist.
 
         Returns:
             Coordinates keyed by coordinate_names, each of shape (len(rows),).
         """
+        self._check_rows(model)
         c = _unit_rows(self, c)
         return self._coordinates(
             jnp.stack(

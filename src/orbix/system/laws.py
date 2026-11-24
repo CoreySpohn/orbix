@@ -134,22 +134,38 @@ def _uniform_quaternion(c) -> Array:
     )
 
 
-def _batch_shape(*trees) -> tuple[int, ...]:
-    leaves = jax.tree_util.tree_leaves(trees)
-    return jnp.broadcast_shapes(*(jnp.shape(leaf) for leaf in leaves))
+def _batch_shape(*parts) -> tuple[int, ...]:
+    """Broadcast shape of arrays and scalar laws.
+
+    A law contributes the batch of its support, which leaves out the component axis
+    of a mixture, rather than the shapes of its parameter leaves.
+    """
+    shapes = [
+        part.support()[0].shape
+        if isinstance(part, priorities.AbstractDistribution)
+        else jnp.shape(part)
+        for part in parts
+    ]
+    return jnp.broadcast_shapes(*shapes)
 
 
 def _draw(dist: priorities.AbstractDistribution, key, batch) -> Array:
     """Draw a scalar distribution at the batch shape, one variate per element.
 
-    The parameters are broadcast to ``batch`` first, so a parameter of shape ``(1,)``
-    is the same law for each element, never one draw shared among them.
+    The law's own batch (the shape of its support) broadcasts against ``batch``: a
+    parameter axis of length one is the same law for each element, never one draw
+    shared among them, and a law with no parameters is drawn once per element. The
+    sample shape is the whole ``batch``, so every element is its own variate, and an
+    own axis longer than one is read on the diagonal.
     """
     batch = tuple(batch)
-    dist = jax.tree_util.tree_map(
-        lambda leaf: jnp.broadcast_to(jnp.asarray(leaf), batch), dist
-    )
-    return dist.sample(key, ())
+    own = dist.support()[0].shape
+    drawn = dist.sample(key, batch)
+    grid = jnp.indices(batch, sparse=True)
+    offset = len(batch) - len(own)
+    own_index = tuple(grid[offset + j] if size > 1 else 0 for j, size in enumerate(own))
+    identity = tuple(jnp.broadcast_to(g, batch) for g in jnp.indices(batch))
+    return drawn[(*identity, *own_index)]
 
 
 def size_term(log_p, log_volume) -> Array:
@@ -234,7 +250,8 @@ class OrbitLaw(AbstractOrbitLaw):
             parameters.
         """
         mu = jnp.asarray(mu_AU3_per_d2)
-        batch = _batch_shape(self, mu)
+        size_law = self.a_AU if self.a_AU is not None else self.period_d
+        batch = _batch_shape(self.eccentricity, size_law, mu)
         k_e, k_size, k_phase, k_quat = jax.random.split(key, 4)
         e = _draw(self.eccentricity, k_e, batch)
         if self.a_AU is not None:

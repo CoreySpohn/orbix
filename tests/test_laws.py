@@ -8,7 +8,13 @@ import priorities
 import pytest
 from hwoutils.constants import GM_SUN_AU3_PER_D2 as GM
 
-from orbix.system import ClassicalChart, FrameChart, FrameOrbit, OrbitLaw
+from orbix.system import (
+    ClassicalChart,
+    FrameChart,
+    FrameOrbit,
+    IsotropicInclination,
+    OrbitLaw,
+)
 
 KEY = jax.random.PRNGKey(3)
 E_LAW = priorities.Uniform(0.05, 0.8)
@@ -118,7 +124,38 @@ def test_each_planet_gets_its_own_draw_whatever_the_parameter_shape(spelling):
         a = orbit.a_AU
         assert not jnp.any(a[:64, 0] == a[:64, 1])
         assert abs(np.corrcoef(a[:, 0], a[:, 1])[0, 1]) < band
-    np.testing.assert_allclose(law.log_prob(drawn), scalar.log_prob(drawn), rtol=1e-12)
+    score = law.log_prob(drawn)
+    assert jnp.all(jnp.isfinite(score))
+    np.testing.assert_allclose(score, scalar.log_prob(drawn), rtol=1e-12)
+
+
+def _mixture():
+    """Three components on [1, 2], [3, 4], [5, 6]; three, not the planet count."""
+    return priorities.Mixture(
+        jnp.zeros(3),
+        priorities.Uniform(jnp.array([1.0, 3.0, 5.0]), jnp.array([2.0, 4.0, 6.0])),
+    )
+
+
+@pytest.mark.parametrize("size_law", [IsotropicInclination, _mixture])
+def test_laws_without_a_planet_axis_still_draw_each_planet_independently(size_law):
+    """Fails if a parameter-free law or a mixture's component axis shares one draw.
+
+    A law with no parameters has no leaves to broadcast, and a mixture's component axis
+    is not a planet axis. Truth and band as in the test above (3 standard errors at
+    N = 4096, seed 0): no equal pair in 64 draws and the correlation of the two planets
+    within the band; the mixture must also draw its first and last components. The
+    scores of the draws are finite.
+    """
+    n, band = 4096, 3.0 / np.sqrt(4096)
+    law = OrbitLaw(E_LAW, a_AU=size_law())
+    a = law.sample(jax.random.PRNGKey(0), mu_AU3_per_d2=jnp.full((n, 2), GM)).a_AU
+    assert a.shape == (n, 2)
+    assert not jnp.any(a[:64, 0] == a[:64, 1])
+    assert abs(np.corrcoef(a[:, 0], a[:, 1])[0, 1]) < band
+    assert jnp.all(jnp.isfinite(law.log_prob(law.sample(KEY, mu_AU3_per_d2=GM))))
+    if size_law is _mixture:
+        assert jnp.any(a < 2.0) and jnp.any(a > 5.0)
 
 
 @pytest.mark.parametrize("chart", [ClassicalChart(), FrameChart(), FrameChart(None)])

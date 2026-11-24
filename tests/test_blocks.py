@@ -751,7 +751,9 @@ def test_a_two_row_block_draws_rows_independently_and_its_density_is_joint(shape
             ClassicalChart(), (row,), OrbitLaw(E_LAW, a_AU=priorities.Uniform(1.0, 2.0))
         )
         parts += single.log_prob({n: v[k : k + 1] for n, v in x.items()}, model)
-    np.testing.assert_allclose(both.log_prob(x, model), parts, rtol=1e-12)
+    total = both.log_prob(x, model)
+    assert jnp.isfinite(total) and jnp.isfinite(parts)
+    np.testing.assert_allclose(total, parts, rtol=1e-12)
 
 
 @pytest.mark.parametrize("kind", ["orbit", "thiele_innes", "sky_position"])
@@ -759,9 +761,11 @@ def test_a_block_row_beyond_the_planet_count_is_refused(kind):
     """Fails if a row past the last planet is read, clamped or written silently.
 
     Truth: a one-planet system has row 0 only. Each public block type must raise a
-    ``ValueError`` naming the row and the count at ``inverse`` (and ``sample`` where it
-    reads the model), and
-    accept ``rows=(0,)``. A bare ``.at[idx].set`` drops the write and a gather clamps,
+    ``ValueError`` naming the row and the count at ``inverse`` and ``sample``, at
+    ``chart_support`` for a period law (it gathers the rate by row), and, for the sky
+    block, at ``from_unit`` and ``log_prob`` given the model. ``rows=(0,)`` is accepted
+    (``inverse`` is the positive control that reads the model). A bare
+    ``.at[idx].set`` drops the write and a gather clamps,
     so without the check the failure is silent.
     """
     model = _Model(
@@ -790,11 +794,22 @@ def test_a_block_row_beyond_the_planet_count_is_refused(kind):
         ),
     }[kind]
     ok = build((0,))
-    ok.sample(KEY, model)
     bad = build((1,))
-    calls = [lambda: bad.inverse(model)]
-    if kind != "sky_position":  # its prior draw does not read the model
-        calls.append(lambda: bad.sample(KEY, model))
+    x = ok.inverse(model)  # row-0 positive control that every block type reads
+    calls = [lambda: bad.inverse(model), lambda: bad.sample(KEY, model)]
+    if kind == "orbit":
+        # chart_support gathers the mass-derived rate by row; a period law reads it
+        assert _block(ClassicalChart(), (0,), P_LAW).chart_support(model)
+        period_bad = _block(ClassicalChart(), (1,), P_LAW)
+        calls.append(lambda: period_bad.chart_support(model))
+    if kind == "sky_position":
+        assert np.isfinite(ok.log_prob(x, model))
+        ok.sample(KEY, model)
+        ok.from_unit(jnp.array([0.3, 0.6]), model)
+        calls += [
+            lambda: bad.from_unit(jnp.array([0.3, 0.6]), model),
+            lambda: bad.log_prob(x, model),
+        ]
     for call in calls:
         with pytest.raises(ValueError, match=r"rows \(1,\).*1 planet"):
             call()
