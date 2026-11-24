@@ -370,6 +370,47 @@ def test_system_from_cartesian_epoch_round_trip(batch_shape):
         )
 
 
+def test_system_from_cartesian_per_system_epochs():
+    """Truth: snapshots at 23 and 35 days; 1e-12 AU and AU/day allow x64 solves."""
+    epochs = jnp.array([23.0, 35.0])
+    source = _system().solve(epochs)
+    r = jnp.moveaxis(source.position_AU, 1, 0)
+    v = jnp.moveaxis(source.velocity_AU_per_d, 1, 0)
+    system = eqx.filter_jit(System.from_cartesian)(
+        Body(jnp.ones(2)),
+        Body(jnp.broadcast_to(jnp.array([0.001, 0.005]), (2, 2))),
+        SkyFrame(jnp.full(2, 10.0)),
+        position_AU=r,
+        velocity_AU_per_d=v,
+        epoch_d=epochs,
+    )
+    result = system.solve(epochs[:, None])
+    for actual, expected in (
+        (result.position_AU[..., 0, :], r),
+        (result.velocity_AU_per_d[..., 0, :], v),
+    ):
+        np.testing.assert_allclose(
+            actual[:, 1:] - actual[:, :1],
+            expected[:, 1:] - expected[:, :1],
+            atol=1e-12,
+            rtol=0,
+        )
+
+
+@pytest.mark.parametrize("shape", [(3,), (2, 3), (1,)])
+def test_system_from_cartesian_rejects_planet_epochs(shape):
+    """Truth: one epoch per system, B=(2,); exact rejection needs no tolerance."""
+    with pytest.raises(ValueError, match="epoch_d"):
+        System.from_cartesian(
+            Body(jnp.ones(2)),
+            Body(jnp.full((2, 3), 0.001)),
+            SkyFrame(jnp.full(2, 10.0)),
+            position_AU=jnp.zeros((2, 4, 3)),
+            velocity_AU_per_d=jnp.zeros((2, 4, 3)),
+            epoch_d=jnp.ones(shape),
+        )
+
+
 @pytest.mark.parametrize("field", ["position_AU", "velocity_AU_per_d"])
 @pytest.mark.parametrize("shape", [(2, 3), (3, 2), (1, 3, 3)])
 def test_system_from_cartesian_rejects_wrong_shapes(field, shape):
@@ -499,9 +540,50 @@ def test_ephemeris_accepts_batch_distances():
     with pytest.raises(ValueError, match="distance history"):
         Ephemeris(position, jnp.zeros_like(position), jnp.array([1.0, 2.0]))
     eph = Ephemeris(
-        position, jnp.zeros_like(position), jnp.array([1.0, 2.0]), batch_ndim=1
+        position.tolist(), jnp.zeros_like(position), [1.0, 2.0], batch_ndim=1
     )
     assert _system().solve(jnp.arange(3.0)).batch_ndim == 0
     east, north = eph.offset_arcsec(1, 0)
     np.testing.assert_allclose(east, [[2.0] * 3, [1.0] * 3], rtol=2e-15, atol=0)
     np.testing.assert_array_equal(north, 0.0)
+
+
+def test_ephemeris_batch_rank_follows_vmap():
+    """Truth: vmap adds one batch axis; ranks and stored leaves agree exactly.
+
+    Reconstruction and positional subclass construction must preserve the
+    arrays bit for bit, so no numerical tolerance is needed.
+    """
+
+    class _SceneEphemeris(Ephemeris):
+        scene_planet_indices: jax.Array
+
+    systems = jax.tree.map(lambda x: jnp.stack([x, x]), _system())
+    solve = jax.vmap(lambda system: system.solve(jnp.array([0.0, 23.0])))
+    for evaluate in (solve, jax.jit(solve)):
+        eph = evaluate(systems)
+        assert eph.batch_ndim == eph.dist_pc.ndim == 1
+        rebuilt = Ephemeris(
+            eph.position_AU,
+            eph.velocity_AU_per_d,
+            eph.dist_pc,
+            batch_ndim=eph.batch_ndim,
+        )
+        scene = _SceneEphemeris(
+            eph.position_AU,
+            eph.velocity_AU_per_d,
+            eph.dist_pc,
+            jnp.array([1, 2]),
+            batch_ndim=eph.batch_ndim,
+        )
+        assert rebuilt.batch_ndim == scene.batch_ndim == 1
+        np.testing.assert_array_equal(rebuilt.position_AU, eph.position_AU)
+        np.testing.assert_array_equal(scene.scene_planet_indices, [1, 2])
+
+
+@pytest.mark.parametrize("rank", [-2, -1, 2, 1.0, True])
+def test_ephemeris_rejects_invalid_batch_rank(rank):
+    """Truth: Python integer rank in [0, ndim - 2]; exact rejection, no tolerance."""
+    position = jnp.zeros((3, 3, 3)).at[1, :, 0].set(jnp.array([2.0, 4.0, 6.0]))
+    with pytest.raises(ValueError, match="batch_ndim"):
+        Ephemeris(position, jnp.zeros_like(position), [1.0, 2.0, 3.0], batch_ndim=rank)
