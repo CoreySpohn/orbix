@@ -200,8 +200,10 @@ class Ephemeris(eqx.Module):
     Index zero is the star. reference is a body index or "barycenter".
     All observables reuse these stored states and perform no further
     orbital solve. There is one distance per system: dist_pc has exactly
-    the batch shape B, whose rank batch_ndim is declared at construction
-    (zero for one system). A distance history is not supported.
+    the batch shape B. Its rank batch_ndim is derived from dist_pc and only
+    declared (and checked) at construction (zero for one system). A distance
+    history is not supported. Construction checks run in __post_init__, so
+    a subclass must not define its own __init__.
 
     Attributes:
         position_AU: Barycentric positions in AU, shape B + (K+1,) + time_shape + (3,),
@@ -228,6 +230,8 @@ class Ephemeris(eqx.Module):
                 dist_pc does not have exactly the batch shape B.
         """
         position_shape = jnp.shape(jnp.asarray(self.position_AU))
+        if len(position_shape) < 2:
+            raise ValueError("Ephemeris vectors must share shape (bodies, ..., 3)")
         if (
             not isinstance(batch_ndim, int)
             or isinstance(batch_ndim, bool)

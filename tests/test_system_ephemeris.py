@@ -585,5 +585,5 @@ def test_ephemeris_batch_rank_follows_vmap():
 def test_ephemeris_rejects_invalid_batch_rank(rank):
     """Truth: Python integer rank in [0, ndim - 2]; exact rejection, no tolerance."""
     position = jnp.zeros((3, 3, 3)).at[1, :, 0].set(jnp.array([2.0, 4.0, 6.0]))
-    with pytest.raises(ValueError, match="batch_ndim"):
+    with pytest.raises(ValueError, match="must be an integer between"):
         Ephemeris(position, jnp.zeros_like(position), [1.0, 2.0, 3.0], batch_ndim=rank)
