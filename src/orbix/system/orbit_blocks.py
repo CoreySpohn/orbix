@@ -42,6 +42,11 @@ report.
 charts, at the Jacobi mu of the model's current star and planet masses. A held row keeps
 its geometry and takes its mean motion from the masses the block read, so the written
 node never mixes two masses.
+
+:class:`SkyPositionBlock` is the one block without a chart: its coordinates are the
+star-relative sky offsets of some planets at one time, with the shape of each orbit
+held, for a fit of one image. A fit of several epochs frees the whole orbit through
+:class:`OrbitBlock`.
 """
 
 import equinox as eqx
@@ -51,14 +56,23 @@ import numpy as np
 import priorities
 from hwoutils.blocks import AbstractBlock
 from hwoutils.constants import GM_SUN_AU3_PER_D2, two_pi
+from hwoutils.conversions import arcsec_to_au
 from hwoutils.model_paths import join, resolve
 from jaxtyping import Array
 
 from orbix.equations.orbit import mean_motion
-from orbix.system.charts import AbstractChart, ThieleInnesChart
-from orbix.system.core import enclosed_mu
+from orbix.system.charts import (
+    AbstractChart,
+    CartesianChart,
+    ThieleInnesChart,
+    _interval,
+    _interval_inverse,
+    disk_to_plane,
+)
+from orbix.system.core import enclosed_mu, jacobi_to_barycentric
 from orbix.system.frame_orbit import FrameOrbit
 from orbix.system.laws import AbstractOrbitLaw, size_term
+from orbix.system.observables import offset_arcsec
 
 
 def _take(orbit: FrameOrbit, rows) -> FrameOrbit:
@@ -652,6 +666,318 @@ class ThieleInnesBlock(AbstractBlock):
             _map_bounds(self.chart, self.law.support()),
             _map_bounds(other.chart, other.law.support()),
         )
+
+
+def _as_time(x) -> Array:
+    """A scalar time in days as an array of the active float dtype."""
+    return jnp.asarray(x, dtype=jnp.result_type(float))
+
+
+class SkyPositionBlock(AbstractBlock):
+    """Free the sky offset of some planets at one time; the orbit shape is held.
+
+    The coordinates are the east and north offsets in arcseconds of each freed planet
+    from the star at ``time_d``, as :meth:`Ephemeris.offset_arcsec` and a skyscapes
+    ``Scene.positions`` return them. ``forward`` moves each freed orbit by the Kepler
+    similarity that puts the planet there: a rotation about the line of sight and a
+    dilation of the orbit, which keep the eccentricity, the inclination and the
+    orbital phase. The orbit is written with ``epoch_d = time_d``, so the dilation,
+    which changes the mean motion, cannot move the planet at that time.
+
+    The map is written in :class:`CartesianChart` coordinates ``(p, w)``, the position
+    and the escape-speed-scaled velocity at ``time_d``. The similarity sends ``p`` to
+    ``s R p`` and ``w`` to ``R w``, so ``p_z / rho`` and ``R(-theta) w`` (with
+    ``rho, theta`` the polar form of ``(p_x, p_y)``) are held and only ``(p_x, p_y)``
+    is replaced. Circular and face-on orbits are regular points of this map. It is
+    undefined where the projected separation of the Jacobi position is zero, before or
+    after the move: a set of measure zero.
+
+    A Jacobi orbit is relative to the center of mass of the star and the planets inside
+    it, so the block subtracts the sky offset of that center from the star, freed rows
+    from the inside out, and the written offsets are star-relative for planets of any
+    mass. The block reads the star and planet masses (the Jacobi mu of each row) and
+    the distance from the model, so a mass or a distance that another entry frees is
+    honored. A held row keeps its geometry and takes its mean motion from the masses
+    read, as for :class:`OrbitBlock`.
+
+    The density is the product of ``east_arcsec`` and ``north_arcsec`` over the freed
+    planets: a prior on the positions at one time with the orbit shape held, not an
+    orbit prior. A bounded law is mapped onto the real line (a logit on a finite
+    interval, a softplus when one end is open) and its coordinate takes the prefix
+    ``mapped_``; the density gains the log derivative of that map. Each law's whole
+    support is mapped, so the block has no walls, except inside a law whose support
+    has an interior gap. The model's System has no batch axes.
+
+    Attributes:
+        east_arcsec: Scalar law on the east offset in arcseconds; parameters broadcast
+            over the freed rows.
+        north_arcsec: Scalar law on the north offset in arcseconds, likewise.
+        time_d: Time of the offsets, in days on the axis of the System's epochs.
+        rows: The freed Jacobi indices.
+        system: Path of the :class:`System` in the model.
+    """
+
+    east_arcsec: priorities.AbstractDistribution
+    north_arcsec: priorities.AbstractDistribution
+    time_d: Array = eqx.field(converter=_as_time)
+    rows: tuple[int, ...] = eqx.field(static=True)
+    system: str = eqx.field(static=True)
+
+    def __check_init__(self):
+        """Validate the rows, the time and the shape of each law."""
+        _check_rows(self.rows)
+        if self.time_d.shape != ():
+            raise ValueError("time_d must be a scalar")
+        for name, law in self._named_laws:
+            if law.event_dim != 0:
+                raise ValueError(f"{name} must be a scalar law")
+            if law.support()[0].shape not in ((), (len(self.rows),)):
+                raise ValueError(
+                    f"{name} parameters must be scalars or have shape "
+                    f"({len(self.rows)},), one per freed row"
+                )
+
+    @property
+    def _named_laws(self):
+        return (("east_arcsec", self.east_arcsec), ("north_arcsec", self.north_arcsec))
+
+    @property
+    def coordinate_names(self) -> tuple[str, ...]:
+        """The offset names; ``mapped_`` before one whose law is bounded."""
+        return tuple(
+            name if law.bounds == "real" else f"mapped_{name}"
+            for name, law in self._named_laws
+        )
+
+    @property
+    def walls(self) -> tuple[str, ...]:
+        """None: each coordinate maps the whole support of its law onto the line."""
+        return ()
+
+    @property
+    def owns(self) -> str:
+        """Path of the stacked orbits."""
+        return join(self.system, "orbits")
+
+    @property
+    def _star_mass(self) -> str:
+        return join(self.system, "star.mass_Msun")
+
+    @property
+    def _planet_masses(self) -> str:
+        return join(self.system, "planets.mass_Msun")
+
+    @property
+    def _dist(self) -> str:
+        return join(self.system, "frame.dist_pc")
+
+    @property
+    def reads(self) -> tuple[str, ...]:
+        """The star and planet masses and the distance."""
+        return (self._star_mass, self._planet_masses, self._dist)
+
+    @property
+    def writes(self) -> tuple[str, ...]:
+        """Only the owned orbits."""
+        return (self.owns,)
+
+    def _offsets(self, x) -> tuple[Array, Array]:
+        """Offsets in arcseconds, shape (len(rows), 2), and the map's log Jacobian."""
+        coords = _stack(self.coordinate_names, self.rows, x)
+        if coords.ndim != 2:
+            raise ValueError("SkyPositionBlock takes one draw; batch with jax.vmap")
+        pairs = [
+            _interval(coords[:, k], *law.support())
+            for k, (_, law) in enumerate(self._named_laws)
+        ]
+        return jnp.stack([v for v, _ in pairs], -1), sum(j for _, j in pairs)
+
+    def _coordinates(self, offsets) -> dict[str, Array]:
+        """Coordinates of offsets of shape (len(rows), 2); a row outside is all NaN."""
+        coords = jnp.stack(
+            [
+                _interval_inverse(offsets[:, k], *law.support())
+                for k, (_, law) in enumerate(self._named_laws)
+            ],
+            -1,
+        )
+        outside = jnp.any(jnp.isnan(coords), axis=-1, keepdims=True)
+        return _unstack(self.coordinate_names, jnp.where(outside, jnp.nan, coords))
+
+    def _held(self, model):
+        """The stacked orbits, the masses and the Jacobi mu of every row."""
+        orbits = resolve(model, self.owns)
+        if orbits.a_AU.ndim != 1:
+            raise ValueError("SkyPositionBlock needs a System with no batch axes")
+        star = resolve(model, self._star_mass)
+        planets = resolve(model, self._planet_masses)
+        return orbits, star, planets, enclosed_mu(star, planets)
+
+    def forward(self, x, model) -> dict[str, FrameOrbit]:
+        """Move the freed rows to the offsets; held rows keep geometry, take the rate.
+
+        Args:
+            x: Coordinates keyed by coordinate_names, each of shape (len(rows),).
+            model: Model holding the System at the block's system path.
+
+        Returns:
+            Dictionary from the path of the owned orbits to the stacked orbits with the
+            freed rows moved and written at epoch ``time_d``.
+        """
+        offsets, _ = self._offsets(x)
+        held, _, planets, mu = self._held(model)
+        rated = _rated(held, mu)
+        target = arcsec_to_au(offsets, resolve(model, self._dist))
+        r, v = rated.at_each(self.time_d)
+        weight = planets * GM_SUN_AU3_PER_D2 / mu
+        # Sky offset of the center of mass of the star and the inner planets from the
+        # star; Jacobi rows run inside out, so a moved inner row moves the center.
+        center = jnp.zeros(3, r.dtype)
+        moved = {}
+        for k in range(max(self.rows) + 1):
+            r_k = r[k]
+            if k in self.rows:
+                moved[k] = _similar_state(
+                    r[k], v[k], mu[k], target[self.rows.index(k)] - center[:2]
+                )
+                r_k = moved[k][:3]
+            center = center + weight[k] * r_k
+        new = CartesianChart().to_orbit(
+            jnp.stack([moved[k] for k in self.rows]),
+            mu_AU3_per_d2=mu[jnp.asarray(self.rows)],
+            epoch_d=self.time_d,
+        )
+        return {self.owns: _splice(rated, self.rows, new)}
+
+    def log_prob(self, x, model) -> Array:
+        """Sum over the freed rows of both laws and the log derivative of their maps.
+
+        Args:
+            x: Coordinates keyed by coordinate_names, each of shape (len(rows),).
+            model: Model holding the System at the block's system path; not read.
+
+        Returns:
+            Scalar log density of the coordinates against Lebesgue measure.
+        """
+        offsets, log_jac = self._offsets(x)
+        return jnp.sum(
+            self.east_arcsec.log_prob(offsets[:, 0])
+            + self.north_arcsec.log_prob(offsets[:, 1])
+            + log_jac
+        )
+
+    def sample(self, key, model) -> dict[str, Array]:
+        """Draw the offsets from the two laws, as coordinates.
+
+        Args:
+            key: JAX PRNG key.
+            model: Model holding the System at the block's system path; not read.
+
+        Returns:
+            Coordinates keyed by coordinate_names, each of shape (len(rows),).
+        """
+        n = len(self.rows)
+        draws = [
+            law.sample(k, (n,) if law.support()[0].shape == () else ())
+            for k, (_, law) in zip(jax.random.split(key), self._named_laws, strict=True)
+        ]
+        return self._coordinates(jnp.stack(draws, -1))
+
+    def inverse(self, model) -> dict[str, Array]:
+        """Coordinates of the star-relative offsets of the freed rows at ``time_d``.
+
+        Args:
+            model: Model holding the System at the block's system path.
+
+        Returns:
+            Coordinates keyed by coordinate_names, each of shape (len(rows),); NaN for
+            a row whose offset lies outside the support of a law.
+        """
+        held, star, planets, _ = self._held(model)
+        r, _ = held.at_each(self.time_d)
+        position = jacobi_to_barycentric(r, star, planets)
+        relative = (position[1:] - position[0])[jnp.asarray(self.rows)]
+        east, north = offset_arcsec(relative, resolve(model, self._dist))
+        return self._coordinates(jnp.stack([east, north], -1))
+
+    @property
+    def unit_size(self) -> int | None:
+        """Unit-cube length: the east then the north offset of each row, in turn."""
+        if not (self.east_arcsec.has_icdf and self.north_arcsec.has_icdf):
+            return None
+        return 2 * len(self.rows)
+
+    def from_unit(self, c, model) -> dict[str, Array]:
+        """Map a unit-cube point to coordinates through each law's inverse CDF.
+
+        Args:
+            c: Unit-cube point in (0, 1), shape (unit_size,), laid out row by row.
+            model: Model holding the System at the block's system path; not read.
+
+        Returns:
+            Coordinates keyed by coordinate_names, each of shape (len(rows),).
+        """
+        c = _unit_rows(self, c)
+        return self._coordinates(
+            jnp.stack(
+                [law.icdf(c[:, k]) for k, (_, law) in enumerate(self._named_laws)], -1
+            )
+        )
+
+    def same_layout(self, other) -> bool:
+        """Whether ``other`` matches in type, rows and system; not the laws or time.
+
+        Args:
+            other: Block to compare with.
+
+        Returns:
+            True if the type, rows and system match.
+        """
+        return (
+            type(other) is type(self)
+            and other.rows == self.rows
+            and other.system == self.system
+        )
+
+    def same_map(self, other) -> bool:
+        """Whether ``other`` has the same layout, laws' supports and time.
+
+        The map from coordinates to orbits depends on the support of each law and on
+        ``time_d``; a traced support or time counts as different.
+
+        Args:
+            other: Block to compare with.
+
+        Returns:
+            True if the layout, both supports and the time match.
+        """
+
+        def bounds(block):
+            return {
+                "east": (block.east_arcsec.bounds, *block.east_arcsec.support()),
+                "north": (block.north_arcsec.bounds, *block.north_arcsec.support()),
+                "time": (block.time_d,),
+            }
+
+        return self.same_layout(other) and _same_bounds(bounds(self), bounds(other))
+
+
+def _similar_state(r, v, mu, sky) -> Array:
+    """CartesianChart coordinates of the state ``(r, v)`` moved to sky position ``sky``.
+
+    ``p_z / rho`` and ``R(-theta) w`` are invariant under a rotation about the line of
+    sight and a dilation, so they are held while ``(p_x, p_y)`` becomes ``sky``.
+    """
+    w = disk_to_plane(v / jnp.sqrt(2 * mu / jnp.linalg.norm(r)))
+    rho = jnp.hypot(r[0], r[1])
+    c, s = r[0] / rho, r[1] / rho
+    zeta = r[2] / rho
+    u = jnp.stack([c * w[0] + s * w[1], c * w[1] - s * w[0], w[2]])
+    rho_new = jnp.hypot(sky[0], sky[1])
+    c, s = sky[0] / rho_new, sky[1] / rho_new
+    return jnp.stack(
+        [sky[0], sky[1], zeta * rho_new, c * u[0] - s * u[1], s * u[0] + c * u[1], u[2]]
+    )
 
 
 def _mapped_keys(chart, bounds) -> frozenset[str]:

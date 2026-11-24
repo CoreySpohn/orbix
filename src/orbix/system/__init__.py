@@ -39,7 +39,7 @@ from orbix.system.observables import (
     radial_velocity_m_per_s,
     separation_arcsec,
 )
-from orbix.system.orbit_blocks import OrbitBlock, ThieleInnesBlock
+from orbix.system.orbit_blocks import OrbitBlock, SkyPositionBlock, ThieleInnesBlock
 from orbix.system.orientation import IsotropicInclination
 from orbix.system.rotation import from_axis_angle, rotate
 
@@ -57,6 +57,7 @@ __all__ = [
     "OrbitBlock",
     "OrbitLaw",
     "SkyFrame",
+    "SkyPositionBlock",
     "System",
     "ThieleInnesBlock",
     "ThieleInnesChart",
