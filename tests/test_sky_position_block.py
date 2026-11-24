@@ -283,8 +283,8 @@ def test_log_prob_is_the_density_of_the_offsets_and_is_normalized(laws):
     laws at those offsets plus ``log |det d offset / d x|`` to 1e-9 (float64 through
     the Kepler solve; measured 9e-16). Each row's offsets depend only on its own
     coordinates, so the off-diagonal blocks of the Jacobian are zero (1e-12). Second
-    truth: normalization over the plane, by the trapezoid rule on a 601 by 601 grid
-    over +-30 for one row, to 1e-6 (the integrand decays at least as ``exp(-|x|)``;
+    truth: normalization over the plane, by the trapezoid rule on a 401 by 401 grid
+    over +-20 for one row, to 1e-6 (the integrand decays at least as ``exp(-|x|)``;
     measured 1e-13).
     """
     east_law, north_law = LAWS[laws]
@@ -298,8 +298,7 @@ def test_log_prob_is_the_density_of_the_offsets_and_is_normalized(laws):
         return _offsets(_apply(model, block, y), (2, 0)).T.ravel()
 
     flat = jnp.concatenate([x[names[0]], x[names[1]]])
-    value = offsets(flat)
-    jac = jax.jacfwd(offsets)(flat)
+    value, jac = jax.jit(lambda f: (offsets(f), jax.jacfwd(offsets)(f)))(flat)
     np.testing.assert_allclose(jac - jnp.diag(jnp.diag(jac)), 0.0, atol=1e-12)
     expected = (
         jnp.sum(east_law.log_prob(value[:2]))
@@ -309,7 +308,7 @@ def test_log_prob_is_the_density_of_the_offsets_and_is_normalized(laws):
     np.testing.assert_allclose(block.log_prob(x, model), expected, rtol=0, atol=1e-9)
 
     one = _block((1,), LAWS[laws])
-    grid = jnp.linspace(-30.0, 30.0, 601)
+    grid = jnp.linspace(-20.0, 20.0, 401)
     density = jax.vmap(
         jax.vmap(
             lambda a, b: jnp.exp(
