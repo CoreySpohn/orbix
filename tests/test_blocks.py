@@ -20,6 +20,7 @@ from orbix.system import (
     OrbitBlock,
     OrbitLaw,
     SkyFrame,
+    SkyPositionBlock,
     System,
     ThieleInnesBlock,
     ThieleInnesChart,
@@ -725,6 +726,78 @@ def test_a_two_row_block_is_the_sum_of_its_rows(model):
     draw = both.sample(KEY, model)
     assert all(v.shape == (2,) for v in draw.values())
     assert np.isfinite(both.log_prob(draw, model))
+
+
+@pytest.mark.parametrize("shape", [(), (1,)])
+def test_a_two_row_block_draws_rows_independently_and_its_density_is_joint(shape):
+    """Fails if rows of a block share one draw, or the density is not the row sum.
+
+    Truth: independent continuous draws are equal with probability zero (none of 16
+    pairs, seed 0), and the block density at a draw is the sum of the single-row block
+    densities of the scalar law. Tolerance: 1e-12, the floating-point floor of a sum.
+    """
+    model = _system_model()
+    a = priorities.Uniform(jnp.full(shape, 1.0), jnp.full(shape, 2.0))
+    both = _block(ClassicalChart(), (0, 1), OrbitLaw(E_LAW, a_AU=a))
+    draws = [both.sample(k, model) for k in jax.random.split(KEY, 16)]
+    size = jnp.stack(
+        [d["ln_a"] if "ln_a" in d else next(iter(d.values())) for d in draws]
+    )
+    assert not jnp.any(size[:, 0] == size[:, 1])
+    x = both.sample(KEY, model)
+    parts = 0.0
+    for k, row in enumerate((0, 1)):
+        single = _block(
+            ClassicalChart(), (row,), OrbitLaw(E_LAW, a_AU=priorities.Uniform(1.0, 2.0))
+        )
+        parts += single.log_prob({n: v[k : k + 1] for n, v in x.items()}, model)
+    np.testing.assert_allclose(both.log_prob(x, model), parts, rtol=1e-12)
+
+
+@pytest.mark.parametrize("kind", ["orbit", "thiele_innes", "sky_position"])
+def test_a_block_row_beyond_the_planet_count_is_refused(kind):
+    """Fails if a row past the last planet is read, clamped or written silently.
+
+    Truth: a one-planet system has row 0 only. Each public block type must raise a
+    ``ValueError`` naming the row and the count at ``inverse`` (and ``sample`` where it
+    reads the model), and
+    accept ``rows=(0,)``. A bare ``.at[idx].set`` drops the write and a gather clamps,
+    so without the check the failure is silent.
+    """
+    model = _Model(
+        System.from_classical(
+            Body(jnp.asarray(1.1)),
+            Body(jnp.asarray([1e-3])),
+            SkyFrame(jnp.asarray(10.0)),
+            a_AU=jnp.array([1.0]),
+            e=jnp.array([0.1]),
+            i_rad=jnp.array([0.7]),
+            W_rad=jnp.array([0.5]),
+            w_rad=jnp.array([1.0]),
+            M0_rad=jnp.array([2.0]),
+            epoch_d=jnp.array([3.0]),
+        )
+    )
+    build = {
+        "orbit": lambda rows: _block(ClassicalChart(), rows),
+        "thiele_innes": lambda rows: _ti_block(rows=rows),
+        "sky_position": lambda rows: SkyPositionBlock(
+            priorities.Normal(0.0, 0.5),
+            priorities.Normal(0.1, 0.4),
+            40.0,
+            rows=rows,
+            system="dynamics",
+        ),
+    }[kind]
+    ok = build((0,))
+    ok.sample(KEY, model)
+    bad = build((1,))
+    calls = [lambda: bad.inverse(model)]
+    if kind != "sky_position":  # its prior draw does not read the model
+        calls.append(lambda: bad.sample(KEY, model))
+    for call in calls:
+        with pytest.raises(ValueError, match=r"rows \(1,\).*1 planet"):
+            call()
 
 
 def test_same_map_compares_the_support_and_nothing_else_of_the_law():

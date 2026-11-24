@@ -303,13 +303,27 @@ behavior.
   mapping, rather than 0.75. Heads carry their track's weight and fade with
   it; the star and the observations carry the top track weight, so they
   stay at full opacity.
-- An `"alpha"` in `fan_kw=` is set last, so it replaces the weight-derived
-  opacity instead of scaling it.
-- `plot_sky_track` still accepts `data=(ra, dec, err)` and `iwa=` and
-  converts them to `observations=` and `iwa_arcsec=`. `animate_orbit` with
-  `kind="sky"` takes only `observations=(xy, xerr, yerr)` and `iwa_arcsec=`,
-  so convert there by hand: `observations=(np.column_stack([ra, dec]), err,
-  err)`.
+- `plot_sky_track` and `animate_orbit(kind="sky")` take the measured offsets as
+  `observations=(xy, xerr, yerr)` and the inner working angle as `iwa_arcsec=`;
+  the earlier `data=` and `iwa=` keywords are gone. Convert `(ra, dec, err)` by
+  hand:
+
+```python
+import matplotlib
+
+matplotlib.use("Agg")
+import numpy as np
+from orbix.viz import plot_sky_track
+
+t = np.linspace(0.0, 6.0, 10)
+ra, dec, err = np.cos(t), np.sin(t), np.full(10, 0.05)
+result = plot_sky_track(
+    (ra, dec),
+    observations=(np.column_stack([ra, dec]), err, err),
+    iwa_arcsec=0.1,
+)
+```
+
 - `animate_orbit(kind="sky")` refuses `style=`, `base_ms=`, and `marks=`,
   which apply to `kind="3d"` only; sky colors come from the cast. It needs
   `time_d=` for bare tracks too, because the sample times drive its clock and

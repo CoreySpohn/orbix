@@ -213,7 +213,7 @@ class OrbitBlock(AbstractBlock):
 
     def _freed(self, x, model):
         """Held orbits, all rows' mu, chart coordinates, freed epochs, log Jacobian."""
-        held = resolve(model, self.owns)
+        held = _owned(self, model)
         rows = jnp.asarray(self.rows)
         mu = self._mu(model)
         coords, log_jac = self.chart.constrain(
@@ -273,7 +273,7 @@ class OrbitBlock(AbstractBlock):
         Returns:
             Coordinates keyed by coordinate_names, each of shape (len(rows),).
         """
-        held = resolve(model, self.owns)
+        held = _owned(self, model)
         rows = jnp.asarray(self.rows)
         k_law, k_chart = jax.random.split(key)
         mu = self._mu(model)[..., rows]
@@ -296,7 +296,7 @@ class OrbitBlock(AbstractBlock):
             Coordinates keyed by coordinate_names, each of shape (..., len(rows)), of
             the freed rows of the model's orbits.
         """
-        coords = self.chart.from_orbit(_take(resolve(model, self.owns), self.rows))
+        coords = self.chart.from_orbit(_take(_owned(self, model), self.rows))
         return _unstack(
             self.coordinate_names,
             self.chart.unconstrain(coords, self.chart_support(model)),
@@ -325,7 +325,7 @@ class OrbitBlock(AbstractBlock):
             Coordinates keyed by coordinate_names, each of shape (len(rows),).
         """
         c = _unit_rows(self, c)
-        held = resolve(model, self.owns)
+        held = _owned(self, model)
         rows = jnp.asarray(self.rows)
         n_law = self.law.unit_size
         mu = self._mu(model)[..., rows]
@@ -509,7 +509,7 @@ class ThieleInnesBlock(AbstractBlock):
             rows replaced, and from the star mass path to the implied star mass in solar
             masses.
         """
-        held = resolve(model, self.owns)
+        held = _owned(self, model)
         coords, _ = self._coords(x, model)
         new = self.chart.to_orbit(
             coords,
@@ -538,7 +538,7 @@ class ThieleInnesBlock(AbstractBlock):
             Log density of the coordinates against Lebesgue measure, summed over the
             freed rows, with the leading batch shape of the coordinates.
         """
-        held = resolve(model, self.owns)
+        held = _owned(self, model)
         coords, log_jac = self._coords(x, model)
         coords, excluded = self.chart.exclude(coords)
         epoch = held.epoch_d[..., jnp.asarray(self.rows)]
@@ -567,7 +567,7 @@ class ThieleInnesBlock(AbstractBlock):
         Returns:
             Coordinates keyed by coordinate_names, each of shape (len(rows),).
         """
-        held = resolve(model, self.owns)
+        held = _owned(self, model)
         k_mass, k_law, k_chart = jax.random.split(key, 3)
         enclosed = self.star_mass_Msun.sample(k_mass) + self._inner_mass(model)
         orbit = self.law.sample(
@@ -591,7 +591,7 @@ class ThieleInnesBlock(AbstractBlock):
             Coordinates keyed by coordinate_names, each of shape (..., len(rows)), of
             the freed rows of the model's orbits.
         """
-        coords = self.chart.from_orbit(_take(resolve(model, self.owns), self.rows))
+        coords = self.chart.from_orbit(_take(_owned(self, model), self.rows))
         return _unstack(
             self.coordinate_names,
             self.chart.unconstrain(coords, self.chart_support(model)),
@@ -619,7 +619,7 @@ class ThieleInnesBlock(AbstractBlock):
             Coordinates keyed by coordinate_names, each of shape (len(rows),).
         """
         c = _unit_rows(self, c, rows=1)
-        held = resolve(model, self.owns)
+        held = _owned(self, model)
         enclosed = self.star_mass_Msun.icdf(c[0, 0]) + self._inner_mass(model)
         orbit = self.law.from_unit(
             c[:, 1:],
@@ -818,7 +818,7 @@ class SkyPositionBlock(AbstractBlock):
 
     def _held(self, model):
         """The stacked orbits, the masses and the Jacobi mu of every row."""
-        orbits = resolve(model, self.owns)
+        orbits = _owned(self, model)
         if orbits.a_AU.ndim != 1:
             raise ValueError("SkyPositionBlock needs a System with no batch axes")
         star = resolve(model, self._star_mass)
@@ -1121,6 +1121,23 @@ def _check_rows(rows) -> None:
         or any(not isinstance(r, int) or isinstance(r, bool) or r < 0 for r in rows)
     ):
         raise ValueError("rows must be a nonempty tuple of distinct nonnegative ints")
+
+
+def _owned(block, model) -> FrameOrbit:
+    """The block's stacked orbits, after checking that every freed row exists.
+
+    Every block type reads its orbits through here. Rows are static, so the check
+    runs on the host at trace time.
+    """
+    orbit = resolve(model, block.owns)
+    count = orbit.a_AU.shape[-1]
+    bad = tuple(r for r in block.rows if r >= count)
+    if bad:
+        raise ValueError(
+            f"{type(block).__name__} rows {bad} are beyond the orbit's {count} "
+            f"planet(s) at {block.owns!r}"
+        )
+    return orbit
 
 
 def _unit_rows(block, c, rows=None) -> Array:

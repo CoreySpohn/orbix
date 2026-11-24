@@ -140,10 +140,16 @@ def _batch_shape(*trees) -> tuple[int, ...]:
 
 
 def _draw(dist: priorities.AbstractDistribution, key, batch) -> Array:
-    """Draw a scalar distribution at the batch shape, parameters broadcast."""
-    own = _batch_shape(dist)
-    lead = batch[: len(batch) - len(own)] if own else tuple(batch)
-    return jnp.broadcast_to(dist.sample(key, lead), batch)
+    """Draw a scalar distribution at the batch shape, one variate per element.
+
+    The parameters are broadcast to ``batch`` first, so a parameter of shape ``(1,)``
+    is the same law for each element, never one draw shared among them.
+    """
+    batch = tuple(batch)
+    dist = jax.tree_util.tree_map(
+        lambda leaf: jnp.broadcast_to(jnp.asarray(leaf), batch), dist
+    )
+    return dist.sample(key, ())
 
 
 def size_term(log_p, log_volume) -> Array:
@@ -169,7 +175,9 @@ class OrbitLaw(AbstractOrbitLaw):
     moves with the mass and stays normalized.
 
     Parameters are array leaves, so one law serves several rows through a trailing
-    rows axis.
+    rows axis. Parameter shapes broadcast against each other and the masses, and each
+    element of the broadcast batch gets its own independent draw: a parameter of shape
+    ``(1,)`` means the same law for each planet.
 
     Attributes:
         eccentricity: Scalar law on the eccentricity, supported on ``[0, 1)``.

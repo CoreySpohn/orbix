@@ -86,6 +86,41 @@ def test_draws_have_the_requested_batch_the_rate_and_the_law_support():
     assert wide.a_AU.shape == (1,)
 
 
+def _a_law_spellings():
+    """The same Uniform(1, 2) size law for two planets, spelled three ways."""
+    one = lambda v: jnp.array([v])  # noqa: E731
+    two = lambda v: jnp.array([v, v])  # noqa: E731
+    return {
+        "scalar": priorities.Uniform(1.0, 2.0),
+        "shape1": priorities.Uniform(one(1.0), one(2.0)),
+        "shape2": priorities.Uniform(two(1.0), two(2.0)),
+    }
+
+
+@pytest.mark.parametrize("spelling", ["scalar", "shape1", "shape2"])
+def test_each_planet_gets_its_own_draw_whatever_the_parameter_shape(spelling):
+    """Fails if a size law of shape (1,) shares one draw among the planets.
+
+    Truth: independent continuous variates are equal with probability zero, and their
+    sample correlation has standard error 1/sqrt(N); the band is 3 standard errors at
+    N = 4096 (false rejection about 3 in 1000), with seed 0. Both ``sample`` and
+    ``from_unit`` are held to it, and the density of a draw equals the scalar law's.
+    No existing test touches broadcast draws, so this is a new function.
+    """
+    n, band = 4096, 3.0 / np.sqrt(4096)
+    law = OrbitLaw(E_LAW, a_AU=_a_law_spellings()[spelling])
+    scalar = OrbitLaw(E_LAW, a_AU=priorities.Uniform(1.0, 2.0))
+    mu = jnp.full((n, 2), GM)
+    key, ckey = jax.random.split(jax.random.PRNGKey(0))
+    drawn = law.sample(key, mu_AU3_per_d2=mu)
+    unit = law.from_unit(jax.random.uniform(ckey, (n, 2, 6)), mu_AU3_per_d2=mu)
+    for orbit in (drawn, unit):
+        a = orbit.a_AU
+        assert not jnp.any(a[:64, 0] == a[:64, 1])
+        assert abs(np.corrcoef(a[:, 0], a[:, 1])[0, 1]) < band
+    np.testing.assert_allclose(law.log_prob(drawn), scalar.log_prob(drawn), rtol=1e-12)
+
+
 @pytest.mark.parametrize("chart", [ClassicalChart(), FrameChart(), FrameChart(None)])
 def test_sample_coordinates_invert_to_the_drawn_orbit(chart):
     """Fails if the coordinates drawn for an orbit do not rebuild that orbit.
