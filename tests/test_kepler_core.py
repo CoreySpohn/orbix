@@ -53,7 +53,7 @@ def test_solver_equation_trig_and_continuity(e, mean, step):
     for ecc in (e, 0.0, 0.05, 0.2, 0.5, 0.9, np.nextafter(0.78, 0), 0.78, 0.99):
         eccentric, trig = map(
             np.asarray,
-            _solutions(jnp.asarray(means), jnp.asarray(ecc, dtype=jnp.float64)),
+            _solutions(jnp.asarray(means), jnp.asarray(ecc)),
         )
         assert np.all((eccentric >= -4e-14) & (eccentric <= two_pi + 4e-14))
         sine, cosine = trig
@@ -120,7 +120,23 @@ def test_eccentric_anomaly_nodes(e):
 
 @pytest.mark.parametrize(
     "e",
-    [0.0, 1e-200, 1e-100, np.nextafter(np.finfo(float).eps, 0), np.finfo(float).eps],
+    [
+        0.0,
+        pytest.param(
+            1e-200,
+            marks=pytest.mark.float64_only(
+                reason="tiny positive eccentricity underflows float32"
+            ),
+        ),
+        pytest.param(
+            1e-100,
+            marks=pytest.mark.float64_only(
+                reason="tiny positive eccentricity underflows float32"
+            ),
+        ),
+        np.nextafter(np.finfo(float).eps, 0),
+        np.finfo(float).eps,
+    ],
 )
 def test_tiny_positive_eccentricity_remains_finite(e):
     """Fails if a near-circular orbit becomes NaN through inverse-e overflow."""

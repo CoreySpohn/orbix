@@ -33,6 +33,7 @@ def test_exactly_one_size_law():
         )
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_a_law_density_is_the_closed_form():
     """Fails if a factor of the density against the reference measure is off.
 
@@ -52,6 +53,7 @@ def test_a_law_density_is_the_closed_form():
     np.testing.assert_allclose(law.log_prob(orbit), expected, rtol=1e-13)
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_a_period_law_is_the_same_law_as_the_size_law_it_implies():
     """Fails if the period Jacobian is not log(3/2) + log P.
 
@@ -343,6 +345,7 @@ def test_a_vector_event_law_is_refused_for_the_shape_and_the_size():
         OrbitLaw(E_LAW, period_d=vector)
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("chart", [ClassicalChart(), FrameChart(), FrameChart(None)])
 def test_sample_coordinates_invert_to_the_drawn_orbit(chart):
     """Fails if the coordinates drawn for an orbit do not rebuild that orbit.
@@ -361,6 +364,7 @@ def test_sample_coordinates_invert_to_the_drawn_orbit(chart):
         assert jnp.all((coords[..., 3:] >= 0) & (coords[..., 3:] < 2 * np.pi))
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize(
     "law",
     [

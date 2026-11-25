@@ -99,6 +99,7 @@ def _states(orbits):
     return r, v
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("rows", [(1,), (2, 0)])
 def test_forward_puts_each_planet_at_its_star_relative_offset(model, rows):
     """Fails if a freed planet misses its offset, or a held row's geometry changes.
@@ -133,6 +134,7 @@ def test_forward_puts_each_planet_at_its_star_relative_offset(model, rows):
     np.testing.assert_allclose(new.n_rad_per_d**2 * new.a_AU**3, mu, rtol=1e-12)
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_forward_follows_a_mass_that_another_entry_frees():
     """Fails if a row keeps the rate of a star mass the model no longer has.
 
@@ -152,6 +154,7 @@ def test_forward_follows_a_mass_that_another_entry_frees():
     np.testing.assert_allclose(_offsets(moved, (1,)), [[0.12, 0.25]], atol=1e-10)
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_forward_and_inverse_are_mutually_inverse(model):
     """Fails if inverse is not the left and right inverse of forward.
 
@@ -181,6 +184,7 @@ SHAPES = {
 }
 
 
+@pytest.mark.float64_only(reason="finite-difference derivative reference")
 @pytest.mark.parametrize("shape", list(SHAPES))
 def test_the_move_is_a_kepler_similarity_also_at_circular_and_face_on(shape):
     """Fails if the move changes the orbit's shape, or its gradient is wrong there.
@@ -236,6 +240,7 @@ def test_the_move_is_a_kepler_similarity_also_at_circular_and_face_on(shape):
     )
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_every_offset_on_the_field_gives_a_bound_orbit_there():
     """Fails if an offset leaves the bound set, as holding the velocity would.
 
@@ -264,6 +269,7 @@ def test_every_offset_on_the_field_gives_a_bound_orbit_there():
     np.testing.assert_allclose(offsets, jnp.stack([east, north], -1), atol=1e-10)
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_an_exact_zero_offset_is_nan_and_a_nearby_one_is_regular():
     """Fails if a zero separation gives a finite orbit or a nearby one a NaN gradient.
 
@@ -296,6 +302,7 @@ def test_an_exact_zero_offset_is_nan_and_a_nearby_one_is_regular():
         )
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_freeing_an_inner_row_moves_the_held_outer_rows_with_the_center():
     """Fails if a held outer planet does not ride on the inner center of mass.
 
@@ -326,6 +333,7 @@ LAWS = {
 }
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("laws", list(LAWS))
 def test_log_prob_is_the_density_of_the_offsets_and_is_normalized(laws):
     """Fails if the density is not the two offset laws carried onto the coordinates.
@@ -381,6 +389,7 @@ def test_log_prob_is_the_density_of_the_offsets_and_is_normalized(laws):
     np.testing.assert_allclose(total, 1.0, rtol=0, atol=1e-6)
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_a_free_distance_is_read_from_the_model():
     """Fails if the block keeps a distance other than the model's.
 
@@ -440,6 +449,7 @@ def test_contract_paths_names_walls_and_ties():
         SkyPositionBlock(*REAL, jnp.zeros(2), rows=(0,), system=DYN)
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_sample_and_from_unit_draw_the_offsets_from_the_laws():
     """Fails if a draw does not follow the laws, or the unit map is not their icdf.
 

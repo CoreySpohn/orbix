@@ -97,8 +97,8 @@ def test_grid_equation_trig_and_wrapping(e, mean):
     if e == 0.9985 and mean == 1.0:
         # At M=1 the local solve is well-conditioned even in the top e row.
         # Bilinear interpolation must use the appended row near e=1.
-        # Compare to float64 truth: global periapsis bounds are vacuous here.
-        truth = float(_reference(jnp.float64(mean), jnp.float64(e)))
+        # Host reference: solve E - 0.9985*sin(E) = 1 at 60 decimal digits.
+        truth = 1.933528471382059
         tolerance = 1e-4
         np.testing.assert_allclose(
             [sine[0], cosine[0]],
@@ -125,6 +125,9 @@ def test_grid_equation_trig_and_wrapping(e, mean):
         assert error < 100 * max(reference_error, 1e-7)
 
 
+@pytest.mark.float64_only(
+    reason="1e-10 rad probes must stay distinct across each grid node"
+)
 @pytest.mark.parametrize("cell", [0, 100, 2047, 2048])
 def test_grid_monotone_at_cell_boundary(cell):
     """Fails if the bilinear trig table jumps backwards at a periodic M node."""
@@ -140,6 +143,9 @@ def test_grid_monotone_at_cell_boundary(cell):
     )
 
 
+@pytest.mark.float64_only(
+    reason="cache isolation between float32 and float64 table builds"
+)
 def test_grid_precision_context_and_nodes():
     """Fails if cached float32 tables leak into float64 construction.
 

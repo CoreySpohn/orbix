@@ -77,6 +77,7 @@ def test_sun_longitude_at_equinox_and_solstice(date, lon):
     assert abs(diff) < 0.1  # events quoted to 0.1 d is 0.1 deg
 
 
+@pytest.mark.float64_only(reason="float64 reference values for orbital validation")
 def test_sun_longitude_against_published_almanac_value():
     """The Sun's geometric longitude matches Meeus, Astronomical Algorithms (2nd ed.).
 
@@ -110,6 +111,7 @@ def test_dlon_range_and_shape():
     assert bool(jnp.all((dlon >= -180.0) & (dlon < 180.0)))
 
 
+@pytest.mark.float64_only(reason="float64 reference values for orbital validation")
 def test_matches_astropy():
     """Latitude and longitude difference agree with astropy ephemerides."""
     astropy = pytest.importorskip("astropy")  # noqa: F841

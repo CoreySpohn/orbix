@@ -63,6 +63,7 @@ def test_law_support_reports_exactly_the_interval_bounded_elements():
     assert _TiltedLaw(A_LAW).support() == {}
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("chart", ALL, ids=_id)
 def test_constrain_log_jacobian_is_exact_and_inverts(chart):
     """Fails if the returned log derivative is not the true one, or the map not 1:1.
@@ -115,6 +116,7 @@ def _mapped(chart, law):
     return OrbitBlock(chart, law, rows=(1,), system="dynamics")
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("chart", [EccentricityVectorChart(), FrameChart()], ids=_id)
 def test_a_disk_chart_with_a_lower_eccentricity_bound_keeps_a_zero_density_hole(chart):
     """Fails if the block raises, or the hole is not -inf, or a draw lands in it.
@@ -154,6 +156,7 @@ BLOCKS = {
 }
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("name", list(BLOCKS))
 def test_block_is_the_chart_composed_with_the_map(name):
     """Fails if the forward map or density is not the chart's at the mapped point.
@@ -191,6 +194,7 @@ def _cell_difference(a, b, period):
     return np.minimum(d, period - d)
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("name", ["classical-a", "classical-period"])
 def test_inverse_of_forward_recovers_the_coordinates(name):
     """Fails if ``inverse`` does not undo ``forward``.
@@ -226,6 +230,7 @@ def _sample(block, model, n=N, seed=11):
     return {k: np.asarray(v[:, 0]) for k, v in out.items()}
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("name", ["classical-a", "classical-period"])
 def test_size_and_eccentricity_coordinates_are_logistic_under_a_uniform_law(name):
     """Fails if a bounded element is not mapped onto the whole line by a logit.
@@ -250,6 +255,7 @@ def _gauss_logpdf(x, sd):
     return -0.5 * (x / sd) ** 2 - np.log(sd * np.sqrt(2 * np.pi))
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize(
     "name", ["classical-a", "classical-period", "eccentricity-vector-a"]
 )
@@ -290,6 +296,7 @@ def test_density_integrates_to_one_over_the_real_coordinates(name):
     assert abs(weight.mean() - 1) < 4 * error and error < 0.02, (weight.mean(), error)
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_gradients_are_finite_far_into_the_coordinates():
     """Fails if a gradient sampler could meet a wall or a non-finite derivative.
 
@@ -310,6 +317,7 @@ def test_gradients_are_finite_far_into_the_coordinates():
     assert bool(jnp.all(jnp.isfinite(values))) and bool(jnp.all(jnp.isfinite(grads)))
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.medium(reason="two NUTS chains of 800 steps, 25 s cold")
 def test_nuts_on_the_prior_meets_no_wall():
     """Fails if NUTS on the prior diverges as it does against a wall.
@@ -347,6 +355,7 @@ FAR_OUT = {
 }
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("name", list(FAR_OUT))
 def test_log_prob_far_out_is_minus_infinity_never_nan(name):
     """Fails if a coordinate of 1e5 gives NaN or +inf instead of a finite value or -inf.
@@ -361,6 +370,7 @@ def test_log_prob_far_out_is_minus_infinity_never_nan(name):
     _far_out_is_not_nan(block, model, block.coordinate_names, name)
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_thiele_innes_log_prob_far_out_is_minus_infinity_never_nan():
     """Fails if the Thiele-Innes block gives NaN or +inf at coordinates of 1e5."""
     block, model = _ti_block(rows=(1,)), _system_model()
@@ -530,6 +540,7 @@ def _wall_points(block, model, walls):
     return out
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("name", [k for k, (_, w) in WALLS.items() if w])
 def test_log_prob_is_minus_infinity_just_outside_each_wall(name):
     """Fails if a declared wall is not where the density drops to zero.
@@ -550,6 +561,7 @@ def test_log_prob_is_minus_infinity_just_outside_each_wall(name):
         assert np.isfinite(float(block.log_prob(inside, model))), wall
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("name", [k for k, (_, w) in WALLS.items() if not w])
 def test_a_block_with_no_walls_has_density_at_random_coordinates(name):
     """Fails if a block with ``walls == ()`` has a zero-density region.
@@ -569,6 +581,7 @@ def test_a_block_with_no_walls_has_density_at_random_coordinates(name):
     assert bool(jnp.all(jnp.isfinite(values)))
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize(
     "support",
     [(-jnp.inf, 1.5), (-0.5, jnp.inf), (-jnp.inf, jnp.inf)],
@@ -615,6 +628,7 @@ ZERO_EDGE_SIZES = {
 }
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("size", list(ZERO_EDGE_SIZES))
 def test_a_size_law_from_zero_has_a_finite_density_everywhere(size):
     """Fails if a size law whose support starts at or below zero reads NaN or a wall.

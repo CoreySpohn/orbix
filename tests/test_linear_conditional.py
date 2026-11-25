@@ -77,6 +77,7 @@ def test_sky_design_reproduces_the_projected_positions():
         sky_design(orbit, jnp.zeros((2, 2)))
 
 
+@pytest.mark.float64_only(reason="Gaussian fit coefficients, precision and evidence")
 @pytest.mark.parametrize("prior", ["scalar", "diagonal", "matrix"])
 def test_conditional_matches_a_direct_numpy_solve(prior):
     """Fails if the mean, the precision factor or the evidence is wrong.
@@ -102,6 +103,7 @@ def test_conditional_matches_a_direct_numpy_solve(prior):
     np.testing.assert_allclose(log_marginal, ref_marginal, rtol=1e-9, atol=0)
 
 
+@pytest.mark.float64_only(reason="Gaussian fit coefficients, precision and evidence")
 def test_a_zero_precision_record_is_inactive():
     """Fails if a masked record changes the mean, the factor or the evidence.
 
@@ -123,6 +125,7 @@ def test_a_zero_precision_record_is_inactive():
     np.testing.assert_allclose(log_marginal, ref_marginal, rtol=1e-9, atol=0)
 
 
+@pytest.mark.float64_only(reason="Gaussian fit coefficients, precision and evidence")
 def test_flat_prior_limit_is_the_least_squares_fit_of_fit_linear_map():
     """Fails if the conditional mean departs from the flat-prior fit.
 
@@ -148,6 +151,7 @@ def test_flat_prior_limit_is_the_least_squares_fit_of_fit_linear_map():
     np.testing.assert_allclose(inverse, covariance, rtol=1e-6, atol=1e-12)
 
 
+@pytest.mark.float64_only(reason="Gaussian fit coefficients, precision and evidence")
 def test_conditional_is_differentiable_and_jits():
     """Fails if the evidence has a non-finite gradient in the design or the data."""
     design, target, precision, *_ = _records()

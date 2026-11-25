@@ -26,6 +26,7 @@ def _round_trip(chart, x):
     return recovered, orbit.at(times), rebuilt.at(times)
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize(
     "chart",
     [
@@ -77,6 +78,7 @@ def test_round_trip(chart):
     assert not jax.tree.leaves(chart)
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("e,inc", [(0.0, 0.7), (0.3, 0.0), (0.3, np.pi)])
 @pytest.mark.parametrize("gauge_sd", [0.1, None])
 def test_frame_singular_round_trip(e, inc, gauge_sd):
@@ -103,6 +105,7 @@ def test_frame_singular_round_trip(e, inc, gauge_sd):
         )
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("scale_AU", [1.0, 3.0])
 def test_cartesian_orbit_round_trip(scale_AU):
     """Fails if Cartesian inversion loses generic, circular or face-on phase.
@@ -141,6 +144,7 @@ def _volume_comparison(source, target, x, mu=1.0):
     return source.log_volume(x) - target.log_volume(y), jac
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize(
     "source,target",
     [
@@ -203,6 +207,7 @@ def test_volume_against_automatic_jacobian(source, target):
             assert wrong_spread < 2e-11
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("scale_AU", [1.0, 3.0])
 @pytest.mark.parametrize("mu", [0.25, 4.0])
 def test_cartesian_volume_against_automatic_jacobian(scale_AU, mu):
@@ -243,6 +248,7 @@ def _orientation_sample(v):
     return -normal[..., 2], jnp.arctan2(-normal[..., 1], normal[..., 0])
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_frame_isotropy():
     """Fails if normalized Gaussian quaternions favor an inclination or node.
 
@@ -338,6 +344,7 @@ def test_frame_origin_autodiff(gauge_sd):
         assert np.isneginf(chart.log_volume(x))
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_uniform_in_e():
     """Fails if the 1/e prior retains an extra eccentricity-area factor.
 
@@ -431,6 +438,7 @@ def test_sky_block_geometry_of_projected_circular_frames():
     np.testing.assert_allclose(dgap, 2 * gap_true, atol=64 * eps * a_true**2, rtol=0)
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("sheet", [-1, 1])
 def test_thiele_innes_round_trip(sheet):
     """Fails if a sheet, circular phase, free mu, or batch broadcasting is lost.
@@ -479,6 +487,7 @@ def test_thiele_innes_round_trip(sheet):
     )
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("sheet", [-1, 1])
 def test_thiele_innes_volume(sheet):
     """Fails if sky determinant or the d ln(mu) factor of two is omitted.
@@ -511,6 +520,9 @@ def test_thiele_innes_volume(sheet):
     np.testing.assert_allclose(difference, logdet, atol=2e-11, rtol=0)
 
 
+@pytest.mark.float64_only(
+    reason="astrometric fit coefficients, covariance and chi-square"
+)
 def test_fit_linear_map_rank_and_masks():
     """Fails if AU/axis ordering, correlated weighting, or rank fallback is wrong.
 
@@ -561,6 +573,9 @@ def test_fit_linear_map_rank_and_masks():
         np.testing.assert_array_equal(value, np.zeros_like(value))
 
 
+@pytest.mark.float64_only(
+    reason="astrometric fit coefficients, covariance and chi-square"
+)
 def test_fit_linear_map_noise_distribution():
     """Fails if error correlation or covariance normalization biases pulls/chi2.
 
@@ -612,6 +627,7 @@ def test_disk_map_round_trip():
     )
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_periapsis_chart_shape():
     """Fails if the periapsis time is not the point where the orbit is at periapsis.
 
@@ -640,6 +656,7 @@ def test_periapsis_chart_shape():
     assert batch[0].shape == (2,)
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("sheet", [-1, 1])
 def test_line_of_sight_sheet(sheet):
     """Fails if the sheet read back from an orbit differs from the chart's sheet.

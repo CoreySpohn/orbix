@@ -58,6 +58,7 @@ def orbix_obs():
 # ============================================================================
 
 
+@pytest.mark.float64_only(reason="float64 reference values for orbital validation")
 @skip_no_exosims
 class TestPlanetPositions:
     """Orbix Vallado planets vs EXOSIMS JPL ephemeris.
@@ -100,6 +101,7 @@ class TestPlanetPositions:
 class TestL2HaloOrbit:
     """Compare orbix vs EXOSIMS L2 halo orbit positions."""
 
+    @pytest.mark.float64_only(reason="float64 reference values for orbital validation")
     @pytest.mark.parametrize(
         "mjd",
         [
@@ -136,6 +138,7 @@ class TestL2HaloOrbit:
             dist = np.linalg.norm(r)
             assert 0.99 < dist < 1.03, f"Distance = {dist} AU at MJD {mjd}"
 
+    @pytest.mark.float64_only(reason="float64 reference values for orbital validation")
     def test_halo_period_match(self, orbix_obs, exo_obs):
         """Halo period should match EXOSIMS."""
         np.testing.assert_allclose(orbix_obs.period_yr, exo_obs.period_halo, rtol=1e-6)
@@ -146,6 +149,7 @@ class TestL2HaloOrbit:
 # ============================================================================
 
 
+@pytest.mark.float64_only(reason="float64 reference values for orbital validation")
 @skip_no_exosims
 class TestObliquity:
     """Compare the J2000 obliquity."""

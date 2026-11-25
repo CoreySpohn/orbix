@@ -2,11 +2,10 @@
 
 import jax
 import jax.numpy as jnp
+import pytest
 from jax.test_util import check_grads
 
 from orbix.equations import lambert_solve, lambert_tof_min
-
-jax.config.update("jax_enable_x64", True)
 
 MU = 1.0
 
@@ -169,6 +168,7 @@ def test_valid_flag_matches_tof_min_boundary():
         assert not bool(valid_below)
 
 
+@pytest.mark.float64_only(reason="finite-difference derivative reference")
 def test_gradients_match_finite_differences():
     """Implicit-function gradients through the solve match finite differences."""
     r1, _, r2, _, tof, long_way = _two_epoch_fixture(dM=1.6)
@@ -180,6 +180,7 @@ def test_gradients_match_finite_differences():
     check_grads(loss, (r1, r2, tof, MU), order=1, modes=["rev"], atol=1e-4, rtol=1e-4)
 
 
+@pytest.mark.float64_only(reason="finite-difference derivative reference")
 def test_gradients_match_finite_differences_multirev():
     """Gradients are also implicit-function-correct on a multi-rev branch."""
     r1, _, r2, _, tof, long_way = _two_epoch_fixture(dM=1.6, n_rev=2)

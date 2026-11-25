@@ -222,6 +222,7 @@ def test_a_block_reports_the_names_and_periods_of_its_chart(chart):
     assert open_block.coordinate_names == chart.coordinate_names
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("chart", CHARTS, ids=_id)
 @pytest.mark.parametrize("rows", [(1,), (0, 2)])
 def test_forward_of_inverse_reproduces_the_orbits(model, chart, rows):
@@ -249,6 +250,7 @@ def test_forward_of_inverse_reproduces_the_orbits(model, chart, rows):
     assert jnp.array_equal(new.quat[jnp.asarray(held)], old.quat[jnp.asarray(held)])
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize(
     "chart", [ClassicalChart(), EccentricityVectorChart()], ids=_id
 )
@@ -273,6 +275,7 @@ def test_inverse_of_forward_recovers_the_coordinates(model, chart):
         np.testing.assert_allclose(back[name], x[name], atol=1e-10, err_msg=name)
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_forward_follows_the_masses_of_the_model(model):
     """Fails if a row keeps the old star mass after another entry changes it."""
     block = _block(ClassicalChart(), (1,))
@@ -291,6 +294,7 @@ def test_forward_follows_the_masses_of_the_model(model):
     assert orbit.n_rad_per_d[0] != model.dynamics.orbits.n_rad_per_d[0]
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_forward_is_a_per_draw_function_that_batches_with_vmap(model):
     """Fails if forward cannot be vmapped over draws, or is not traceable."""
     block = _block(ClassicalChart(), (0, 1))
@@ -309,6 +313,7 @@ def test_forward_is_a_per_draw_function_that_batches_with_vmap(model):
     assert all(v.shape == (3, 2) for v in draws.values())
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_thiele_innes_forward_of_inverse_reproduces_orbit_and_star_mass(model):
     """Fails if the implied star mass or the row is not reproduced.
 
@@ -570,6 +575,7 @@ CASES = {
 }
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("name", list(CASES))
 def test_orbit_block_density_is_normalized_and_matches_its_draws(name):
     """Fails if the density does not integrate to one, or its draws follow another one.
@@ -639,6 +645,7 @@ THIELE_INNES = {
 }
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("name", list(THIELE_INNES))
 def test_thiele_innes_block_density_is_normalized_and_matches_its_draws(name):
     """Fails if the sheet sum, the mass law or the star-mass Jacobian is wrong.
@@ -661,6 +668,7 @@ def test_thiele_innes_block_density_is_normalized_and_matches_its_draws(name):
         _check_means(block, model, coords, weight, summary)
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_the_tilted_law_differs_between_the_two_sheets():
     """Fails if the asymmetric test law is symmetric, which would make it vacuous."""
     x = jnp.array([[-4.0, 0.3, -0.2, 0.4, 0.5, -0.3, 0.45]])
@@ -676,6 +684,7 @@ def test_the_tilted_law_differs_between_the_two_sheets():
     assert abs(float(laws[0][0] - laws[1][0])) > 0.1
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_thiele_innes_sheet_sum_is_log_two_for_a_symmetric_law():
     """Fails if a symmetric law is not log 2 above the one-sheet density."""
     model = _system_model()
@@ -700,6 +709,7 @@ def test_thiele_innes_sheet_sum_is_log_two_for_a_symmetric_law():
     )
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_a_two_row_block_is_the_sum_of_its_rows(model):
     """Fails if per-row law parameters are not broadcast over the freed rows.
 
@@ -728,6 +738,7 @@ def test_a_two_row_block_is_the_sum_of_its_rows(model):
     assert np.isfinite(both.log_prob(draw, model))
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("shape", [(), (1,)])
 def test_a_two_row_block_draws_rows_independently_and_its_density_is_joint(shape):
     """Fails if rows of a block share one draw, or the density is not the row sum.
@@ -854,6 +865,7 @@ def test_same_map_compares_the_support_and_nothing_else_of_the_law():
     assert ti.same_layout(_ti_block(TI_P_LAW))
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_inverse_is_nan_outside_the_support_and_finite_at_its_edge():
     """Fails if a model value outside the law bounds keeps a finite wall coordinate.
 

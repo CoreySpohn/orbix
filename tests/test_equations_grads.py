@@ -9,8 +9,6 @@ from hwoutils.constants import GM_SUN_AU3_PER_D2, AU2m, d2s
 from orbix.equations.orbit import state_vector_to_keplerian
 from orbix.system import FrameOrbit
 
-jax.config.update("jax_enable_x64", True)
-
 
 def _elements_sum(r, v, mu):
     out = state_vector_to_keplerian(r, v, mu)
@@ -160,6 +158,9 @@ def test_elements_state_round_trip_degenerate_grid():
     np.testing.assert_array_equal(elements[3][equatorial], 0.0)
 
 
+@pytest.mark.float64_only(
+    reason="float64 JAX reference for the float32 precision comparison"
+)
 @pytest.mark.parametrize("phase", [3 * np.pi / 2, 0.8])
 @pytest.mark.parametrize("length", [AU2m, 1.0], ids=["si", "au_seconds"])
 def test_float32_circular_state_and_gradients(phase, length):
@@ -198,6 +199,9 @@ def test_float32_circular_state_and_gradients(phase, length):
         )
 
 
+@pytest.mark.float64_only(
+    reason="float64 JAX reference for the float32 precision comparison"
+)
 @pytest.mark.parametrize("inclination", [1e-16, np.pi], ids=["prograde", "retrograde"])
 def test_float32_near_equatorial_gradients_finite(inclination):
     """Truth: a float64 solar ellipse in AU/seconds, cast to float32.
@@ -228,6 +232,9 @@ def test_float32_near_equatorial_gradients_finite(inclination):
         )
 
 
+@pytest.mark.float64_only(
+    reason="float64 JAX reference for the float32 precision comparison"
+)
 @pytest.mark.parametrize("eccentricity", [0.0, 0.3], ids=["circular", "eccentric"])
 @pytest.mark.parametrize("phase", [3 * np.pi / 2, 0.8])
 def test_float32_si_derivatives_match_float64(eccentricity, phase):
@@ -297,6 +304,9 @@ def test_float32_si_exact_circle_takes_circular_branch():
         assert all(np.isfinite(x).all() for x in jax.tree.leaves(evaluate(r, v, mu)))
 
 
+@pytest.mark.float64_only(
+    reason="float64 JAX reference for the float32 precision comparison"
+)
 def test_float32_periapsis_derivative_near_node_matches_float64():
     """Truth: float64 central differences on the same float32 AU/s states.
 
