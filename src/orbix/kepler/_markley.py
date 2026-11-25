@@ -11,7 +11,6 @@ cannot be recovered.
 
 import jax
 import jax.numpy as jnp
-from hwoutils.constants import two_pi
 
 _if3 = 1.0 / 6.0
 _if5 = 1.0 / (6.0 * 20.0)
@@ -68,17 +67,14 @@ def _markley_pair(M, e):
     """Evaluate Markley's algorithm without a derivative rule."""
     dtype = jnp.result_type(M, e, 0.0)
     M, e = jnp.asarray(M, dtype=dtype), jnp.asarray(e, dtype=dtype)
-    reduced = jnp.fmod(M, two_pi)
-    absolute = jnp.abs(reduced)
-    reflected = absolute > jnp.pi
-    # Recover the tail of 2*pi when reflecting across the upper half orbit.
-    # Without it, a 2.45e-16 phase error becomes a ~1e-6 E error near e = 1.
-    # dtype.type executes at trace time and accounts for float32 rounding too.
-    period_tail = (two_pi - float(reduced.dtype.type(two_pi))) + 2.4492935982947064e-16
-    # Otherwise XLA reassociates the constants and rounds the tail away.
-    distance = jax.lax.optimization_barrier(two_pi - absolute)
-    mean = jnp.where(reflected, distance + period_tail, absolute)
-    negative = (reduced < 0) ^ reflected
+    reduced = jnp.arctan2(jnp.sin(M), jnp.cos(M))
+    return _markley_reduced(reduced, e)
+
+
+def _markley_reduced(signed_mean, e):
+    """Solve for a signed principal mean that has already been reduced."""
+    mean = jnp.abs(signed_mean)
+    negative = signed_mean < 0
     ome = 1 - e
 
     alpha = (3 * jnp.pi + 1.6 * (jnp.pi - mean) / (1 + e)) / (jnp.pi - 6 / jnp.pi)

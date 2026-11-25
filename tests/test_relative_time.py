@@ -15,6 +15,8 @@ import numpy as np
 import pytest
 from hwoutils.epoch import Epoch
 from hwoutils.leaves import check_tree
+from hwoutils.numerics import roundoff
+from hwoutils.testing import precision_pair
 
 from orbix.observatory import Observatory, ObservatoryL2Halo, sun_ecliptic_longitude_deg
 from orbix.observatory.orbit import epoch_mjd
@@ -40,15 +42,16 @@ _LATE_ODD = Epoch(2400000.5, 80000.3137, scale="tt")
 # by about 6e-6 AU, which float32 phase rounding would flip across.
 
 
-@pytest.mark.float64_only(reason="float64 parity with the pre-conditioning ephemeris")
-def test_x64_matches_base_code():
-    """Fails if the host re-expansion or halo phase reduction changes a float64 result.
+def test_positions_match_base_code():
+    """Positions agree with the float64 absolute-date implementation in both lanes.
 
     Truth: positions stored from the absolute-MJD implementation this change
     replaced, in float64, for three epochs (one 53 yr from the halo equinox),
     times to 1000 d and two halo start offsets. Tolerance basis: floating-point.
-    The same float64 arithmetic is done in a different order (polynomial shift,
-    angle reduction, phase reduction), so the bound is 1e-12 of the vector norm.
+    Two roundings of the reference MJD at 0.018 AU/day bound its time error.
+    The working path rounds its phase on conversion to centuries, scaling
+    by the mean motion, adding the intercept, and converting to radians.
+    Twelve unit-radius operations cover the trig, rotation and halo sum.
     """
     for rec in _REFERENCE["positions"]:
         epoch = _EPOCHS[rec["epoch"]]
@@ -58,7 +61,15 @@ def test_x64_matches_base_code():
             (earth_position_ecliptic(epoch, rec["time_d"]), rec["earth"]),
         ):
             want = np.asarray(want)
-            assert np.abs(np.asarray(got) - want).max() <= 1e-12 * np.linalg.norm(want)
+            radius = np.linalg.norm(want)
+            t = rec["time_d"]
+            reference_error = 2 * np.spacing(float(epoch_mjd(epoch, t))) * 0.018
+            phase = 2 * np.pi + 0.018 * abs(t)
+            atol = reference_error + radius * float(
+                roundoff(phase, n_ops=4, dtype=got.dtype)
+                + roundoff(1.0, n_ops=12, dtype=got.dtype)
+            )
+            np.testing.assert_allclose(got, want, atol=atol, rtol=0)
     assert len(_REFERENCE["positions"]) == 18
 
 
@@ -168,17 +179,22 @@ def test_x32_sun_longitude_agrees_with_x64():
     (the angle and Kepler arithmetic add a few steps), and the bound of 3e-4 deg
     is five steps. The absolute-date implementation errs by about 1e-3 deg.
     """
-    times = np.linspace(0.0, 1000.0, 401)
-    worst = 0.0
+    times = jnp.linspace(0.0, 1000.0, 401)
+
+    def direction(epoch, t):
+        angle = sun_ecliptic_longitude_deg(epoch, t)
+        assert angle.dtype == t.dtype
+        # Unit phasors compare across the 360-degree seam; the chord is at
+        # most the angular separation in radians.
+        return jnp.exp(1j * jnp.radians(angle))
+
     for epoch in (*_EPOCHS.values(), _LATE_ODD):
-        want = np.asarray(sun_ecliptic_longitude_deg(epoch, times))
-        with jax.enable_x64(False):
-            got = np.asarray(
-                sun_ecliptic_longitude_deg(epoch, times.astype(np.float32)),
-                dtype=np.float64,
-            )
-        worst = max(worst, float(np.abs((want - got + 180.0) % 360.0 - 180.0).max()))
-    assert worst < 3e-4, worst
+        precision_pair(
+            lambda t, epoch=epoch: direction(epoch, t),
+            (times,),
+            bound=2 * np.sin(np.radians(3e-4) / 2),
+            scale=1.0,
+        )
 
 
 def test_epoch_mjd_is_host_only():

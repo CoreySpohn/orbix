@@ -30,6 +30,8 @@ from eyepiece.prepared import (
     weight_opacity,
 )
 from hwoutils.constants import G, Msun2kg, pc2AU, rad2arcsec
+from hwoutils.epoch import Epoch
+from hwoutils.testing import ulps
 
 from orbix.system import Body, FrameOrbit, SkyFrame, System
 from orbix.viz import prepare_sky_track, prepare_sky_view
@@ -112,6 +114,28 @@ def test_sampling_does_not_invent_iwa_crossing():
 
 
 # --- raw tracks ------------------------------------------------------------------
+
+
+def test_subday_samples_follow_a_circular_orbit_at_a_late_epoch():
+    """Binary day offsets and frame indices are exact on the host.
+
+    Compare the sky path to the closed-form float64 circular orbit. Sixteen
+    radius-scale roundings cover the mean motion, trig pair, frame rotation
+    and angular conversion. All four absolute dates round to one float32 JD.
+    """
+    frame = SkyFrame(DIST_PC, epoch=Epoch(2460000.0, 0.03125))
+    offsets = np.arange(4) / 64
+    dates = frame.epoch.jd(offsets)
+    orbit = _circular_orbit()
+    sequence = prepare_sky_track(orbit, time_d=frame.time_d(jd=dates), **STELLAR)
+    np.testing.assert_array_equal(sequence.times, offsets)
+    phase = np.sqrt(G * Msun2kg) * offsets
+    radius = _circle_radius_arcsec()
+    truth = radius * np.column_stack((np.sin(phase), np.cos(phase)))
+    atol = float(ulps(16, jnp.asarray(radius, dtype=orbit.a_AU.dtype)))
+    np.testing.assert_allclose(
+        find_element(sequence.template, "path/0").xy, truth, rtol=0, atol=atol
+    )
 
 
 def test_raw_track_is_borrowed_and_every_frame_holds_a_sample():

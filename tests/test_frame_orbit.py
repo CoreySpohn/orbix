@@ -6,6 +6,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from hwoutils.constants import G, Msun2kg
+from hwoutils.numerics import roundoff
+from hwoutils.testing import ulps
 from jax.test_util import check_grads
 
 from orbix.equations.orbit import thiele_innes_constants
@@ -62,8 +64,10 @@ def test_classical_round_trip_and_mechanical_invariants(e, inc):
     """Fails if the angle chart, analytic velocity or orbital scale is wrong.
 
     Truth: energy=-mu/(2a), h^2=mu*a*(1-e^2), and the initial classical
-    elements (Murray and Dermott, Solar System Dynamics). Allow 3e-13
-    relative/absolute for accumulated x64 rotation and Kepler roundoff;
+    elements (Murray and Dermott, Solar System Dynamics). Allow 32 operations
+    for Kepler evaluation, quaternion rotation and element recovery;
+    energy and angular momentum are compared at their kinetic/potential
+    and r*v scales. Recovering mu takes four powers/products/root;
     angles are compared modulo 2*pi, avoiding undefined circular views.
     """
     a, mu = 1.7, G * Msun2kg
@@ -73,24 +77,36 @@ def test_classical_round_trip_and_mechanical_invariants(e, inc):
     actual = np.array(
         [elements[k] for k in ("a_AU", "e", "i_rad", "W_rad", "w_rad", "M0_rad")]
     )
-    np.testing.assert_allclose(actual[:3], expected[:3], rtol=3e-13, atol=3e-13)
+    tol = float(roundoff(1.0, n_ops=32, dtype=actual.dtype))
+    np.testing.assert_allclose(actual[:3], expected[:3], rtol=0, atol=tol)
     delta = actual[3:] - expected[3:]
-    np.testing.assert_allclose(np.arctan2(np.sin(delta), np.cos(delta)), 0, atol=3e-13)
+    np.testing.assert_allclose(
+        np.arctan2(np.sin(delta), np.cos(delta)), 0, atol=tol, rtol=0
+    )
     times = 17.0 + np.linspace(0, 2, 9) * float(orbit.period_d)
     r, v = map(np.asarray, orbit.at(times))
     energy = np.sum(v * v, -1) / 2 - mu / np.linalg.norm(r, axis=-1)
     h = np.cross(r, v)
-    np.testing.assert_allclose(energy, -mu / (2 * a), rtol=3e-13)
     np.testing.assert_allclose(
-        h, np.broadcast_to(h[0], h.shape), rtol=3e-13, atol=3e-16
+        energy, -mu / (2 * a), atol=tol * mu / (a * (1 - e)), rtol=0
     )
-    np.testing.assert_allclose(np.sum(h * h, -1), mu * a * (1 - e * e), rtol=3e-13)
-    np.testing.assert_allclose(orbit.mu_AU3_per_d2, mu, rtol=3e-15)
+    np.testing.assert_allclose(
+        h, np.broadcast_to(h[0], h.shape), rtol=0, atol=tol * np.sqrt(mu * a)
+    )
+    np.testing.assert_allclose(
+        np.sum(h * h, -1), mu * a * (1 - e * e), rtol=tol, atol=0
+    )
+    np.testing.assert_allclose(
+        orbit.mu_AU3_per_d2,
+        mu,
+        rtol=float(roundoff(1.0, n_ops=4, dtype=actual.dtype)),
+        atol=0,
+    )
     # The same closed-form ellipse has pericenter/apocenter radii a*(1-/+e).
     tp = 17.0 - 0.2 / float(orbit.n_rad_per_d)
     extrema = orbit.at(jnp.array([tp, tp + float(orbit.period_d) / 2]))[0]
     np.testing.assert_allclose(
-        np.linalg.norm(extrema, axis=-1), a * np.array([1 - e, 1 + e]), rtol=3e-13
+        np.linalg.norm(extrema, axis=-1), a * np.array([1 - e, 1 + e]), rtol=tol, atol=0
     )
 
 
@@ -99,8 +115,8 @@ def test_circular_closed_form(solver):
     """Fails if the frame's epoch phase or time/velocity units drift.
 
     Truth: r=a*(sin(l), cos(l), 0), l=n*(t-epoch), in the pinned sky
-    convention. Absolute tolerances 2e-14 AU and 2e-16 AU/day allow x64
-    trig/rotation roundoff; a circular solve is exact for either strategy.
+    convention. Eight operations for n, phase, sine/cosine and scaling
+    bound the error at a*max(1,|l|) AU or a*n*max(1,|l|) AU/day.
     """
     a, n, epoch = 1.4, 0.03, 31.0
     orbit = FrameOrbit.from_classical(
@@ -111,17 +127,19 @@ def test_circular_closed_form(solver):
     r = a * np.stack([np.sin(angle), np.cos(angle), np.zeros(3)], -1)
     v = a * n * np.stack([np.cos(angle), -np.sin(angle), np.zeros(3)], -1)
     actual_r, actual_v = orbit.at(times, solver=solver)
-    np.testing.assert_allclose(actual_r, r, atol=2e-14, rtol=0)
-    np.testing.assert_allclose(actual_v, v, atol=2e-16, rtol=0)
+    tol = float(roundoff(a * np.max(np.abs(angle)), n_ops=8, dtype=actual_r.dtype))
+    np.testing.assert_allclose(actual_r, r, atol=tol, rtol=0)
+    np.testing.assert_allclose(actual_v, v, atol=tol * n, rtol=0)
 
 
 @pytest.mark.parametrize("batch", [(), (3,), (2, 3)])
 def test_batch_contract_and_vmap(batch):
     """Fails if time and orbit axes pair silently or external vmap changes values.
 
-    Truth: scalar evaluation and elementwise broadcasting; allow 2e-14 AU
-    for x64 fused arithmetic. Nonconstant phases distinguish draw and planet
-    axes; two-dimensional times pin the complete outer-product contract.
+    Truth: scalar evaluation and elementwise broadcasting. The two paths
+    differ by fusion of products and adds in the Kepler correction and
+    two-column projection; allow eight operations at the vector scale.
+    Nonconstant phases and 2D times pin the complete outer-product contract.
     """
     mean = jnp.arange(max(1, np.prod(batch))).reshape(batch) * 0.1
     orbit = FrameOrbit.from_classical(1.4, 0.2, 0.7, 0.4, 0.3, mean, mu_AU3_per_d2=1.0)
@@ -135,7 +153,10 @@ def test_batch_contract_and_vmap(batch):
     expected = jax.vmap(lambda o: o.at(time))(flat)
     for actual, value in zip((r, v), expected, strict=True):
         np.testing.assert_allclose(
-            actual, value.reshape(actual.shape), atol=2e-14, rtol=0
+            actual,
+            value.reshape(actual.shape),
+            atol=float(ulps(8, jnp.max(jnp.abs(value)))),
+            rtol=0,
         )
     paired_time = jnp.arange(3) * 0.1 if batch else jnp.array([0.1, 0.2, 0.3])
     paired = orbit.at_each(paired_time)
@@ -146,39 +167,61 @@ def test_batch_contract_and_vmap(batch):
             np.testing.assert_allclose(
                 actual[..., k, :] if batch else actual[k],
                 value[..., k, :] if batch else value,
-                atol=2e-14,
+                atol=float(ulps(8, jnp.max(jnp.abs(value)))),
                 rtol=0,
             )
     if len(batch) == 2:
         mapped = jax.vmap(lambda draw: draw.at(time))(orbit)
-        np.testing.assert_allclose(mapped, (r, v), atol=2e-14, rtol=0)
+        for actual, value in zip(mapped, (r, v), strict=True):
+            np.testing.assert_allclose(
+                actual, value, atol=float(ulps(8, jnp.max(jnp.abs(value)))), rtol=0
+            )
 
 
-@pytest.mark.float64_only(
-    reason="float64 JAX reference for the float32 precision comparison"
-)
-def test_float32_long_baseline():
-    """Fails if day offsets lose more than 1e-5 of a over twenty years.
-
-    Truth: identical float64 state and Markley evaluation. For a=1 AU and
-    e=0.2, phase multiplication over 126 radians dominates float32 error.
-    The measured maximum vector residual is 7.93222044e-6*a; the 1e-5*a
-    bound covers that rounding floor without using Julian dates.
-    """
-
-    def evaluate():
-        orbit = FrameOrbit.from_classical(
-            1.0, 0.2, 0.7, 0.4, 0.3, 0.2, mu_AU3_per_d2=G * Msun2kg
+def _eccentric_anomaly(mean, e):
+    """Independent host float64 Newton solution at each phase."""
+    mean = (np.asarray(mean, dtype=np.float64) + np.pi) % (2 * np.pi) - np.pi
+    eccentric = np.where(mean >= 0, np.pi, -np.pi)
+    for _ in range(20):
+        eccentric -= (eccentric - e * np.sin(eccentric) - mean) / (
+            1 - e * np.cos(eccentric)
         )
-        return orbit.at(jnp.linspace(0.0, 20 * 365.25, 33))[0]
+    return eccentric
 
-    expected = np.asarray(evaluate())
-    with jax.enable_x64(False):
-        actual = evaluate()
-        assert actual.dtype == jnp.float32
-        residual = np.max(np.linalg.norm(np.asarray(actual) - expected, axis=-1))
-    print(f"float32 max residual/a: {residual:.17g}")
-    assert residual < 1e-5
+
+def test_long_baseline(precision):
+    """Position on a 1 AU ellipse from an independent float64 Newton solve.
+
+    Over twenty years the mean anomaly spans 126 rad. Four operations for
+    n and its multiplication by time propagate to E via 1/(1-e); 32 more
+    cover the local solve and rotation. The float32 maximum vector-error
+    allowance of 1e-5 AU also enforces the measured 7.93e-6 AU floor.
+    """
+    mu, e, inc, node, peri = G * Msun2kg, 0.2, 0.7, 0.4, 0.3
+    times = np.linspace(0.0, 20 * 365.25, 33)
+    mean = 0.2 + np.sqrt(mu) * times
+    eccentric = _eccentric_anomaly(mean, e)
+    x, y = np.cos(eccentric) - e, np.sqrt(1 - e**2) * np.sin(eccentric)
+    u = x * np.cos(peri) - y * np.sin(peri)
+    v = x * np.sin(peri) + y * np.cos(peri)
+    expected = np.stack(
+        [
+            u * np.sin(node) + v * np.cos(inc) * np.cos(node),
+            u * np.cos(node) - v * np.cos(inc) * np.sin(node),
+            v * np.sin(inc),
+        ],
+        -1,
+    )
+    orbit = FrameOrbit.from_classical(1.0, e, inc, node, peri, 0.2, mu_AU3_per_d2=mu)
+    assert all(leaf.dtype == precision for leaf in jax.tree.leaves(orbit))
+    bound = float(roundoff(1.0, n_ops=32, dtype=precision)) + float(
+        roundoff(1.0, n_ops=4, dtype=precision)
+    ) * np.abs(mean) / (1 - e)
+    for propagate in (FrameOrbit.at, jax.jit(FrameOrbit.at)):
+        position, _ = propagate(orbit, times)
+        assert position.dtype == precision
+        residual = np.linalg.norm(np.asarray(position) - expected, axis=-1)
+        assert np.all(residual <= np.minimum(bound, 1e-5))
 
 
 def test_shape_validation():
@@ -202,7 +245,11 @@ def test_plane_factorization(time, solver, precision):
 
     Truth: the propagated state for the generic and singular element sets
     above, batched together. Trig construction must match every state leaf
-    and propagated position/rate to 1e-13 in float64.
+    and propagated position/rate. Allow 32 operations for the trig chart,
+    quaternion construction and projection at each leaf scale. A two-term
+    matrix product needs at most four multiply/add roundings at the sum
+    of absolute products. JIT can fuse n*(t-epoch), with phase errors
+    amplified by 1/(1-e) in E and twice more in the velocity denominator.
     Both solvers must supply the same position and analytic-rate contract.
     """
     elements = np.array(
@@ -244,16 +291,17 @@ def test_plane_factorization(time, solver, precision):
         mu_AU3_per_d2=1.0,
         epoch_d=17.0,
     )
+    tol = float(roundoff(1.0, n_ops=32, dtype=orbit.a_AU.dtype))
     for actual, expected in zip(
         jax.tree.leaves(trig), jax.tree.leaves(orbit), strict=True
     ):
         assert actual.dtype == precision
-        np.testing.assert_allclose(actual, expected, rtol=1e-13, atol=1e-13)
+        np.testing.assert_allclose(actual, expected, rtol=tol, atol=tol)
     np.testing.assert_allclose(
         trig.at(time, solver=solver),
         orbit.at(time, solver=solver),
-        rtol=1e-13,
-        atol=1e-13,
+        rtol=tol,
+        atol=tol,
     )
     xy, xy_rate = orbit.plane_coordinates(time, solver=solver)
     basis = orbit.plane_basis()
@@ -265,11 +313,13 @@ def test_plane_factorization(time, solver, precision):
     expected = orbit.at(time, solver=solver)
     for coordinates, state in zip((xy, xy_rate), expected, strict=True):
         actual = (basis @ np.asarray(coordinates)[..., None])[..., 0]
-        np.testing.assert_allclose(actual, state, rtol=1e-13, atol=0)
+        scale = np.max(np.abs(basis) @ np.abs(np.asarray(coordinates)[..., None]))
         np.testing.assert_allclose(
-            actual, state, rtol=8 * np.finfo(float).eps, atol=8 * np.finfo(float).eps
+            actual,
+            state,
+            rtol=0,
+            atol=float(roundoff(scale, n_ops=4, dtype=state.dtype)),
         )
-    # Two-term matrix products differ only by fusion: 8 eps times the scale.
     paired_time = jnp.asarray(mean)
     for coords, state in zip(
         orbit.in_plane_each(paired_time, solver=solver),
@@ -277,24 +327,44 @@ def test_plane_factorization(time, solver, precision):
         strict=True,
     ):
         product = (orbit.linear_map @ coords[..., None])[..., 0]
-        np.testing.assert_allclose(product, state, atol=8 * np.finfo(float).eps, rtol=0)
+        np.testing.assert_allclose(
+            product,
+            state,
+            atol=float(
+                ulps(4, jnp.max(jnp.abs(orbit.linear_map) @ jnp.abs(coords[..., None])))
+            ),
+            rtol=0,
+        )
     if solver == Markley() and np.ndim(time) == 1:
 
         def factors(o):
             return o.linear_map, o.in_plane(time), o.in_plane_each(paired_time[0])
 
-        eager = factors(orbit)
-        for actual in (jax.jit(factors)(orbit), jax.vmap(factors)(orbit)):
-            for left, right in zip(
-                jax.tree.leaves(actual), jax.tree.leaves(eager), strict=True
-            ):
-                np.testing.assert_allclose(left, right, atol=2e-14, rtol=2e-14)
+        expected_basis, outer, paired = factors(orbit)
         loop = [factors(jax.tree.map(lambda a, k=k: a[k], orbit)) for k in range(2)]
         stacked = jax.tree.map(lambda *a: jnp.stack(a), *loop)
-        for left, right in zip(
-            jax.tree.leaves(stacked), jax.tree.leaves(eager), strict=True
+        for got_basis, got_outer, got_paired in (
+            jax.jit(factors)(orbit),
+            jax.vmap(factors)(orbit),
+            stacked,
         ):
-            np.testing.assert_allclose(left, right, atol=2e-14, rtol=2e-14)
+            np.testing.assert_allclose(
+                got_basis, expected_basis, atol=tol * 1.3, rtol=0
+            )
+            for (xy, rate), (exp_xy, exp_rate), t in (
+                (got_outer, outer, time),
+                (got_paired, paired, paired_time[0]),
+            ):
+                n = np.asarray(orbit.n_rad_per_d).reshape(
+                    xy.shape[:-1][:2] + (1,) * (xy.ndim - 3)
+                )
+                e = np.asarray(orbit.e).reshape(n.shape)
+                slope = np.linalg.norm(exp_xy, axis=-1)
+                phase = np.abs(n * (np.asarray(t) - 17.0))
+                dE = np.asarray(roundoff(phase, n_ops=2, dtype=xy.dtype)) / slope
+                assert np.all(np.abs(xy - exp_xy) <= (tol + dE)[..., None])
+                rate_bound = n / slope * (tol + dE * (1 + e / slope))
+                assert np.all(np.abs(rate - exp_rate) <= rate_bound[..., None])
 
 
 @pytest.mark.parametrize("e,inc", [(0.05, 0.7), (0.6, 1.1), (0.95, 2.6)])
@@ -302,9 +372,11 @@ def test_perifocal_coordinates_and_thiele_innes(e, inc):
     """Fails if perifocal rates or periapsis/east/north rotations change signs.
 
     Truth: NumPy Newton iteration for E-e*sin(E)=M and the classical
-    Thiele-Innes formulas, including a retrograde orbit. Float64 permits
-    1e-12 relative plus 1e-14 absolute near coordinate zeros. Rates match
-    central differences at h=1e-5 days to 1e-7 relative.
+    Thiele-Innes formulas, including a retrograde orbit. The Kepler
+    sensitivity dE/dM=1/(1-e*cos(E)) multiplies two time/phase roundings.
+    Rates differentiate the same independent ellipse analytically. Allow
+    32 local operations at the position/rate scale, and 16 products/adds
+    in the quaternion basis versus the classical sky coefficients.
     """
     a, node, peri, mean, epoch = 1.7, 0.4, 0.7, 0.2, 17.0
     orbit = FrameOrbit.from_classical(
@@ -312,23 +384,23 @@ def test_perifocal_coordinates_and_thiele_innes(e, inc):
     )
     times = epoch + np.array([-0.2, 0.0, 0.13, 0.5, 0.9]) * float(orbit.period_d)
     anomaly = mean + float(orbit.n_rad_per_d) * (times - epoch)
-    anomaly = (anomaly + np.pi) % (2 * np.pi) - np.pi
-    eccentric = np.where(anomaly >= 0, np.pi, -np.pi)
-    for _ in range(20):
-        eccentric -= (eccentric - e * np.sin(eccentric) - anomaly) / (
-            1 - e * np.cos(eccentric)
-        )
+    eccentric = _eccentric_anomaly(anomaly, e)
     expected = np.stack(
         [np.cos(eccentric) - e, np.sqrt(1 - e * e) * np.sin(eccentric)], -1
     )
     actual, rate = orbit.perifocal_coordinates(times)
-    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-14)
-    step = 1e-5
-    difference = (
-        orbit.perifocal_coordinates(times + step)[0]
-        - orbit.perifocal_coordinates(times - step)[0]
-    ) / (2 * step)
-    np.testing.assert_allclose(rate, difference, rtol=1e-7, atol=0)
+    n = float(orbit.n_rad_per_d)
+    slope = 1 - e * np.cos(eccentric)
+    tol = float(roundoff(1.0, n_ops=32, dtype=actual.dtype))
+    phase_error = (
+        float(roundoff(n * np.max(np.abs(times)), n_ops=2, dtype=actual.dtype)) / slope
+    )
+    assert np.all(np.abs(np.asarray(actual) - expected) <= (tol + phase_error)[:, None])
+    expected_rate = np.stack(
+        [-np.sin(eccentric), np.sqrt(1 - e**2) * np.cos(eccentric)], -1
+    ) * (n / slope[:, None])
+    rate_bound = (tol + phase_error * (1 + e / slope)) * n / slope
+    assert np.all(np.abs(np.asarray(rate) - expected_rate) <= rate_bound[:, None])
     cO, sO, cw, sw, ci = (
         np.cos(node),
         np.sin(node),
@@ -348,13 +420,13 @@ def test_perifocal_coordinates_and_thiele_innes(e, inc):
         classical,
         constants[[1, 3, 0, 2]].reshape(2, 2),
         rtol=0,
-        atol=16 * np.finfo(float).eps * a,
+        atol=float(roundoff(a, n_ops=16, dtype=actual.dtype)),
     )
     sky = np.asarray(actual) @ np.array([[B, A], [G, F]])
-    np.testing.assert_allclose(sky, orbit.at(times)[0][..., :2], rtol=1e-12, atol=1e-14)
+    np.testing.assert_allclose(sky, orbit.at(times)[0][..., :2], rtol=0, atol=tol * a)
     sky_rate = np.asarray(rate) @ np.array([[B, A], [G, F]])
     np.testing.assert_allclose(
-        sky_rate, orbit.at(times)[1][..., :2], rtol=1e-12, atol=1e-14
+        sky_rate, orbit.at(times)[1][..., :2], rtol=0, atol=tol * a * n / np.min(slope)
     )
 
 

@@ -490,7 +490,7 @@ def test_same_map_tracks_the_supports_and_the_time():
     moved_mean = _block((1,), (BOUNDED[0], priorities.Normal(0.3, 0.5)))
     assert block.same_layout(moved_mean) and block.same_map(moved_mean)
     wider = _block((1,), (priorities.Uniform(-2.0, 2.0), BOUNDED[1]))
-    later = _block((1,), BOUNDED, time_d=TIME + 1.0)
+    later = _block((1,), BOUNDED, time_d=TIME + float(np.spacing(np.float32(TIME))))
     for other in (wider, later):
         assert block.same_layout(other) and not block.same_map(other)
     assert not block.same_layout(_block((2,), BOUNDED))

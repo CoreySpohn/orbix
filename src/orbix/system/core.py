@@ -11,8 +11,10 @@ from typing import ClassVar
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 from hwoutils.constants import GM_SUN_AU3_PER_D2
 from hwoutils.epoch import Epoch
+from hwoutils.precision import like
 from jaxtyping import Array
 
 from orbix.kepler import Markley
@@ -94,6 +96,9 @@ def barycentric_to_jacobi(values, star_mass_Msun, planet_mass_Msun):
     Each planet is measured from the center of mass of the star and all
     preceding planets, using ordered inner-to-outer sums. Positions or
     velocities may use any common origin, since only differences enter.
+    Supply absolute snapshots as host numbers: their stellar origin is
+    subtracted in float64 before transfer. Device arrays and traced
+    arguments must already resolve the relative vectors.
 
     Args:
         values: Positions or velocities, star first and planets inner to outer,
@@ -104,11 +109,14 @@ def barycentric_to_jacobi(values, star_mass_Msun, planet_mass_Msun):
     Returns:
         Jacobi vectors in the units of values, shape B + (K,) + time_shape + (3,).
     """
-    values = jnp.asarray(values)
     masses = jnp.asarray(planet_mass_Msun)
     axis = masses.ndim - 1
-    relative = jnp.moveaxis(values, axis, 0)
-    relative = relative[1:] - relative[0]
+    if any(isinstance(x, jax.Array) for x in jax.tree.leaves(values)):
+        rows = jnp.moveaxis(jnp.asarray(values), axis, 0)
+        relative = rows[1:] - rows[0]
+    else:
+        rows = np.moveaxis(np.asarray(values, dtype=np.float64), axis, 0)
+        relative = like(rows[1:] - rows[0], masses)
     _, cumulative_mass = _ordered_sum(jnp.moveaxis(masses, -1, 0))
     preceding_mass = jnp.concatenate(
         [jnp.zeros_like(cumulative_mass[:1]), cumulative_mass], axis=0
@@ -495,12 +503,11 @@ class System(eqx.Module):
         if planets.mass_Msun.ndim < 1 or planets.mass_Msun.shape[:-1] != batch:
             raise ValueError("Planet masses must have shape B + (K,) for star shape B")
         expected = (*batch, planets.mass_Msun.shape[-1] + 1, 3)
-        position = jnp.asarray(position_AU)
-        velocity = jnp.asarray(velocity_AU_per_d)
-        if position.shape != expected or velocity.shape != expected:
+        pos_shape, vel_shape = jnp.shape(position_AU), jnp.shape(velocity_AU_per_d)
+        if pos_shape != expected or vel_shape != expected:
             raise ValueError(
                 "Cartesian positions and velocities must have shape B + (K+1, 3) "
-                f"= {expected}; got {position.shape} and {velocity.shape}"
+                f"= {expected}; got {pos_shape} and {vel_shape}"
             )
         epoch = jnp.asarray(epoch_d)
         if epoch.shape not in ((), batch):
@@ -509,8 +516,8 @@ class System(eqx.Module):
             )
         epoch = jnp.broadcast_to(epoch[..., None], planets.mass_Msun.shape)
         orbits = FrameOrbit.from_cartesian(
-            barycentric_to_jacobi(position, star.mass_Msun, planets.mass_Msun),
-            barycentric_to_jacobi(velocity, star.mass_Msun, planets.mass_Msun),
+            barycentric_to_jacobi(position_AU, star.mass_Msun, planets.mass_Msun),
+            barycentric_to_jacobi(velocity_AU_per_d, star.mass_Msun, planets.mass_Msun),
             mu_AU3_per_d2=enclosed_mu(star.mass_Msun, planets.mass_Msun),
             epoch_d=epoch,
         )

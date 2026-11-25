@@ -2,6 +2,7 @@
 
 import jax.numpy as jnp
 from hwoutils.constants import G, two_pi
+from hwoutils.numerics import COARSEST, eps
 from jax import lax
 
 two_pi_G = two_pi * G
@@ -265,8 +266,9 @@ def thiele_innes_constants_reduced(sinW, cosW, sinw, cosw, sinwcosi, coswcosi):
     return A, B, F, G
 
 
-_TOL_E = 1e-9
-_TOL_N = 1e-9
+# Eight roundings in the normalized cross product and norms define an equatorial node.
+_NODE_RESOLUTION = 8 * eps(COARSEST)
+_TOL_N = 1e-9  # Dimensionless angular momentum fraction defining a radial state.
 
 
 def _safe_norm(x):
@@ -278,9 +280,17 @@ def _safe_norm(x):
     so the local derivative is finite; the ``jnp.where`` then zeroes the
     corresponding cotangent, giving a well-defined (zero) gradient.
     """
-    is_zero = jnp.all(x == 0.0)
-    x_safe = jnp.where(is_zero, jnp.ones_like(x), x)
-    return jnp.where(is_zero, 0.0, jnp.linalg.norm(x_safe))
+    scale = lax.stop_gradient(jnp.max(jnp.abs(x)))
+    is_zero = scale == 0.0
+    scaled = x / jnp.where(is_zero, 1.0, scale)
+    norm = jnp.linalg.norm(jnp.where(is_zero, jnp.ones_like(x), scaled))
+    return jnp.where(is_zero, 0.0, scale * norm)
+
+
+def _plane_decision_vector(x):
+    """Put a Cartesian vector on the common grid without changing its direction."""
+    exponent = jnp.frexp(jnp.max(jnp.abs(x)))[1]
+    return jnp.ldexp(x, -exponent).astype(COARSEST)
 
 
 def _oriented_angle(cosine, sine):
@@ -288,12 +298,16 @@ def _oriented_angle(cosine, sine):
 
     Recovering the angle with arccos amplifies rounding in the cosine near
     the axes, where its derivative diverges; atan2 uses both components and
-    keeps the derivative well conditioned in float32. An unused
-    circular-orbit branch can pass (0, 0), where the atan2 derivative is
-    NaN; any pair whose squared length underflows is replaced by (1, 0).
+    keeps the derivative well conditioned in float32. Scale the pair to
+    avoid underflow in the atan2 derivative of a tiny eccentricity vector.
+    Only a zero pair takes the zero-angle convention.
     """
-    is_zero = cosine * cosine + sine * sine == 0.0
-    return jnp.arctan2(jnp.where(is_zero, 0.0, sine), jnp.where(is_zero, 1.0, cosine))
+    scale = lax.stop_gradient(jnp.maximum(jnp.abs(cosine), jnp.abs(sine)))
+    is_zero = scale == 0.0
+    scale = jnp.where(is_zero, 1.0, scale)
+    return jnp.arctan2(
+        jnp.where(is_zero, 0.0, sine / scale), jnp.where(is_zero, 1.0, cosine / scale)
+    )
 
 
 def state_vector_to_keplerian(r, v, mu):
@@ -308,8 +322,11 @@ def state_vector_to_keplerian(r, v, mu):
     Robust implementation handling edge cases (circular, equatorial,
     and non-bound orbits) using ``jnp.where`` for JIT compatibility.
 
-    Circular orbits use ``w = 0`` and the anomaly is the argument of
-    latitude from the node, or the true longitude if also equatorial.
+    The direction of a nonzero eccentricity vector sets periapsis. At
+    zero eccentricity, periapsis is zero and the anomaly is the argument
+    of latitude from the node, or true longitude if also equatorial.
+    The node-length fraction is compared with eight float32 epsilons on
+    a shared float32 grid to identify an equatorial plane.
     Equatorial orbits use ``W = 0``; ``w`` (or the circular true longitude)
     is measured from north toward east and multiplied by the sign of
     ``h_z`` in the classical (north, east, away) component order.
@@ -340,6 +357,17 @@ def state_vector_to_keplerian(r, v, mu):
     classical_order = jnp.array([1, 0, 2])
     r = jnp.asarray(r)[classical_order]
     v = jnp.asarray(v)[classical_order]
+    # Exact power-of-two rescaling keeps the common-grid cross product in range.
+    coarse_r, coarse_v = _plane_decision_vector(r), _plane_decision_vector(v)
+    coarse_h = jnp.cross(coarse_r, coarse_v)
+    coarse_h_mag = jnp.linalg.norm(coarse_h)
+    has_h = coarse_h_mag > _TOL_N * jnp.linalg.norm(coarse_r) * jnp.linalg.norm(
+        coarse_v
+    )
+    is_inclined = has_h & (
+        jnp.linalg.norm(coarse_h[:2]) > _NODE_RESOLUTION * coarse_h_mag
+    )
+
     # Work in units of |r| and |v|: every element is homogeneous in these two
     # scales, so constant (stop-gradient) scales leave the derivatives exact
     # while keeping float32 SI products and their squares in range.
@@ -355,7 +383,6 @@ def state_vector_to_keplerian(r, v, mu):
 
     h = jnp.cross(r, v)
     h_mag = _safe_norm(h)
-    has_h = h_mag > _TOL_N * r_mag * v_mag
     h_mag_safe = jnp.where(has_h, h_mag, 1.0)
 
     # A radial state (no angular momentum) keeps the i = pi/2 convention.
@@ -375,69 +402,16 @@ def state_vector_to_keplerian(r, v, mu):
     E_energy_safe = jnp.where(non_parabolic, E_energy, 1.0)
     a = jnp.where(non_parabolic, -mu / (2 * E_energy_safe), jnp.inf)
 
-    TOL_E = _TOL_E
-    TOL_I = _TOL_N
-    is_circular = e < TOL_E
-    is_inclined = has_h & (n_mag > TOL_I * h_mag)
-
-    n0_safe = jnp.where(is_inclined, n[0], 1.0)
-    n1_safe = jnp.where(is_inclined, n[1], 0.0)
-    W = jnp.where(is_inclined, jnp.arctan2(n1_safe, n0_safe), 0.0)
-
-    e_safe = jnp.where(e > _TOL_E, e, 1.0)
-    n_mag_safe = jnp.where(is_inclined, n_mag, 1.0)
-
-    cos_w = jnp.where(
-        is_circular | ~is_inclined,
-        0.0,
-        jnp.dot(n, e_vec) / (n_mag_safe * e_safe),
-    )
-    # Unit vectors keep the triple product and its derivative of order one.
-    sin_w = jnp.dot(jnp.cross(n / n_mag_safe, e_vec / e_safe), h / h_mag_safe)
-    w_inclined = _oriented_angle(cos_w, sin_w)
-
-    e_xy_mag = _safe_norm(e_vec[:2])
-    is_e_xy_safe = e_xy_mag > _TOL_E
-    ex_safe = jnp.where(is_e_xy_safe, e_vec[0], 1.0)
-    ey_safe = jnp.where(is_e_xy_safe, e_vec[1], 0.0)
-    w_equatorial = jnp.arctan2(ey_safe, ex_safe)
-    w_equatorial = w_equatorial * jnp.sign(h[2])
-
-    w = jnp.where(
-        is_circular,
-        0.0,
-        jnp.where(is_inclined, w_inclined, w_equatorial),
-    )
-
-    cos_nu = jnp.where(
-        is_circular,
-        0.0,
-        jnp.dot(e_vec, r) / (e_safe * r_mag),
-    )
-    sin_nu = jnp.dot(jnp.cross(e_vec, r), h) / (e_safe * r_mag * h_mag_safe)
-    nu_elliptical = _oriented_angle(cos_nu, sin_nu)
-
-    cos_u = jnp.where(
-        ~is_inclined,
-        0.0,
-        jnp.dot(n, r) / (n_mag_safe * r_mag),
-    )
-    # Unit vectors keep the triple product and its derivative of order one.
-    sin_u = jnp.dot(jnp.cross(n / n_mag_safe, r / r_mag), h / h_mag_safe)
-    u_inclined = _oriented_angle(cos_u, sin_u)
-
-    r_xy_mag = _safe_norm(r[:2])
-    is_r_xy_safe = r_xy_mag > _TOL_N * r_mag
-    rx_safe = jnp.where(is_r_xy_safe, r[0], 1.0)
-    ry_safe = jnp.where(is_r_xy_safe, r[1], 0.0)
-    nu_equatorial = jnp.arctan2(ry_safe, rx_safe)
-    nu_equatorial = nu_equatorial * jnp.sign(h[2])
-
-    nu = jnp.where(
-        is_circular,
-        jnp.where(is_inclined, u_inclined, nu_equatorial),
-        nu_elliptical,
-    )
+    # A single longitude frame covers ellipses and circles. The same
+    # projection measures the body's longitude and its periapsis, so their
+    # difference retains phase even when the eccentricity direction is noisy.
+    node = n / jnp.where(is_inclined, n_mag, 1.0)
+    node = jnp.where(is_inclined, node, jnp.array([1.0, 0.0, 0.0], dtype=r.dtype))
+    tangent = jnp.cross(h / h_mag_safe, node)
+    W = jnp.arctan2(node[1], node[0])
+    w = _oriented_angle(jnp.dot(e_vec, node), jnp.dot(e_vec, tangent))
+    longitude = _oriented_angle(jnp.dot(r, node), jnp.dot(r, tangent))
+    nu = longitude - w
 
     W = W % (2 * jnp.pi)
     w = w % (2 * jnp.pi)

@@ -18,6 +18,7 @@ import jax
 import jax.numpy as jnp
 import priorities
 from hwoutils.constants import two_pi
+from hwoutils.precision import like, require_float64
 from jax import Array
 
 from orbix.equations.orbit import mean_motion
@@ -235,7 +236,8 @@ class OrbitLaw(AbstractOrbitLaw):
         orbit's own rate. The exactly circular orbit has no density here (``-inf``):
         the eccentricity-vector density ``p_e(e) / (2 pi e)`` is singular there, a set
         of measure zero that no draw lands on. Where a size law gives zero density the
-        result is ``-inf`` even at an infinite size.
+        result is ``-inf`` even at an infinite size. Density evaluation requires
+        float64 and widens the supplied orbital coordinates before arithmetic.
 
         Args:
             orbit: Orbits to evaluate, with batch shape B.
@@ -243,14 +245,16 @@ class OrbitLaw(AbstractOrbitLaw):
         Returns:
             Log density against the orbit reference measure, shape B.
         """
-        e = jnp.hypot(orbit.ex, orbit.ey)
+        require_float64("OrbitLaw.log_prob", self)
+        e = jnp.hypot(like(orbit.ex, self), like(orbit.ey, self))
         safe_e = jnp.where(e > 0, e, 1.0)
         out = jnp.where(
             e > 0, self.eccentricity.log_prob(e) - jnp.log(two_pi * safe_e), -jnp.inf
         )
         if self.a_AU is not None:
-            return out + size_term(self.a_AU.log_prob(orbit.a_AU), jnp.log(orbit.a_AU))
-        period = two_pi / orbit.n_rad_per_d
+            a = like(orbit.a_AU, self)
+            return out + size_term(self.a_AU.log_prob(a), jnp.log(a))
+        period = two_pi / like(orbit.n_rad_per_d, self)
         return out + size_term(self.period_d.log_prob(period), jnp.log(1.5 * period))
 
     def sample(self, key, *, mu_AU3_per_d2, epoch_d=0.0) -> FrameOrbit:

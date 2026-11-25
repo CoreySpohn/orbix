@@ -5,6 +5,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.numerics import COARSEST, eps, roundoff
+from hwoutils.testing import precision_pair, ulps
 from scipy.stats import chi2
 
 from orbix.system import (
@@ -13,6 +15,9 @@ from orbix.system import (
     EccentricityVectorChart,
     FrameChart,
     FrameOrbit,
+    line_of_sight_sheet,
+    reflect_line_of_sight,
+    sky_block_to_frame,
 )
 from orbix.system.rotation import rotate
 
@@ -296,8 +301,8 @@ def test_unconstrained(chart):
 
     Truth: disk/ball maps, the exponential and quaternion normalization
     enforce e<1, a>0 and |q|=1 away from degenerate states. Use 512 seed-0
-    draws; strict bounds test the constraints, and 2e-15 absolute covers
-    x64 norm roundoff.
+    draws. Eight unit-scale roundings cover each four-square sum, square
+    root and normalization in constructing and checking the quaternion.
     """
     x = jnp.asarray(
         np.random.default_rng(0).normal(scale=5, size=(512, chart.n_coords))
@@ -308,7 +313,10 @@ def test_unconstrained(chart):
     assert np.all(np.asarray(orbit.e) < 1)
     assert np.all(np.asarray(orbit.a_AU) > 0)
     np.testing.assert_allclose(
-        np.linalg.norm(orbit.quat, axis=-1), 1, atol=2e-15, rtol=0
+        np.linalg.norm(orbit.quat, axis=-1),
+        1,
+        atol=float(roundoff(1, n_ops=8, dtype=orbit.quat.dtype)),
+        rtol=0,
     )
 
 
@@ -367,8 +375,10 @@ def test_sky_block_completion():
     """Fails if completion swaps sky axes or loses face-on/edge-on states.
 
     Truth: independently constructed orthonormal frames, including exact
-    face-on matrices. 32 eps times a covers the small matrix arithmetic;
-    the sheet reflects only the away row and leaves the sky block intact.
+    face-on matrices. Two norms, square roots, quaternion construction and
+    rotation take at most 32 roundings at unit or orbit scale; the two
+    two-vector norms and averaging the singular values take eight. The
+    sheet reflects only the away row and leaves the sky block intact.
     """
     from orbix.system import frame_to_sky_block, sky_block_to_frame
 
@@ -390,7 +400,10 @@ def test_sky_block_completion():
         )
         actual = frame_to_sky_block(a, q)
         np.testing.assert_allclose(
-            actual, constants, atol=32 * np.finfo(float).eps * 1.7, rtol=0
+            actual,
+            constants,
+            atol=float(roundoff(1.7, n_ops=32, dtype=actual.dtype)),
+            rtol=0,
         )
         f, g = (
             rotate(q, jnp.array([1.0, 0.0, 0.0])),
@@ -399,17 +412,23 @@ def test_sky_block_completion():
         expected = np.asarray(bases).copy()
         expected[:, 2] *= sheet
         np.testing.assert_allclose(
-            jnp.stack([f, g], -1), expected, atol=32 * np.finfo(float).eps, rtol=0
+            jnp.stack([f, g], -1),
+            expected,
+            atol=float(roundoff(1, n_ops=32, dtype=q.dtype)),
+            rtol=0,
         )
-        np.testing.assert_allclose(a, 1.7, atol=8 * np.finfo(float).eps, rtol=0)
+        np.testing.assert_allclose(
+            a, 1.7, atol=float(roundoff(1.7, n_ops=8, dtype=a.dtype)), rtol=0
+        )
 
 
 def test_sky_block_geometry_of_projected_circular_frames():
     """Fails if the geometry loses precision or a finite scale derivative.
 
     A circular frame projects to singular values a and a*abs(cos(i)).
-    Allow 32 float64 eps at the scale of each quantity for projection and
-    norm roundoff. A uniform rescaling gives the directional derivative.
+    Allow 32 roundings for quaternion construction, rotation and two norms
+    at the orbit scale (squared for the gap), doubled for the bilinear
+    product derivative. A uniform rescaling gives the directional derivative.
     """
     from orbix.system import frame_to_sky_block, sky_block_geometry
 
@@ -431,11 +450,12 @@ def test_sky_block_geometry_of_projected_circular_frames():
     block = jnp.moveaxis(frame_to_sky_block(a_true, orbit.quat), -1, 0)
     (a, gap), (da, dgap) = jax.jvp(sky_block_geometry, tuple(block), tuple(block))
     gap_true = a_true**2 * (1.0 - cos_i**2)
-    eps = np.finfo(float).eps
-    np.testing.assert_allclose(a, a_true, atol=32 * eps * a_true, rtol=0)
-    np.testing.assert_allclose(gap, gap_true, atol=32 * eps * a_true**2, rtol=0)
-    np.testing.assert_allclose(da, a_true, atol=32 * eps * a_true, rtol=0)
-    np.testing.assert_allclose(dgap, 2 * gap_true, atol=64 * eps * a_true**2, rtol=0)
+    size_error = float(roundoff(a_true, n_ops=32, dtype=a.dtype))
+    gap_error = float(roundoff(a_true**2, n_ops=32, dtype=a.dtype))
+    np.testing.assert_allclose(a, a_true, atol=size_error, rtol=0)
+    np.testing.assert_allclose(gap, gap_true, atol=gap_error, rtol=0)
+    np.testing.assert_allclose(da, a_true, atol=size_error, rtol=0)
+    np.testing.assert_allclose(dgap, 2 * gap_true, atol=2 * gap_error, rtol=0)
 
 
 @pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
@@ -613,7 +633,10 @@ def test_fit_linear_map_noise_distribution():
 def test_disk_map_round_trip():
     """Fails if the public disk map and its inverse stop being exact inverses.
 
-    The origin and a near-boundary point are included; 1e-13 allows two roundings.
+    The inverse has relative condition number 1 + |u|^2 in the radial
+    direction. Each map uses two squares, an add, a shift, a square root
+    and a division. The radius at u=1000 differs analytically from one by
+    less than 1/(2 |u|^2), plus six roundings at unit scale.
     """
     from orbix.system import disk_to_plane, plane_to_disk
 
@@ -621,10 +644,10 @@ def test_disk_map_round_trip():
     u = u.at[0].set(0.0)
     evec = plane_to_disk(u)
     assert bool(jnp.all(jnp.linalg.norm(evec, axis=-1) < 1.0))
-    np.testing.assert_allclose(disk_to_plane(evec), u, rtol=1e-13, atol=1e-13)
-    np.testing.assert_allclose(
-        jnp.linalg.norm(plane_to_disk(jnp.array([1e3, 0.0]))), 1.0, atol=1e-6
-    )
+    condition = 1 + jnp.sum(u**2, axis=-1, keepdims=True)
+    assert jnp.all(jnp.abs(disk_to_plane(evec) - u) <= ulps(12, u) * condition)
+    radius = jnp.linalg.norm(plane_to_disk(jnp.array([1e3, 0.0])))
+    assert abs(radius - 1) <= 0.5 / 1e3**2 + ulps(6, radius)
 
 
 @pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
@@ -656,17 +679,18 @@ def test_periapsis_chart_shape():
     assert batch[0].shape == (2,)
 
 
-@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("sheet", [-1, 1])
-def test_line_of_sight_sheet(sheet):
+def test_line_of_sight_sheet(sheet, precision):
     """Fails if the sheet read back from an orbit differs from the chart's sheet.
 
     Orbits of a ThieleInnesChart sheet report that sheet, and reflecting an orbit
     through the sky plane flips the sign while the sky block stays the same. Also fails
     if ``reflect_line_of_sight`` changes the sky track, keeps the line-of-sight
     coordinate, or touches another row: at three times the reflected row has the same
-    east and north positions and the opposite away coordinate (1e-12 AU), and its
-    sheet is the other sheet's.
+    east and north positions and the opposite away coordinate. Two quaternion/frame
+    conversions and rotations take at most 64 roundings at orbit scale. The
+    float32 reflected track must match its float64 reference to this bound and
+    the discrete sheet must match exactly.
     """
     from orbix.system import (
         ThieleInnesChart,
@@ -681,17 +705,89 @@ def test_line_of_sight_sheet(sheet):
     np.testing.assert_array_equal(line_of_sight_sheet(orbit), sheet)
     other = ThieleInnesChart(sheet=-sheet).to_orbit(x, mu_AU3_per_d2=1.0)
     np.testing.assert_array_equal(line_of_sight_sheet(other), -sheet)
+    scale = jnp.max(orbit.a_AU)
+    bound = float(roundoff(scale, n_ops=64))
     np.testing.assert_allclose(
         frame_to_sky_block(orbit.a_AU, orbit.quat),
         frame_to_sky_block(other.a_AU, other.quat),
-        atol=1e-13,
+        atol=bound,
+        rtol=0,
     )
     reflected = reflect_line_of_sight(orbit, 2)
     times = jnp.array([0.0, 0.3, 1.7])
     r, _ = orbit.at(times)
     r_ref, _ = reflected.at(times)
     sign = jnp.array([1.0, 1.0, -1.0])
-    np.testing.assert_allclose(r_ref[2], r[2] * sign, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(r_ref[2], r[2] * sign, rtol=0, atol=bound)
     others = np.arange(6) != 2
     np.testing.assert_array_equal(r_ref[others], r[others])
     np.testing.assert_array_equal(line_of_sight_sheet(reflected)[2], -sheet)
+
+    if precision == np.float64:
+        precision_pair(line_of_sight_sheet, (orbit,), bound=0)
+        precision_pair(
+            lambda o, t: reflect_line_of_sight(o, 2).at(t)[0],
+            (orbit, times),
+            bound=float(roundoff(1, n_ops=64, dtype=np.float32)),
+            scale=float(scale),
+        )
+
+
+@pytest.mark.parametrize("compiled", [False, True], ids=["eager", "jit"])
+def test_sheet_pivot_near_a_tie(compiled):
+    """Read each requested sheet from the represented frame at a pivot tie.
+
+    The first block has effectively equal away magnitudes and C wins. In
+    the second, converting to a quaternion can exchange the pivot. Both
+    completions reproduce the input sky block and differ only by reflection.
+    Allow 32 orbit-scale roundings for completion, rotation and projection.
+    The supplied float32-representable quaternion also puts its negative H
+    just outside the tie on the common decision grid, independent of lane.
+    """
+
+    def complete(block, sheet):
+        a, quat = sky_block_to_frame(*block, sheet=sheet)
+        return FrameOrbit(a, 1.0, 0.0, 0.0, quat, 0.0)
+
+    build = eqx.filter_jit(complete) if compiled else complete
+    read = jax.jit(line_of_sight_sheet) if compiled else line_of_sight_sheet
+    reflect = (
+        eqx.filter_jit(reflect_line_of_sight) if compiled else reflect_line_of_sight
+    )
+    tie = jnp.array([0.6, 0.8, 0.8 - eps(COARSEST) / 4, 0.6])
+    tied = build(tie, 1)
+    c, h = tied.plane_basis()[2]
+    assert c > 0 > h
+    assert read(tied) == 1
+
+    block = jnp.array(
+        [
+            0.2803627848625183,
+            -0.8465015888214111,
+            0.8901546597480774,
+            0.052846238017082214,
+        ]
+    )
+    positive, negative = (build(block, sign) for sign in (1, -1))
+    assert read(positive) == 1
+    assert read(negative) == -1
+    reflected = reflect(jax.tree.map(lambda leaf: leaf[None], positive), 0)
+    assert read(reflected)[0] == -1
+    basis = positive.plane_basis()
+    bound = float(roundoff(positive.a_AU, n_ops=32))
+    np.testing.assert_allclose(
+        basis[[1, 0, 1, 0], [0, 0, 1, 1]], block, atol=bound, rtol=0
+    )
+    mirror = basis * jnp.array([[1.0], [1.0], [-1.0]])
+    np.testing.assert_allclose(negative.plane_basis(), mirror, atol=bound, rtol=0)
+    np.testing.assert_allclose(reflected.plane_basis()[0], mirror, atol=bound, rtol=0)
+
+    quat = jnp.array(
+        [
+            -0.8535807728767395,
+            0.11896874755620956,
+            0.03038351982831955,
+            0.5062836408615112,
+        ]
+    )
+    assert read(FrameOrbit(1.0, 1.0, 0.0, 0.0, quat, 0.0)) == -1

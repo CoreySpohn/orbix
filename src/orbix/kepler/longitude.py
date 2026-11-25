@@ -10,9 +10,27 @@ from functools import cache
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
+from hwoutils.precision import like
 
 from orbix.kepler._grid import _build_trig_grid, _indices_frac
-from orbix.kepler._markley import _markley_pair
+from orbix.kepler._markley import _markley_pair, _markley_reduced
+
+
+def _condition_host_phase(mean, *components):
+    """Reduce a wide host phase to a signed angle before it is narrowed."""
+    if isinstance(mean, (int, float, np.integer, np.floating, np.ndarray)):
+        dtype = jnp.result_type(mean, *components, 0.0)
+        if (
+            np.issubdtype(dtype, np.floating)
+            and np.asarray(mean).dtype.itemsize > dtype.itemsize
+        ):
+            phase = np.asarray(mean, dtype=np.float64)
+            # libm reduces against the mathematical period, including its tail.
+            with np.errstate(invalid="ignore"):
+                reduced = np.arctan2(np.sin(phase), np.cos(phase))
+            mean = float(reduced) if type(mean) is float else reduced.astype(dtype)
+    return mean
 
 
 class AbstractKeplerSolver(eqx.Module):
@@ -52,7 +70,7 @@ class Markley(AbstractKeplerSolver):
             Tuple (sin(E), cos(E)) of the eccentric anomaly E, each with the broadcast
             shape of the inputs.
         """
-        return _markley_pair(mean_anomaly, e)
+        return _markley_pair(_condition_host_phase(mean_anomaly, e), e)
 
 
 class Halley(AbstractKeplerSolver):
@@ -79,6 +97,7 @@ class Halley(AbstractKeplerSolver):
             Tuple (sin(E), cos(E)) of the eccentric anomaly E, each with the broadcast
             shape of the inputs.
         """
+        mean_anomaly = _condition_host_phase(mean_anomaly, e)
         dtype = jnp.result_type(mean_anomaly, e, 0.0)
         mean, e = jnp.broadcast_arrays(
             jnp.asarray(mean_anomaly, dtype=dtype), jnp.asarray(e, dtype=dtype)
@@ -97,7 +116,7 @@ class Halley(AbstractKeplerSolver):
 
 
 class Grid(AbstractKeplerSolver):
-    """Bilinear trig lookup, with one table per resolution and default dtype.
+    """Bilinear trig lookup, with one table per resolution and input dtype.
 
     Interpolation error grows near e = 1. The returned pair need not have
     exactly unit norm; derivatives of the longitude function use the implicit
@@ -122,26 +141,37 @@ class Grid(AbstractKeplerSolver):
             Tuple (sin(E), cos(E)) of the eccentric anomaly E, each with the broadcast
             shape of the inputs. The pair is interpolated and need not have unit norm.
         """
+        mean_anomaly = _condition_host_phase(mean_anomaly, e)
         dtype = jnp.result_type(mean_anomaly, e, 0.0)
         mean, e = jnp.broadcast_arrays(
             jnp.asarray(mean_anomaly, dtype=dtype), jnp.asarray(e, dtype=dtype)
         )
-        table, inv_dM, inv_de = _build_trig_grid(
-            self.n_e, self.n_M, dtype=jnp.asarray(0.0).dtype
-        )
-        e0, m0, de, dm = _indices_frac(mean, e, inv_dM, inv_de, self.n_M)
+        return self._solve_reduced(jnp.arctan2(jnp.sin(mean), jnp.cos(mean)), e)
+
+    def _solve_reduced(self, signed_mean, e):
+        """Interpolate the positive phase and restore the odd sine's sign."""
+        dtype = signed_mean.dtype
+        table, inv_dM, inv_de = _build_trig_grid(self.n_e, self.n_M, dtype=dtype)
+        e0, m0, de, dm = _indices_frac(signed_mean, e, inv_dM, inv_de)
         pair = (
             table[:, e0, m0] * ((1 - de) * (1 - dm))
             + table[:, e0, m0 + 1] * ((1 - de) * dm)
             + table[:, e0 + 1, m0] * (de * (1 - dm))
             + table[:, e0 + 1, m0 + 1] * (de * dm)
         ).astype(dtype)
-        return pair[0], pair[1]
+        return jnp.where(signed_mean < 0, -pair[0], pair[0]), pair[1]
 
 
 @cache
 def _longitude_function(solver):
     """Close over a static strategy and reuse its custom-JVP function."""
+    # The rotation already supplies a signed principal angle.
+    if type(solver) is Markley:
+        solve_anomaly = _markley_reduced
+    elif type(solver) is Grid:
+        solve_anomaly = solver._solve_reduced
+    else:
+        solve_anomaly = solver.solve
 
     @jax.custom_jvp
     def solve(mean_longitude, ex, ey):
@@ -151,12 +181,13 @@ def _longitude_function(solver):
         )
         e = jnp.sqrt(ex * ex + ey * ey)
         circular = e == 0
-        divisor = jnp.where(circular, 1.0, e)
-        c = jnp.where(circular, 1.0, ex / divisor)
-        s = jnp.where(circular, 0.0, ey / divisor)
+        one = like(1.0, e)
+        divisor = jnp.where(circular, one, e)
+        c = jnp.where(circular, one, ex / divisor)
+        s = jnp.where(circular, like(0.0, e), ey / divisor)
         sin_lam, cos_lam = jnp.sin(lam), jnp.cos(lam)
         mean = jnp.arctan2(sin_lam * c - cos_lam * s, cos_lam * c + sin_lam * s)
-        sin_e, cos_e = solver.solve(mean, e)
+        sin_e, cos_e = solve_anomaly(mean, e)
         # The exact circular value also avoids interpolation error at e = 0.
         return (
             jnp.where(circular, sin_lam, sin_e * c + cos_e * s),
@@ -184,8 +215,12 @@ def kepler(mean_longitude, ex, ey, *, solver=_DEFAULT_SOLVER):
     """Return (sin(F), cos(F)) solving lam = F - ex*sin(F) + ey*cos(F).
 
     Inputs broadcast to any shape, with ex**2 + ey**2 < 1 and radians for
-    mean_longitude. The output dtype is their floating result dtype. Here
-    (ex, ey) = e*(cos(p), sin(p)), where p is longitude of periapsis.
+    mean_longitude. Host longitudes retain their signed offset from a full
+    turn when narrowed. When passing already narrowed arrays or tracing this
+    function, supply reduced longitudes if the original phase needs higher
+    precision than the array can represent. The output has the floating result
+    dtype of the inputs. Here (ex, ey) = e*(cos(p), sin(p)), where p is
+    longitude of periapsis.
 
     A custom JVP differentiates the implicit equation, including at circular
     orbits and to higher orders. The value-only solver is closed over and is
@@ -202,4 +237,5 @@ def kepler(mean_longitude, ex, ey, *, solver=_DEFAULT_SOLVER):
         Tuple (sin(F), cos(F)) of the eccentric longitude F, each with the broadcast
         shape of the inputs.
     """
+    mean_longitude = _condition_host_phase(mean_longitude, ex, ey)
     return _longitude_function(solver)(mean_longitude, ex, ey)

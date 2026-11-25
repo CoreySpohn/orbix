@@ -2,9 +2,11 @@
 
 import jax
 import jax.numpy as jnp
+import mpmath as mp
 import numpy as np
 import pytest
 from hwoutils.constants import two_pi
+from hwoutils.testing import assert_precision_closed, precision_pair, ulps
 from hypothesis import example, given
 from hypothesis import strategies as st
 
@@ -125,22 +127,59 @@ def test_grid_equation_trig_and_wrapping(e, mean):
         assert error < 100 * max(reference_error, 1e-7)
 
 
-@pytest.mark.float64_only(
-    reason="1e-10 rad probes must stay distinct across each grid node"
-)
 @pytest.mark.parametrize("cell", [0, 100, 2047, 2048])
-def test_grid_monotone_at_cell_boundary(cell):
-    """Fails if the bilinear trig table jumps backwards at a periodic M node."""
+def test_grid_monotone_at_cell_boundary(cell, precision):
+    """Fails if the bilinear trig table jumps backwards at a periodic M node.
+
+    Keep probes resolvable on either side: four turn-scale roundings for
+    wrapping/indexing, or the 1e-10 rad probe in double. The local slope
+    is at most 1/(1-e); four turn-scale roundings cover reconstruction
+    and lifting the endpoints.
+    """
     node = cell * two_pi / 2048
-    means = jnp.array([node - 1e-10, node + 1e-10])
+    bound = float(ulps(4, precision.type(two_pi)))
+    step = max(1e-10, bound)
+    means = jnp.array([node - step, node + step], dtype=precision)
     sine, cosine = _grid(means, jnp.asarray(0.5))
-    angle = np.arctan2(sine, cosine)
+    means = np.asarray(means, dtype=np.float64)
+    angle = np.arctan2(np.asarray(sine, dtype=np.float64), cosine)
     lifted = means + np.arctan2(np.sin(angle - means), np.cos(angle - means))
-    assert 0 <= lifted[1] - lifted[0] <= 2e-10 / (1 - 0.5) + 2e-12
-    assert np.all(
-        np.abs(np.asarray([sine, cosine])[:, 1] - np.asarray([sine, cosine])[:, 0])
-        <= 2e-10 / (1 - 0.5) + 2e-12
-    )
+    limit = (means[1] - means[0]) / (1 - 0.5) + bound
+    assert 0 <= lifted[1] - lifted[0] <= limit
+    assert np.all(np.abs(np.diff(np.asarray([sine, cosine]), axis=1)) <= limit)
+
+
+def test_grid_signed_phase_at_periapsis(precision):
+    """Recover both sides of a turn even below one float32 turn spacing.
+
+    At e=1/2 (an exact table row), the first M cell linearly interpolates
+    from zero to the sine of its upper node's independent 50-digit root.
+    Allow 32 relative roundings for the node solve, phase reduction, cell
+    index and interpolation. Zero absolute slack exposes a lost phase.
+    """
+    solver = Grid(n_e=16, n_M=256)
+    means = two_pi + np.array([-1e-7, 1e-7])
+    with mp.workdps(50):
+        width = 2 * mp.pi / solver.n_M
+        eccentric = mp.findroot(lambda x: x - mp.sin(x) / 2 - width, 2 * width)
+        slope = float(mp.sin(eccentric) / width)
+        phases = np.array([float(m - 2 * mp.pi) for m in means])
+        # JIT sees the represented values of both reduced and unreduced inputs.
+        represented = np.r_[phases, means].astype(precision)
+        traced_phases = np.r_[
+            represented[:2], [float(float(m) - 2 * mp.pi) for m in represented[2:]]
+        ]
+    bound = float(ulps(32, precision.type(1)))
+
+    def longitude(mean, e):
+        return kepler(mean, e, 0, solver=solver)
+
+    for solve in (solver.solve, longitude):
+        np.testing.assert_allclose(
+            solve(means, 0.5)[0], phases * slope, rtol=bound, atol=0
+        )
+        sine, _ = jax.jit(solve)(represented, 0.5)
+        np.testing.assert_allclose(sine, traced_phases * slope, rtol=bound, atol=0)
 
 
 @pytest.mark.float64_only(
@@ -152,9 +191,13 @@ def test_grid_precision_context_and_nodes():
     Table-node agreement within 8 eps checks storage precision as well as
     output casting. Switching back to float32 also exercises cache reuse.
     """
+    solver = Grid(16, 64)
+
+    def solve(mean, e):
+        return kepler(mean, e, 0, solver=solver)
+
     for x64 in (False, True, False):
         with jax.enable_x64(x64):
-            solver = Grid(16, 64)
             for dtype in [jnp.float32, jnp.float64] if x64 else [jnp.float32]:
                 node = (jnp.asarray(two_pi / 4, dtype), jnp.asarray(0.25, dtype))
                 values = jax.jit(kepler)(*node, 0, solver=solver)
@@ -164,6 +207,11 @@ def test_grid_precision_context_and_nodes():
                     values, expected, rtol=0, atol=8 * np.finfo(dtype).eps
                 )
             if x64:
+                assert_precision_closed(solve, *(jnp.float32(x) for x in node))
+                # Two cell coordinates, four bilinear products and their sum.
+                precision_pair(
+                    solve, node, bound=float(ulps(8, np.float32(1))), scale=1
+                )
                 mixed = jax.jit(kepler)(
                     jnp.float32(2.0), jnp.float64(0.3), 0, solver=solver
                 )

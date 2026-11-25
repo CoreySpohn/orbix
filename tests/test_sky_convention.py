@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from hwoutils.constants import G, Msun2kg, two_pi
+from hwoutils.numerics import roundoff
 from hypothesis import example, given
 from hypothesis import strategies as st
 
@@ -118,8 +119,9 @@ def _numpy_k16_position(epoch_yr):
 def test_ascending_node_cardinal_directions(node_deg, expected, expected_pa):
     """Fails if PA swaps east/north or wraps outside [0, 360).
 
-    Omega runs north through east (Green 1985, ch. 17). Allow 1e-12
-    arcsec or deg for x64 trigonometric roundoff at cardinal directions.
+    Omega runs north through east (Green 1985, ch. 17). Allow 16 operations
+    for quaternion construction, projection, and angle recovery at the
+    0.1 arcsec orbit scale or one radian expressed in degrees.
     """
     orbit = FrameOrbit.from_classical(
         a_AU=[1.0],
@@ -134,11 +136,22 @@ def test_ascending_node_cardinal_directions(node_deg, expected, expected_pa):
     # For e=w=M0=0, t=t0 is the ascending node.
     ra, dec = offset_arcsec(orbit.at(jnp.array([0.0]))[0], 10.0)
     assert ra.shape == dec.shape == (1, 1)
-    np.testing.assert_allclose([ra[0, 0], dec[0, 0]], expected, atol=1e-12, rtol=0)
+    np.testing.assert_allclose(
+        [ra[0, 0], dec[0, 0]],
+        expected,
+        atol=float(roundoff(0.1, n_ops=16, dtype=ra.dtype)),
+        rtol=0,
+    )
     pa = position_angle_deg(orbit.at(jnp.array([0.0]))[0])
     assert pa.shape == (1, 1)
     assert np.all((pa >= 0) & (pa < 360))
-    np.testing.assert_allclose(pa, expected_pa, atol=1e-12, rtol=0)
+    delta = np.asarray(pa, dtype=np.float64) - expected_pa
+    np.testing.assert_allclose(
+        (delta + 180) % 360 - 180,
+        0,
+        atol=float(roundoff(np.rad2deg(1.0), n_ops=16, dtype=pa.dtype)),
+        rtol=0,
+    )
 
 
 @pytest.mark.parametrize("mass_ratio", [1e-3, 0.1])
@@ -171,7 +184,12 @@ def test_stellar_reflex_signs(mass_ratio):
 
 
 def test_ascending_node_moves_away():
-    """Ascending means positive dz/dt (away); Green (1985), ch. 17."""
+    """Ascending means positive dz/dt (away); Green (1985), ch. 17.
+
+    A circular arc gives its exact secant velocity through sin(n*h)/h.
+    Sixteen operations to form each rotated unit position bound its
+    absolute roundoff, which the centered difference divides by h.
+    """
     orbit = FrameOrbit.from_classical(
         a_AU=[1.0],
         e=0.0,
@@ -185,11 +203,14 @@ def test_ascending_node_moves_away():
     r, _ = orbit.at(jnp.array([-0.01, 0.0, 0.01]))
     z = np.asarray(r)[0, :, 2]
     assert z[0] < 0.0 < z[2]
-    assert z[1] == pytest.approx(0.0, abs=1e-14)
+    assert abs(z[1]) <= float(roundoff(1.0, n_ops=16, dtype=z.dtype))
     dz_dt = (z[2] - z[0]) / 0.02
     assert dz_dt > 0.0
     np.testing.assert_allclose(
-        dz_dt, np.sqrt(G * Msun2kg) * np.sin(np.pi / 3), rtol=1e-8
+        dz_dt,
+        np.sin(np.sqrt(G * Msun2kg) * 0.01) * np.sin(np.pi / 3) / 0.01,
+        atol=float(roundoff(1.0, n_ops=16, dtype=z.dtype)) / 0.01,
+        rtol=0,
     )
 
 
@@ -341,6 +362,11 @@ def test_public_state_round_trip(a, e, inc, node, peri, mean, mass):
     angles avoid arccos-clipped axes by construction. For e <= 0.99, a
     0.05 rad mean-anomaly margin keeps abs(sin(nu)) > 0.001 even at apoapsis.
     Explicit regressions cover the axes. Compare angles modulo 2*pi.
+    Allow 32 operations for Kepler evaluation and frame rotation at the
+    orbital position and speed scales. Propagate those errors through
+    the inverse Cartesian Jacobian to account for local conditioning.
+    The inverse itself adds 32 operations at the element scale; for
+    angles and eccentricity this scale is at least one.
     """
     sine, cosine = map(float, kepler(jnp.asarray(mean), jnp.asarray(e), 0))
     sin_nu = np.sqrt(1 - e**2) * sine / (1 - e * cosine)
@@ -349,15 +375,24 @@ def test_public_state_round_trip(a, e, inc, node, peri, mean, mass):
     actual, jac, r, v, sky, direct_r, direct_v = _round_trip_state(
         jnp.asarray(expected), jnp.asarray(mass * Msun2kg)
     )
-    np.testing.assert_allclose(actual[:3], expected[:3], atol=1e-11, rtol=1e-11)
-    diff = np.asarray(actual[3:]) - expected[3:]
-    np.testing.assert_allclose(
-        np.arctan2(np.sin(diff), np.cos(diff)), 0, atol=1e-10, rtol=0
+    pos_scale = np.linalg.norm(r)
+    speed_scale = np.linalg.norm(v)
+    tol = float(roundoff(1.0, n_ops=32, dtype=r.dtype))
+    sensitivity = np.array(
+        [
+            np.linalg.norm(dr, 1) * pos_scale + np.linalg.norm(dv, 1) * speed_scale
+            for dr, dv in jac
+        ]
     )
+    scale = np.maximum(np.abs(expected), [a, 1, 1, 1, 1, 1])
+    bound = tol * (scale + sensitivity)
+    assert np.all(np.abs(np.asarray(actual[:3]) - expected[:3]) <= bound[:3])
+    diff = np.asarray(actual[3:]) - expected[3:]
+    assert np.all(np.abs(np.arctan2(np.sin(diff), np.cos(diff))) <= bound[3:])
     assert all(np.isfinite(leaf).all() for leaf in jax.tree.leaves(jac))
-    np.testing.assert_allclose(r[:2], sky, atol=1e-11, rtol=0)
-    np.testing.assert_allclose(direct_r, r, atol=1e-11, rtol=1e-12)
-    np.testing.assert_allclose(direct_v, v, atol=1e-14, rtol=1e-12)
+    np.testing.assert_allclose(r[:2], sky, atol=tol * pos_scale, rtol=0)
+    np.testing.assert_allclose(direct_r, r, atol=tol * pos_scale, rtol=0)
+    np.testing.assert_allclose(direct_v, v, atol=tol * speed_scale, rtol=0)
     # Independent frame anchor: ascending node PA is north through east,
     # crossing toward positive away. A shared axis swap cannot pass this.
     node_orbit = FrameOrbit.from_classical(
@@ -372,14 +407,14 @@ def test_public_state_round_trip(a, e, inc, node, peri, mean, mass):
     basis = np.asarray(node_orbit.plane_basis())
     A, B = basis[:, 0], basis[:, 1] * np.sqrt(1 - e**2)
     np.testing.assert_allclose(
-        np.asarray(A) / a, [np.sin(node), np.cos(node), 0], atol=1e-14, rtol=0
+        np.asarray(A) / a, [np.sin(node), np.cos(node), 0], atol=tol, rtol=0
     )
     assert B[2] > 0
     np.testing.assert_allclose(
         np.cross(np.asarray(A), np.asarray(B))[2],
         -(a**2) * np.sqrt(1 - e**2) * np.cos(inc),
-        atol=1e-11,
-        rtol=1e-12,
+        atol=tol * a**2,
+        rtol=0,
     )
 
 
@@ -395,14 +430,24 @@ def _anomaly_round_trip(mean, e):
     transverse = (1 + e * jnp.cos(nu)) / jnp.sqrt(p)
     u = jnp.array([jnp.cos(nu), 0.0, jnp.sin(nu)])
     tangent = jnp.array([-jnp.sin(nu), 0.0, jnp.cos(nu)])
-    recovered = state_vector_to_keplerian(
+    _, recovered_e, _, _, peri, recovered = state_vector_to_keplerian(
         radius * u, radial * u + transverse * tangent, 1.0
-    )[-1]
+    )
     recovered_sine, recovered_cosine = kepler(recovered, e, 0)
     recovered_nu = jnp.arctan2(
         jnp.sqrt(1 - e**2) * recovered_sine, recovered_cosine - e
     )
-    return sine, cosine, nu, recovered, recovered_sine, recovered_cosine, recovered_nu
+    return (
+        sine,
+        cosine,
+        nu,
+        peri,
+        recovered,
+        recovered_sine,
+        recovered_cosine,
+        recovered_nu,
+        recovered_e,
+    )
 
 
 @example(e=0.0, mean=1.0)
@@ -412,32 +457,60 @@ def test_anomaly_round_trip(e, mean):
 
     Orbix embeds true-to-mean in state_vector_to_keplerian rather than a
     standalone conversion API. Construct means away from true-anomaly axes
-    covered by explicit regressions below; circular orbits use its
-    argument-of-latitude branch.
+    covered by explicit regressions below. An exactly circular Cartesian
+    state uses zero periapsis. Sixteen operations bound the polar state
+    construction and inverse angle at unit scale. Resolving periapsis adds
+    1/e sensitivity, while M to E contributes 1/(1-e*cos(E)), and the
+    true anomaly contributes another sqrt(1-e^2)/(1-e*cos(E)). At e=0
+    rounding the Cartesian state can give it a nonzero eccentricity with
+    an arbitrary periapsis. Adding the recovered periapsis
+    gives the identifiable longitude at every eccentricity, including
+    tiny nonzero e for which a 1/e angular bound alone is uninformative.
     """
     result = _anomaly_round_trip(jnp.asarray(mean), jnp.asarray(e))
-    sine, cosine, nu, recovered, rs, rc, rnu = map(float, result)
+    sine, cosine, nu, peri, recovered, rs, rc, rnu, recovered_e = map(float, result)
     assert abs(np.sin(nu)) > 0.001
-    # Recovering the periapsis direction divides state roundoff by e.
-    # Below the inverse's 1e-9 circular threshold, phase conventions also
-    # differ by O(e); this bound covers both effects without dropping e=0.
-    tolerance = 5e-11 + 16 * np.finfo(float).eps / max(e, 1e-9)
-    difference = recovered - mean
-    assert abs(np.arctan2(np.sin(difference), np.cos(difference))) < tolerance
-    np.testing.assert_allclose([rs, rc], [sine, cosine], atol=tolerance, rtol=0)
-    difference = rnu - nu
-    assert abs(np.arctan2(np.sin(difference), np.cos(difference))) < tolerance
+    base = float(roundoff(1.0, n_ops=16, dtype=result[0].dtype))
+    # The normalized polar state divides by p=1-e^2 and by 1+e*cos(nu).
+    polar_condition = 1 / min(1 - e**2, 1 + e * np.cos(nu))
+    assert abs(recovered_e - e) <= base * polar_condition
+    eccentric_condition = max(1, 1 / (1 - e * cosine))
+    true_condition = max(1, np.sqrt(1 - e**2) / (1 - e * cosine))
+    differences = np.array(
+        [recovered - mean, np.arctan2(rs, rc) - np.arctan2(sine, cosine), rnu - nu]
+    )
+    bounds = (
+        base
+        * polar_condition
+        * np.array([1, eccentric_condition, eccentric_condition * true_condition])
+    )
+    longitude_error = differences + peri
+    assert np.all(
+        np.abs(np.arctan2(np.sin(longitude_error), np.cos(longitude_error))) <= bounds
+    )
+    anomaly_error = np.abs(np.arctan2(np.sin(differences), np.cos(differences)))
+    if recovered_e == 0.0:
+        assert peri == 0.0
+        assert np.all(anomaly_error <= bounds)
+    elif e > 0.0:
+        assert np.all(e * anomaly_error <= bounds)
 
 
 @pytest.mark.parametrize("peri, mean, index", [(0.0, 0.4, 4), (0.7, 0.0, 5)])
 def test_state_round_trip_on_anomaly_axes(peri, mean, index):
-    """Fails if arccos safety clipping biases valid periapsis or mean anomaly."""
+    """On an anomaly axis, roundoff comes from the quaternion and inverse.
+
+    Allow 32 operations at unit scale, amplified by 1/e for periapsis.
+    """
     expected = jnp.array([2.3, 0.31, 0.7, 0.4, peri, mean])
     actual = _round_trip_state(expected, jnp.asarray(Msun2kg))[0]
     # Quaternion roundoff may approach zero from either side of the wrap.
     delta = actual[index] - expected[index]
     np.testing.assert_allclose(
-        jnp.arctan2(jnp.sin(delta), jnp.cos(delta)), 0.0, atol=1e-11, rtol=0
+        jnp.arctan2(jnp.sin(delta), jnp.cos(delta)),
+        0.0,
+        atol=float(roundoff(1.0, n_ops=32, dtype=actual.dtype)) / 0.31,
+        rtol=0,
     )
 
 
@@ -454,13 +527,21 @@ def test_state_inversion_reverse_gradients_are_finite(r, v):
 
 
 def test_periapsis_state_has_zero_anomalies():
-    """An exact node/periapsis state must retain both zero angles."""
+    """The axis-aligned periapsis gives exact node and anomaly zeros.
+
+    Eight operations for normalized energy, eccentricity and atan2 bound
+    the three nonzero elements at unit scale.
+    """
     actual = state_vector_to_keplerian(
         jnp.array([0.0, 0.5, 0.0]), jnp.array([0.0, 0.0, np.sqrt(3)]), 1.0
     )
     np.testing.assert_allclose(
-        actual, [1.0, 0.5, np.pi / 2, 0, 0, 0], atol=1e-14, rtol=0
+        actual[:3],
+        [1.0, 0.5, np.pi / 2],
+        atol=float(roundoff(1.0, n_ops=8, dtype=actual[0].dtype)),
+        rtol=0,
     )
+    np.testing.assert_array_equal(actual[3:], 0.0)
 
 
 def _numpy_k16_state(eccentric_anomaly):

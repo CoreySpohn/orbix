@@ -5,14 +5,23 @@ import jax.numpy as jnp
 import numpy as np
 import priorities.testing
 import pytest
+from hwoutils.numerics import roundoff
 
 from orbix.system import ClassicalChart, IsotropicInclination
 
 
-def test_distribution_contract():
-    """The record meets the priorities distribution contract."""
+def test_distribution_contract(precision):
+    """Allow 16 roundings in the logit, sigmoid and interval rescaling.
+
+    The CDF/inverse pair adds sqrt, arcsin and half-angle sine/square;
+    the distribution checker separately removes four ULPs of input error.
+    """
     priorities.testing.check_distribution(
-        IsotropicInclination(), jax.random.key(0), n_draws=50_000
+        IsotropicInclination(),
+        jax.random.key(0),
+        n_draws=50_000,
+        rtol=float(roundoff(1, n_ops=16, dtype=precision)),
+        unit_rtol=float(roundoff(1, n_ops=8, dtype=precision)),
     )
 
 

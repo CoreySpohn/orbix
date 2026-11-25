@@ -8,7 +8,10 @@ import priorities
 import pytest
 from hwoutils.blocks import AbstractBlock
 from hwoutils.constants import GM_SUN_AU3_PER_D2 as GM
+from hwoutils.leaves import canonical
 from hwoutils.model_paths import assign, resolve
+from hwoutils.numerics import roundoff
+from hwoutils.precision import PrecisionError
 
 from orbix.system import (
     AbstractOrbitLaw,
@@ -164,7 +167,10 @@ def test_periods_name_exactly_the_coordinates_the_orbit_repeats_in(chart):
     """Fails if a declared period is wrong, or a coordinate repeats without one.
 
     Shifting a coordinate by its declared period must leave the orbit (positions and
-    rate) unchanged to 1e-9 AU; shifting any coordinate declared non-periodic by
+    rate) unchanged. Phase reduction, a Kepler solve, quaternion construction
+    and rotation take at most 64 roundings on this moderate-eccentricity
+    orbit. Use its maximum state magnitude before component cancellation.
+    Shifting any coordinate declared non-periodic by
     ``2 pi`` must move it by more than 1e-3 AU, so the declaration cannot be an
     accidental superset. Frame, Cartesian and Thiele-Innes charts have no angle.
     """
@@ -190,7 +196,8 @@ def test_periods_name_exactly_the_coordinates_the_orbit_repeats_in(chart):
         if period is None:
             assert gap > 1e-3, name
         else:
-            assert period == 2 * np.pi and gap < 1e-9, (name, gap)
+            assert period == 2 * np.pi
+            assert gap <= roundoff(jnp.max(jnp.abs(base)), n_ops=64), (name, gap)
 
 
 def _expected_names(chart):
@@ -768,14 +775,13 @@ def test_a_two_row_block_draws_rows_independently_and_its_density_is_joint(shape
 
 
 @pytest.mark.parametrize("kind", ["orbit", "thiele_innes", "sky_position"])
-def test_a_block_row_beyond_the_planet_count_is_refused(kind):
+def test_a_block_row_beyond_the_planet_count_is_refused(kind, precision):
     """Fails if a row past the last planet is read, clamped or written silently.
 
     Truth: a one-planet system has row 0 only. Each public block type must raise a
     ``ValueError`` naming the row and the count at ``inverse`` and ``sample``, at
     ``chart_support`` for a period law (it gathers the rate by row), and, for the sky
-    block, at ``from_unit`` and ``log_prob`` given the model. ``rows=(0,)`` is accepted
-    (``inverse`` is the positive control that reads the model). A bare
+    block, at ``from_unit`` and ``log_prob`` given the model. A bare
     ``.at[idx].set`` drops the write and a gather clamps,
     so without the check the failure is silent.
     """
@@ -804,9 +810,15 @@ def test_a_block_row_beyond_the_planet_count_is_refused(kind):
             system="dynamics",
         ),
     }[kind]
-    ok = build((0,))
+    if precision == np.float64:
+        good = build((0,))
+        coords = good.inverse(model)
+        assert all(np.isfinite(value).all() for value in coords.values())
+        good.sample(KEY, model)
+        if kind == "sky_position":
+            good.from_unit(jnp.array([0.3, 0.6]), model)
+            assert np.isfinite(good.log_prob(coords, model))
     bad = build((1,))
-    x = ok.inverse(model)  # row-0 positive control that every block type reads
     calls = [lambda: bad.inverse(model), lambda: bad.sample(KEY, model)]
     if kind == "orbit":
         # chart_support gathers the mass-derived rate by row; a period law reads it
@@ -814,9 +826,7 @@ def test_a_block_row_beyond_the_planet_count_is_refused(kind):
         period_bad = _block(ClassicalChart(), (1,), P_LAW)
         calls.append(lambda: period_bad.chart_support(model))
     if kind == "sky_position":
-        assert np.isfinite(ok.log_prob(x, model))
-        ok.sample(KEY, model)
-        ok.from_unit(jnp.array([0.3, 0.6]), model)
+        x = {name: jnp.zeros(1) for name in bad.coordinate_names}
         calls += [
             lambda: bad.from_unit(jnp.array([0.3, 0.6]), model),
             lambda: bad.log_prob(x, model),
@@ -903,6 +913,8 @@ def test_a_prior_swap_that_moves_the_bounds_is_a_different_map():
     The same coordinate reads a = 1.2 AU through ``LogUniform(0.8, 3)`` and another
     value through ``LogUniform(0.5, 6)``; ``same_map`` reports it, so
     ``Posterior.with_priors`` refuses the swap instead of reweighting by a ratio of one.
+    Sixteen roundings cover logging the bounds and size, mapping through the logit
+    and its inverse, and exponentiating the recovered size.
     """
     model = _system_model()
     narrow, wide = (
@@ -913,10 +925,13 @@ def test_a_prior_swap_that_moves_the_bounds_is_a_different_map():
             OrbitLaw(E_LAW, a_AU=priorities.LogUniform(0.5, 6.0)),
         ),
     )
-    x = narrow.inverse(_assign(model, {"dynamics.orbits": _with_a(model, 1.2)}))
-    a_narrow = narrow.forward(x, model)["dynamics.orbits"].a_AU[0]
-    a_wide = wide.forward(x, model)["dynamics.orbits"].a_AU[0]
-    np.testing.assert_allclose(a_narrow, 1.2, rtol=1e-12)
+    coords = jnp.zeros(narrow.chart.n_coords).at[0].set(jnp.log(1.2))
+    y, _ = block_coordinates(narrow, model, coords)
+    a_narrow = jnp.exp(chart_coordinates(narrow, model, y)[0][0])
+    a_wide = jnp.exp(chart_coordinates(wide, model, y)[0][0])
+    np.testing.assert_allclose(
+        a_narrow, 1.2, atol=float(roundoff(a_narrow, n_ops=16)), rtol=0
+    )
     assert abs(float(a_wide) - 1.2) > 0.05
     assert not narrow.same_map(wide)
 
@@ -939,10 +954,146 @@ def test_a_block_on_a_bare_system_joins_a_fit_path():
     ti = ThieleInnesBlock(A_LAW, priorities.Uniform(0.9, 1.3), rows=(0,), system="")
     assert ti.writes == ("orbits", "star.mass_Msun")
     assert ti.reads == ("planets.mass_Msun",)
+    for path in (*block.reads, *ti.reads, *block.writes, *ti.writes):
+        resolve(system, path)
+
+
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
+def test_a_block_fits_a_bare_system():
+    """Sample, forward and evaluate a block bound to the model root."""
+    system = _system_model().dynamics
+    block = OrbitBlock(ClassicalChart(), A_LAW, rows=(0,), system="")
     x = block.sample(KEY, system)
     out = block.forward(x, system)
     assert tuple(out) == ("orbits",)
-    for path in (*block.reads, *ti.reads, *block.writes, *ti.writes):
-        resolve(system, path)
     assert tuple(assign(system, "orbits", out["orbits"]).orbits.a_AU.shape) == (3,)
     assert np.isfinite(float(block.log_prob(x, system)))
+
+
+@pytest.mark.parametrize("kind", ["orbit", "thiele_innes", "sky_position"])
+def test_block_coordinate_precision(kind, precision):
+    """Every inference operation requires float64 and widens narrower coordinates.
+
+    Widening float32 to float64 is exact. A float32 coordinate must therefore
+    give the identical value to explicitly widening that same coordinate first.
+    """
+    model = _system_model()
+    block = {
+        "orbit": lambda: _block(ClassicalChart(), (0,)),
+        "thiele_innes": _ti_block,
+        "sky_position": lambda: SkyPositionBlock(
+            priorities.Normal(0.0, 0.1),
+            priorities.Normal(0.0, 0.2),
+            3.0,
+            rows=(0,),
+            system="dynamics",
+        ),
+    }[kind]()
+    point = jnp.full(block.unit_size, 0.375, dtype=jnp.float32)
+    if precision == np.float32:
+        x = {name: jnp.zeros(1) for name in block.coordinate_names}
+        for call in (
+            lambda: block.inverse(model),
+            lambda: block.sample(KEY, model),
+            lambda: block.from_unit(point, model),
+            lambda: block.log_prob(x, model),
+            lambda: block.forward(x, model),
+        ):
+            with pytest.raises(
+                PrecisionError, match=type(block).__name__ + " requires float64"
+            ):
+                call()
+    else:
+        x = block.from_unit(point, model)
+        wide = block.from_unit(point.astype(precision), model)
+        for name in x:
+            assert x[name].dtype == precision
+            np.testing.assert_array_equal(x[name], wide[name])
+        narrow = jax.tree.map(lambda v: v.astype(jnp.float32), x)
+        wide = jax.tree.map(lambda v: v.astype(precision), narrow)
+        value = block.log_prob(narrow, model)
+        assert value.dtype == precision and jnp.isfinite(value)
+        np.testing.assert_array_equal(value, block.log_prob(wide, model))
+        np.testing.assert_array_equal(
+            block.forward(narrow, model)[block.owns].a_AU,
+            block.forward(wide, model)[block.owns].a_AU,
+        )
+
+
+@pytest.mark.float64_only(reason="orbital inference on a float32 forward model")
+@pytest.mark.parametrize("kind", ["orbit", "thiele_innes", "sky_position"])
+def test_block_inference_with_float32_model(kind):
+    """Local reads widen exactly; each model write rounds once to its leaf dtype."""
+    block = {
+        "orbit": lambda: _block(ClassicalChart(), (0,), P_LAW),
+        "thiele_innes": _ti_block,
+        "sky_position": lambda: SkyPositionBlock(
+            priorities.Normal(0.0, 0.5),
+            priorities.Normal(0.1, 0.4),
+            40.0,
+            rows=(0,),
+            system="dynamics",
+        ),
+    }[kind]()
+    narrow = canonical(_system_model(), precision="float32")
+    wide = canonical(narrow, precision="float64")
+    coords = block.inverse(wide)
+
+    def evaluate(model):
+        return (
+            block.inverse(model),
+            block.log_prob(coords, model),
+            block.forward(coords, model),
+        )
+
+    for run in (evaluate, jax.jit(evaluate)):
+        inverse, density, writes = run(narrow)
+        reference, log_prob, expected = run(wide)
+        assert density.dtype == np.float64 and np.isfinite(density)
+        np.testing.assert_array_equal(density, log_prob)
+        for key in inverse:
+            assert inverse[key].dtype == np.float64
+            np.testing.assert_array_equal(inverse[key], reference[key])
+        for value, ref in zip(
+            jax.tree.leaves(writes), jax.tree.leaves(expected), strict=True
+        ):
+            assert value.dtype == np.float32
+            np.testing.assert_array_equal(value, ref.astype(np.float32))
+
+
+def test_map_and_wall_decisions_at_float32_boundaries(precision):
+    """Distinct bounds change the map. An upper edge below one is a wall."""
+    spacing = float(np.spacing(np.float32(1)))
+    blocks = [
+        _block(
+            ClassicalChart(),
+            (0,),
+            OrbitLaw(
+                E_LAW, a_AU=priorities.LogUniform(1 + shift, 1 + 16 * spacing + shift)
+            ),
+        )
+        for shift in (0, 3 * spacing)
+    ]
+    left, right = blocks
+    assert not left.same_map(right)
+    row_law = OrbitLaw(
+        E_LAW, a_AU=priorities.LogUniform(jnp.ones(1), jnp.full(1, 1 + 16 * spacing))
+    )
+    assert left.same_map(_block(ClassicalChart(), (0,), row_law))
+    if precision == np.float64:
+        model = _system_model()
+        x = {name: jnp.zeros(1) for name in left.coordinate_names}
+        sizes = [b.forward(x, model)[b.owns].a_AU[0] for b in blocks]
+        assert sizes[0] < sizes[1]
+
+    for edge in (1.0, 1 - 2 * spacing, 1 - 4 * spacing + spacing / 8):
+        law = OrbitLaw(priorities.Uniform(0.0, edge), a_AU=A_LAW.a_AU)
+        cartesian = _block(CartesianChart(), (0,), law)
+        assert ("e" in cartesian.walls) == (edge < 1)
+        assert jax.jit(lambda block: "e" in block.walls)(cartesian) == (edge < 1)
+    if precision == np.float64:
+        # A narrower copy of a constructed block retains the host wall decision.
+        law = OrbitLaw(priorities.Uniform(0.0, 1 - spacing / 8), a_AU=A_LAW.a_AU)
+        block = canonical(_block(CartesianChart(), (0,), law), precision="float32")
+        assert float(block.law.edges()["e"][1]) == 1.0
+        assert "e" in block.walls

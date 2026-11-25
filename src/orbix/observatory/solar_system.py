@@ -27,6 +27,7 @@ import numpy as np
 from hwoutils.constants import J2000_JD
 from hwoutils.conversions import years_to_days
 from hwoutils.epoch import Epoch
+from hwoutils.precision import like
 from jaxtyping import Array, ArrayLike
 
 from orbix.kepler import kepler
@@ -115,7 +116,7 @@ def equatorial_to_ecliptic_deg(ra_deg: ArrayLike, dec_deg: ArrayLike) -> tuple:
 # ---------------------------------------------------------------------------
 # Each planet has 6 orbital elements: a, e, I, O, w, lM.
 # Each element is a polynomial in TDB (Julian centuries since J2000).
-# Coefficients are padded to 4 terms and pre-packed into (6, 4) JAX arrays.
+# Coefficients are padded to 4 terms and packed on the host before the epoch shift.
 
 _NCOEFF = 4  # max polynomial degree + 1
 
@@ -200,12 +201,12 @@ def _pad(coeffs: list, n: int = _NCOEFF) -> list:
     return coeffs + [0.0] * (n - len(coeffs))
 
 
-def _pack_planet(raw: dict) -> jnp.ndarray:
+def _pack_planet(raw: dict) -> np.ndarray:
     """Pack planet ephemeris dict into a (6, NCOEFF) array.
 
     Row order: a, e, I, O, w, lM.
     """
-    return jnp.array(
+    return np.array(
         [
             _pad(raw["a"]),
             _pad(raw["e"]),
@@ -213,13 +214,13 @@ def _pack_planet(raw: dict) -> jnp.ndarray:
             _pad(raw["O"]),
             _pad(raw["w"]),
             _pad(raw["lM"]),
-        ]
+        ],
+        dtype=np.float64,
     )
 
 
-# Pre-pack all planets into JAX arrays at module load time.
-# Each entry is a (6, 4) array.
-_EPHEM: dict[str, jnp.ndarray] = {
+# Secular rates must retain all their digits until the epoch is subtracted.
+_EPHEM: dict[str, np.ndarray] = {
     name: _pack_planet(raw) for name, raw in _EPHEM_RAW.items()
 }
 
@@ -243,7 +244,7 @@ def _epoch_coefficients(body: str, epoch: Epoch) -> np.ndarray:
         Read-only float64 array of shape ``(6, NCOEFF)``, rows a, e, I, O, w, lM.
     """
     t0 = epoch.days_between(Epoch(J2000_JD, scale=epoch.scale)) / _DAYS_PER_CENTURY
-    raw = np.asarray(_EPHEM[body], dtype=np.float64)
+    raw = _EPHEM[body]
     shifted = np.zeros_like(raw)
     for k in range(_NCOEFF):
         for j in range(k, _NCOEFF):
@@ -298,7 +299,7 @@ def planet_position_ecliptic(body: str, epoch: Epoch, time_d: ArrayLike) -> jnp.
 
 def _planet_position_ecliptic_rel(body: str, epoch: Epoch, time_d: ArrayLike) -> Array:
     """Heliocentric ecliptic position at ``time_d`` days from ``epoch``."""
-    coeffs = jnp.asarray(_epoch_coefficients(body, epoch))  # (6, 4), active dtype
+    coeffs = like(_epoch_coefficients(body, epoch), time_d)
     tau = jnp.asarray(time_d, dtype=coeffs.dtype) / _DAYS_PER_CENTURY
 
     # Evaluate all 6 polynomials at once: [a, e, I_deg, O_deg, w_deg, lM_deg]

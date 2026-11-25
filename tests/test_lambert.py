@@ -2,7 +2,9 @@
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
+from hwoutils.testing import ulps
 from jax.test_util import check_grads
 
 from orbix.equations import lambert_solve, lambert_tof_min
@@ -12,42 +14,49 @@ MU = 1.0
 
 def _rot_z(t):
     """Active rotation matrix about the z axis."""
-    c, s = jnp.cos(t), jnp.sin(t)
-    return jnp.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+    c, s = np.cos(t), np.sin(t)
+    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
 
 
 def _rot_x(t):
     """Active rotation matrix about the x axis."""
-    c, s = jnp.cos(t), jnp.sin(t)
-    return jnp.array([[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]])
+    c, s = np.cos(t), np.sin(t)
+    return np.array([[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]])
 
 
 def _rv_from_elements(a, e, inc, W, w, M, mu):
-    """Independent (r, v, nu) reference: Newton Kepler solve + perifocal rotation."""
+    """Independent float64 (r, v, nu) from Newton iteration and perifocal rotation."""
     E = M
     for _ in range(60):
-        E = E - (E - e * jnp.sin(E) - M) / (1.0 - e * jnp.cos(E))
-    sinE, cosE = jnp.sin(E), jnp.cos(E)
+        E = E - (E - e * np.sin(E) - M) / (1.0 - e * np.cos(E))
+    sinE, cosE = np.sin(E), np.cos(E)
     rmag = a * (1.0 - e * cosE)
-    sq1me2 = jnp.sqrt(1.0 - e**2)
-    r_pf = jnp.array([a * (cosE - e), a * sq1me2 * sinE, 0.0])
-    v_pf = (jnp.sqrt(mu * a) / rmag) * jnp.array([-sinE, sq1me2 * cosE, 0.0])
+    sq1me2 = np.sqrt(1.0 - e**2)
+    r_pf = np.array([a * (cosE - e), a * sq1me2 * sinE, 0.0])
+    v_pf = (np.sqrt(mu * a) / rmag) * np.array([-sinE, sq1me2 * cosE, 0.0])
     R = _rot_z(W) @ _rot_x(inc) @ _rot_z(w)
-    nu = 2.0 * jnp.arctan2(
-        jnp.sqrt(1.0 + e) * jnp.sin(E / 2.0), jnp.sqrt(1.0 - e) * jnp.cos(E / 2.0)
+    nu = 2.0 * np.arctan2(
+        np.sqrt(1.0 + e) * np.sin(E / 2.0), np.sqrt(1.0 - e) * np.cos(E / 2.0)
     )
     return R @ r_pf, R @ v_pf, nu
 
 
 def _two_epoch_fixture(dM, n_rev=0, a=1.0, e=0.35, inc=0.6, W=1.1, w=0.7, M1=0.4):
     """Truth (r1, v1, r2, v2, tof, long_way) for a transfer of dM (+ n_rev turns)."""
-    M2 = M1 + dM + 2.0 * jnp.pi * n_rev
+    M2 = M1 + dM + 2.0 * np.pi * n_rev
     r1, v1, nu1 = _rv_from_elements(a, e, inc, W, w, M1, MU)
     r2, v2, nu2 = _rv_from_elements(a, e, inc, W, w, M2, MU)
-    n = jnp.sqrt(MU / a**3)
+    n = np.sqrt(MU / a**3)
     tof = (M2 - M1) / n
-    sweep = jnp.mod(nu2 - nu1, 2.0 * jnp.pi)
-    return r1, v1, r2, v2, tof, bool(sweep > jnp.pi)
+    sweep = np.mod(nu2 - nu1, 2.0 * np.pi)
+    return (
+        jnp.asarray(r1),
+        v1,
+        jnp.asarray(r2),
+        v2,
+        jnp.asarray(tof),
+        bool(sweep > np.pi),
+    )
 
 
 def _implied_tof(r1, v1, r2, v2, mu, n_rev):
@@ -67,43 +76,91 @@ def _implied_tof(r1, v1, r2, v2, mu, n_rev):
     E2, _ = ecc_anomaly(r2, v2)
     dE = jnp.mod(E2 - E1, 2.0 * jnp.pi) + 2.0 * jnp.pi * n_rev
     dM = dE - e * (jnp.sin(E1 + dE) - jnp.sin(E1))
-    return dM / n
+    time = dM / n
+    # Relative condition of (2/r - v^2/mu)^(-3/2) in the recovered period.
+    condition = 1.5 * a * (2 / jnp.linalg.norm(r1) + jnp.dot(v1, v1) / mu)
+    return time, ulps(32, time) * condition
 
 
 def test_n0_short_way_recovers_velocities():
-    """A single-rev short-way transfer recovers both terminal velocities."""
+    """A single-rev short-way transfer recovers both terminal velocities.
+
+    Allow 32 roundings at the speed norm for two 3D rotations, terminal
+    geometry (norms and dot), f/g coefficients and component recovery.
+    """
     r1, v1, r2, v2, tof, long_way = _two_epoch_fixture(dM=1.6)
     assert not long_way
     v1_l, v2_l, valid = lambert_solve(r1, r2, tof, MU, 0, long_way)
     assert bool(valid)
-    assert jnp.allclose(v1_l, v1, rtol=1e-8, atol=1e-10)
-    assert jnp.allclose(v2_l, v2, rtol=1e-8, atol=1e-10)
+    np.testing.assert_allclose(
+        v1_l, v1, rtol=0, atol=float(ulps(32, v1_l.dtype.type(np.linalg.norm(v1))))
+    )
+    np.testing.assert_allclose(
+        v2_l, v2, rtol=0, atol=float(ulps(32, v2_l.dtype.type(np.linalg.norm(v2))))
+    )
 
 
 def test_n0_long_way_recovers_velocities():
-    """A single-rev long-way (sweep > pi) transfer recovers both velocities."""
+    """A single-rev long-way (sweep > pi) transfer recovers both velocities.
+
+    Allow 32 roundings at the speed norm for two 3D rotations, terminal
+    geometry (norms and dot), f/g coefficients and component recovery.
+    """
     r1, v1, r2, v2, tof, long_way = _two_epoch_fixture(dM=4.4)
     assert long_way
     v1_l, v2_l, valid = lambert_solve(r1, r2, tof, MU, 0, long_way)
     assert bool(valid)
-    assert jnp.allclose(v1_l, v1, rtol=1e-8, atol=1e-10)
-    assert jnp.allclose(v2_l, v2, rtol=1e-8, atol=1e-10)
+    np.testing.assert_allclose(
+        v1_l, v1, rtol=0, atol=float(ulps(32, v1_l.dtype.type(np.linalg.norm(v1))))
+    )
+    np.testing.assert_allclose(
+        v2_l, v2, rtol=0, atol=float(ulps(32, v2_l.dtype.type(np.linalg.norm(v2))))
+    )
+
+
+@pytest.mark.parametrize("radius", [1.0, 1e10])
+def test_multirev_circular_velocities_independent_of_units(radius):
+    """A circle with mu=r has unit speed and a period of 2*pi*r.
+
+    The high branch completes one turn plus a quarter turn. Allow 32
+    roundings at unit speed for the root, f/g coefficients and component
+    recovery, including cancellation of the radial velocity.
+    """
+    r1 = jnp.asarray([radius, 0.0, 0.0])
+    r2 = jnp.asarray([0.0, radius, 0.0])
+    tof = 2.5 * np.pi * radius
+    for solve in (lambert_solve, jax.jit(lambert_solve)):
+        v1, v2, valid = solve(r1, r2, tof, radius, N=1, high_branch=True)
+        assert valid
+        atol = float(ulps(32, r1.dtype.type(1.0)))
+        np.testing.assert_allclose(v1, [0.0, 1.0, 0.0], atol=atol, rtol=0)
+        np.testing.assert_allclose(v2, [-1.0, 0.0, 0.0], atol=atol, rtol=0)
 
 
 def test_multirev_one_branch_matches_truth():
-    """For a 3.x-revolution transfer, exactly one N=3 branch is the true orbit."""
+    """For a 3.x-revolution transfer, exactly one N=3 branch is the true orbit.
+
+    As for N=0, allow 32 roundings at the speed norm for the terminal
+    geometry and rotated Kepler state. The other branch is physically distinct.
+    """
     r1, v1, r2, _v2, tof, long_way = _two_epoch_fixture(dM=1.6, n_rev=3)
     errs = []
     for high in (False, True):
         v1_l, _, valid = lambert_solve(r1, r2, tof, MU, 3, long_way, high)
         assert bool(valid)
-        errs.append(float(jnp.max(jnp.abs(v1_l - v1))))
-    assert min(errs) < 1e-8
+        errs.append(np.max(np.abs(np.asarray(v1_l) - v1)))
+    assert min(errs) <= ulps(32, v1_l.dtype.type(np.linalg.norm(v1)))
     assert max(errs) > 1e-3
 
 
 def test_valid_aliases_all_satisfy_the_boundary_value_problem():
-    """Every valid (N, branch) alias connects r1 to r2 in exactly tof."""
+    """Every valid (N, branch) alias connects r1 to r2 in the requested time.
+
+    Allow 32 roundings for the two reconstructed anomalies, trig and phase
+    difference, scaled by the period condition from the energy subtraction.
+    Eight roundings at the angular momentum norm cover two cross products
+    and their upstream f/g velocity expressions.
+    """
     r1, _, r2, _, tof, long_way = _two_epoch_fixture(dM=1.6, n_rev=3)
     n_valid = 0
     for N in range(9):
@@ -112,11 +169,11 @@ def test_valid_aliases_all_satisfy_the_boundary_value_problem():
             if not bool(valid):
                 continue
             n_valid += 1
-            tof_back = _implied_tof(r1, v1_l, r2, v2_l, MU, N)
-            assert jnp.allclose(tof_back, tof, rtol=1e-8)
+            tof_back, bound = _implied_tof(r1, v1_l, r2, v2_l, MU, N)
+            assert jnp.allclose(tof_back, tof, rtol=0, atol=bound)
             h1 = jnp.cross(r1, v1_l)
             h2 = jnp.cross(r2, v2_l)
-            assert jnp.allclose(h1, h2, rtol=1e-8, atol=1e-12)
+            assert jnp.allclose(h1, h2, rtol=0, atol=ulps(8, jnp.linalg.norm(h1)))
     assert n_valid > 2
     invalid_count = 0
     for high in (False, True):
@@ -193,7 +250,11 @@ def test_gradients_match_finite_differences_multirev():
 
 
 def test_vmap_over_depth_batch():
-    """The scalar core vmaps over a batch of line-of-sight depth hypotheses."""
+    """The scalar core vmaps over a batch of line-of-sight depth hypotheses.
+
+    Each recovered TOF has the same 32-rounding phase reconstruction and
+    energy-to-period condition as in the individual alias test.
+    """
     r1, _, r2, _, tof, long_way = _two_epoch_fixture(dM=1.6)
     dz = jnp.linspace(-0.3, 0.3, 8)
     r1_batch = r1[None, :] + dz[:, None] * jnp.array([0.0, 0.0, 1.0])
@@ -203,7 +264,7 @@ def test_vmap_over_depth_batch():
     )(r1_batch)
     assert v1_b.shape == (8, 3) and v2_b.shape == (8, 3) and valid_b.shape == (8,)
     assert bool(jnp.all(jnp.isfinite(v1_b[valid_b])))
-    tof_back = jax.vmap(lambda r1_, v1_, v2_: _implied_tof(r1_, v1_, r2, v2_, MU, 0))(
-        r1_batch, v1_b, v2_b
-    )
-    assert jnp.allclose(tof_back[valid_b], tof, rtol=1e-8)
+    tof_back, bounds = jax.vmap(
+        lambda r1_, v1_, v2_: _implied_tof(r1_, v1_, r2, v2_, MU, 0)
+    )(r1_batch, v1_b, v2_b)
+    assert jnp.all(jnp.abs(tof_back[valid_b] - tof) <= bounds[valid_b])

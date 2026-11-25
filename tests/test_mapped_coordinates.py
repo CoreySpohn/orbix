@@ -48,16 +48,22 @@ def _id(chart):
     return type(chart).__name__
 
 
-def test_law_support_reports_exactly_the_interval_bounded_elements():
-    """Fails if a bounded element is missing, or a half-bounded one is reported."""
+def test_law_support_reports_exactly_the_interval_bounded_elements(precision):
+    """Interval endpoints are the supplied values represented in the lane dtype."""
     support = A_LAW.support()
     assert set(support) == {"e", "a_AU"}
-    np.testing.assert_allclose(support["e"], (0.05, 0.8), rtol=0, atol=0)
-    np.testing.assert_allclose(support["a_AU"], (0.8, 3.0), rtol=0, atol=0)
+    np.testing.assert_array_equal(
+        support["e"], np.asarray((0.05, 0.8), dtype=precision)
+    )
+    np.testing.assert_array_equal(
+        support["a_AU"], np.asarray((0.8, 3.0), dtype=precision)
+    )
     assert set(P_LAW.support()) == {"e", "period_d"}
     truncated = priorities.TruncatedDistribution(priorities.Beta(0.87, 3.03), high=0.7)
     law = OrbitLaw(truncated, period_d=priorities.LogUniform(300.0, 600.0))
-    np.testing.assert_allclose(law.support()["e"], (0.0, 0.7), rtol=0, atol=1e-15)
+    np.testing.assert_array_equal(
+        law.support()["e"], np.asarray((0.0, 0.7), dtype=precision)
+    )
     open_law = OrbitLaw(priorities.HalfNormal(0.2), a_AU=priorities.LogNormal(0.0, 1.0))
     assert open_law.support() == {}
     assert _TiltedLaw(A_LAW).support() == {}
@@ -656,3 +662,51 @@ def test_a_size_law_from_zero_has_a_finite_density_everywhere(size):
         }
         values = jax.jit(jax.vmap(lambda x, b=block: b.log_prob(x, model)))(points)
         assert bool(jnp.all(jnp.isfinite(values))), type(block.chart).__name__
+
+
+@pytest.mark.parametrize(
+    "chart", [ClassicalChart(), EccentricityVectorChart()], ids=_id
+)
+def test_inverse_support_mask_is_precision_independent(chart):
+    """Four coarsest-precision epsilons at the interval scale resolve membership.
+
+    An overshoot of a quarter epsilon is within the support tolerance; sixteen
+    epsilons is outside even though it is below sqrt(float32 epsilon).
+    """
+    from hwoutils.numerics import COARSEST, eps
+
+    high = 0.75
+    radii = high * (1.0 + np.array([0.25, 16.0]) * eps(COARSEST))
+    coords = jnp.zeros((2, chart.n_coords))
+    if isinstance(chart, ClassicalChart):
+        coords = coords.at[:, 1].set(np.log(radii / (1.0 - radii)))
+    else:
+        coords = coords.at[:, 1].set(radii / np.sqrt(1.0 - radii**2))
+    for inverse in (chart.unconstrain, jax.jit(chart.unconstrain)):
+        recovered = inverse(coords, {"e": (0.0, high)})
+        assert np.all(np.isfinite(recovered[0]))
+        assert np.all(np.isnan(recovered[1]))
+        high_size = float(np.float32(1.2))
+        offsets = np.array([4, 5]) * float(np.spacing(np.float32(high_size)))
+        sizes = coords.at[:, 0].set(high_size + offsets)
+        recovered = inverse(sizes, {"ln_size": (0.0, high_size)})
+        assert np.all(np.isfinite(recovered[0]))
+        assert np.all(np.isnan(recovered[1]))
+
+
+@pytest.mark.float64_only(
+    reason="interval endpoints outside the float32 exponent range"
+)
+@pytest.mark.parametrize("scale", [1e-100, 1e100])
+def test_support_checks_preserve_the_float64_exponent_range(scale):
+    """Only the comparison slack takes float32 resolution. Bounds retain their units."""
+    chart = ClassicalChart()
+    x = jnp.zeros((2, chart.n_coords)).at[:, 0].set(jnp.array([1.5, 3.0]) * scale)
+    law = OrbitLaw(
+        priorities.Uniform(0.0, 1.0), a_AU=priorities.Uniform(scale, 2 * scale)
+    )
+    block = _mapped(chart, law)
+    assert block.same_map(block)
+    result = chart.unconstrain(x, {"ln_size": (scale, 2 * scale)})
+    assert np.all(np.isfinite(result[0]))
+    assert np.all(np.isnan(result[1]))

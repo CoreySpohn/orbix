@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 from hwoutils.constants import J2000_JD, two_pi
 from hwoutils.epoch import Epoch
+from hwoutils.testing import ulps
 from hypothesis import example, given
 from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
@@ -104,23 +105,39 @@ class TestSolarSystemEphemerides:
         ),
     )
     def test_equat_eclip_roundtrip(self, vectors, angles):
-        """Fails if frame inverses, scalar/batch paths, or orthonormality drift."""
+        """Two inverse planar rotations recover the vector and its norm.
+
+        Each rotation rounds its sine/cosine, two products and their sum.
+        Twelve operations cover input casting, both rotations and the norm.
+        Six unit-scale operations cover the orthogonality dot or the
+        determinant of the embedded 2-by-2 rotation. Below the normal range
+        the device can flush a vector component to zero.
+        """
         first, second, scalar, forward, backward, r1, ir1, r3, ir3, rotated = map(
             np.asarray,
             _frame_round_trips(jnp.asarray(vectors), jnp.asarray(angles)),
         )
-        np.testing.assert_allclose(first, vectors, rtol=0, atol=5e-14)
-        np.testing.assert_allclose(second, vectors, rtol=0, atol=5e-14)
-        np.testing.assert_allclose(scalar, vectors[0], rtol=0, atol=5e-14)
+        unit = np.ones((), dtype=first.dtype)
+        ortho_tol = float(ulps(6, unit))
+        vector_tol = float(ulps(12, unit)) * np.hypot.reduce(
+            vectors, axis=1
+        ).max() + 4 * float(np.finfo(first.dtype).tiny)
+        np.testing.assert_allclose(first, vectors, rtol=0, atol=vector_tol)
+        np.testing.assert_allclose(second, vectors, rtol=0, atol=vector_tol)
+        np.testing.assert_allclose(scalar, vectors[0], rtol=0, atol=vector_tol)
         for matrix, inverse in ((forward, backward), (r1, ir1), (r3, ir3)):
-            np.testing.assert_allclose(matrix @ inverse, np.eye(3), atol=5e-16, rtol=0)
-            np.testing.assert_allclose(matrix.T @ matrix, np.eye(3), atol=5e-16, rtol=0)
-            np.testing.assert_allclose(np.linalg.det(matrix), 1, atol=5e-16, rtol=0)
+            np.testing.assert_allclose(
+                matrix @ inverse, np.eye(3), atol=ortho_tol, rtol=0
+            )
+            np.testing.assert_allclose(
+                matrix.T @ matrix, np.eye(3), atol=ortho_tol, rtol=0
+            )
+            np.testing.assert_allclose(np.linalg.det(matrix), 1, atol=ortho_tol, rtol=0)
         np.testing.assert_allclose(
-            np.linalg.norm(rotated, axis=1),
-            np.linalg.norm(vectors, axis=1),
-            rtol=5e-16,
-            atol=5e-14,
+            np.hypot.reduce(rotated.astype(np.float64), axis=1),
+            np.hypot.reduce(vectors, axis=1),
+            rtol=0,
+            atol=vector_tol,
         )
 
     def test_jit_planet_position(self):
