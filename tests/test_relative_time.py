@@ -40,6 +40,7 @@ _LATE_ODD = Epoch(2400000.5, 80000.3137, scale="tt")
 # by about 6e-6 AU, which float32 phase rounding would flip across.
 
 
+@pytest.mark.float64_only(reason="float64 parity with the pre-conditioning ephemeris")
 def test_x64_matches_base_code():
     """Fails if the host re-expansion or halo phase reduction changes a float64 result.
 
@@ -61,8 +62,8 @@ def test_x64_matches_base_code():
     assert len(_REFERENCE["positions"]) == 18
 
 
-def test_x64_observability_mask_matches_base_code():
-    """Fails if the keepout decision changes in float64 away from the keepout edge.
+def test_observability_mask_matches_base_code():
+    """Fails if the keepout decision changes away from the keepout edge.
 
     Truth: the mask and solar elongation stored from the absolute-MJD
     implementation, 8 targets by 3 epochs by 3 times, 45 deg solar keepout.
@@ -117,6 +118,7 @@ def _fast_halo(tmp_path):
     return str(path)
 
 
+@pytest.mark.float32_only(reason="float32 epoch-conditioning floor")
 def test_x32_positions_agree_with_x64_truth(tmp_path):
     """Fails if an absolute date, or the halo phase, is formed in float32.
 
@@ -135,25 +137,27 @@ def test_x32_positions_agree_with_x64_truth(tmp_path):
     points = _REFERENCE["x32_points"]
     assert len(points) == 40
     worst = 0.0
-    with jax.enable_x64(False):
-        observatories = {
-            "bundled": ObservatoryL2Halo.from_default(),
-            "fast": ObservatoryL2Halo.from_npz(fast_path),
-        }
-        assert observatories["fast"].position_ecliptic(_LATE_ODD, 1.0).dtype == (
-            jnp.float32
-        )
-        for rec in points:
-            epoch, t = epochs[rec["epoch"]], rec["time_d"]
-            for got, want in (
-                (observatories[rec["halo"]].position_ecliptic(epoch, t), "position"),
-                (earth_position_ecliptic(epoch, t), "earth"),
-            ):
-                err = np.abs(np.asarray(got, dtype=np.float64) - rec[want]).max()
-                worst = max(worst, float(err))
+    observatories = {
+        "bundled": ObservatoryL2Halo.from_default(),
+        "fast": ObservatoryL2Halo.from_npz(fast_path),
+    }
+    assert observatories["fast"].position_ecliptic(_LATE_ODD, 1.0).dtype == (
+        jnp.float32
+    )
+    for rec in points:
+        epoch, t = epochs[rec["epoch"]], rec["time_d"]
+        for got, want in (
+            (observatories[rec["halo"]].position_ecliptic(epoch, t), "position"),
+            (earth_position_ecliptic(epoch, t), "earth"),
+        ):
+            err = np.abs(np.asarray(got, dtype=np.float64) - rec[want]).max()
+            worst = max(worst, float(err))
     assert worst < 5e-6, worst
 
 
+@pytest.mark.float64_only(
+    reason="float64 JAX reference for the float32 precision comparison"
+)
 def test_x32_sun_longitude_agrees_with_x64():
     """Fails if the Sun's longitude forms an absolute date in float32.
 
@@ -193,7 +197,7 @@ def test_epoch_mjd_is_host_only():
         jax.grad(lambda t: epoch_mjd(epoch, t))(1.0)
 
 
-def test_halo_has_no_python_number_or_wrong_dtype_leaf():
+def test_halo_has_no_python_number_or_wrong_dtype_leaf(precision):
     """Fails if a time or length scalar of the halo is stored as a dynamic leaf.
 
     Truth: the leaf rule of the hwoutils leaf check (a Python number, NumPy
@@ -201,8 +205,7 @@ def test_halo_has_no_python_number_or_wrong_dtype_leaf():
     float32. The Python numbers are static fields; the interpolators are the
     only leaves.
     """
-    for context in (jax.enable_x64(True), jax.enable_x64(False)):
-        with context:
-            obs = ObservatoryL2Halo.from_default()
-            assert check_tree(obs) == ()
-            assert len(jax.tree_util.tree_leaves(eqx.filter(obs, eqx.is_array))) > 0
+    obs = ObservatoryL2Halo.from_default()
+    assert check_tree(obs) == ()
+    leaves = jax.tree_util.tree_leaves(eqx.filter(obs, eqx.is_array))
+    assert leaves and all(leaf.dtype == precision for leaf in leaves)

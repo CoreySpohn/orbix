@@ -20,6 +20,7 @@ def _propagate_cartesian(state):
     return jnp.concatenate([r.ravel(), v.ravel()])
 
 
+@pytest.mark.float64_only(reason="finite-difference derivative reference")
 @pytest.mark.parametrize(
     "e,inc", [(0.0, 0.7), (0.3, 0.0), (0.3, np.pi), (0.0, 0.0), (0.0, np.pi)]
 )
@@ -153,6 +154,9 @@ def test_batch_contract_and_vmap(batch):
         np.testing.assert_allclose(mapped, (r, v), atol=2e-14, rtol=0)
 
 
+@pytest.mark.float64_only(
+    reason="float64 JAX reference for the float32 precision comparison"
+)
 def test_float32_long_baseline():
     """Fails if day offsets lose more than 1e-5 of a over twenty years.
 
@@ -193,7 +197,7 @@ def test_shape_validation():
 
 @pytest.mark.parametrize("solver", [Markley(), Halley()])
 @pytest.mark.parametrize("time", [0.37, np.array([-0.3, 17.0, 300.0])])
-def test_plane_factorization(time, solver):
+def test_plane_factorization(time, solver, precision):
     """Fails if trig construction or plane factors lose state, scale, or time axes.
 
     Truth: the propagated state for the generic and singular element sets
@@ -243,7 +247,7 @@ def test_plane_factorization(time, solver):
     for actual, expected in zip(
         jax.tree.leaves(trig), jax.tree.leaves(orbit), strict=True
     ):
-        assert actual.dtype == jnp.float64
+        assert actual.dtype == precision
         np.testing.assert_allclose(actual, expected, rtol=1e-13, atol=1e-13)
     np.testing.assert_allclose(
         trig.at(time, solver=solver),
@@ -354,6 +358,7 @@ def test_perifocal_coordinates_and_thiele_innes(e, inc):
     )
 
 
+@pytest.mark.float64_only(reason="finite-difference derivative reference")
 @pytest.mark.parametrize("component", [0, 1])
 def test_plane_coordinates_circular_gradient(component):
     """Fails if circular plane coordinates have a singular eccentricity gradient.
@@ -385,6 +390,7 @@ def test_plane_coordinates_circular_gradient(component):
         assert np.isfinite(derivative)
 
 
+@pytest.mark.float64_only(reason="finite-difference derivative reference")
 @pytest.mark.parametrize("parameter", ["cos_i", "cos_w", "sin_w"])
 def test_classical_trig_gradients(parameter):
     """Fails if angle inversion makes face-on or periapsis gradients singular.
@@ -420,7 +426,7 @@ def test_classical_trig_gradients(parameter):
     np.testing.assert_allclose(derivative, difference, rtol=1e-6, atol=1e-11)
 
 
-def test_size_and_period_accessors():
+def test_size_and_period_accessors(precision):
     """Fails if stored AU/day scales or batch axes are lost through transforms.
 
     Truth: input semi-major axes and Kepler's third law at different masses.
@@ -442,10 +448,11 @@ def test_size_and_period_accessors():
     ):
         np.testing.assert_array_equal(size, a)
         np.testing.assert_allclose(
-            period, expected_period, rtol=4 * np.finfo(np.float64).eps, atol=0
+            period, expected_period, rtol=4 * np.finfo(precision).eps, atol=0
         )
 
 
+@pytest.mark.float64_only(reason="finite-difference derivative reference")
 def test_linear_factors_stored_leaf_derivatives():
     """Fails if circular/face-on factors introduce singular stored-leaf AD.
 

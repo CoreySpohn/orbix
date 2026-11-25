@@ -15,8 +15,9 @@ _compiled_interval = eqx.filter_jit(Observatory.observability)
 
 def _interval(obs, ra, dec, epoch, start, stop, *, n_samples=64):
     """Keep numerical arguments dynamic so interval scenarios share a compile."""
+    dtype = jnp.asarray(obs.keepout_min_deg).dtype
     ra, dec, start, stop = (
-        jnp.asarray(value, dtype=jnp.float64) for value in (ra, dec, start, stop)
+        jnp.asarray(value, dtype=dtype) for value in (ra, dec, start, stop)
     )
     return _compiled_interval(obs, ra, dec, epoch, start, stop, n_samples=n_samples)
 

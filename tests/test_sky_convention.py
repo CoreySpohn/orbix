@@ -19,8 +19,6 @@ from orbix.system import (
     position_angle_deg,
 )
 
-jax.config.update("jax_enable_x64", True)
-
 # Kervella et al. (2016), A&A 594, A107, arXiv:1610.06079, Table A.1.
 # All 25 rows: epoch (year), PA (deg), sigma_PA (deg), rho and sigma_rho (arcsec).
 ALPHA_CEN_ASTROMETRY = np.array(
@@ -195,6 +193,7 @@ def test_ascending_node_moves_away():
     )
 
 
+@pytest.mark.float64_only(reason="float64 reference values for orbital validation")
 def test_alpha_cen_published_astrometry(alpha_cen_orbit):
     """Match Kervella et al. (2016), A&A 594, A107, Tables 1 and A.1.
 
@@ -216,6 +215,7 @@ def test_alpha_cen_published_astrometry(alpha_cen_orbit):
     assert chi2_per_epoch < 4.0, f"chi2 per epoch = {chi2_per_epoch:.6f}"
 
 
+@pytest.mark.float64_only(reason="float64 reference values for orbital validation")
 def test_alpha_cen_independent_thiele_innes(alpha_cen_orbit):
     """Pin east/north to 1e-9 arcsec: Green (1985), ch. 17; K16 Table 1."""
     orbit, stellar = alpha_cen_orbit
@@ -488,6 +488,7 @@ def _numpy_k16_state(eccentric_anomaly):
     return np.array([y_east, x_north, z]), np.array([v_east, v_north, v_away])
 
 
+@pytest.mark.float64_only(reason="float64 reference values for orbital validation")
 def test_independent_right_handed_k16_state():
     """Kervella et al. (2016), Table 1: recover the published orientation."""
     E = 1.1

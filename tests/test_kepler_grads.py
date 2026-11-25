@@ -1,6 +1,7 @@
 """Finite-difference checks on the hand-derived IFT backward pass."""
 
 import jax.numpy as jnp
+import pytest
 from jax.test_util import check_grads
 
 from orbix.kepler import kepler
@@ -12,6 +13,7 @@ def _loss(M, e):
     return jnp.sum(sinE * 1.3 + cosE * 0.7)
 
 
+@pytest.mark.float64_only(reason="finite-difference derivative reference")
 def test_broadcast_reduction_gradients_match_finite_differences():
     """Fails if the implicit rule reduces a shared eccentricity gradient incorrectly."""
     M = jnp.linspace(0.1, 2 * jnp.pi - 0.1, 9)

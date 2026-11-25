@@ -4,10 +4,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import priorities.testing
+import pytest
 
 from orbix.system import ClassicalChart, IsotropicInclination
-
-jax.config.update("jax_enable_x64", True)
 
 
 def test_distribution_contract():
@@ -17,6 +16,7 @@ def test_distribution_contract():
     )
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 def test_matches_classical_chart_reference_measure():
     """Density in i times |di/dz| is the chart density, up to the 1/2 normalization."""
     dist, chart = IsotropicInclination(), ClassicalChart()

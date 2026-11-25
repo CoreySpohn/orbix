@@ -58,6 +58,7 @@ def _two_samples(block, model):
     return stack(mapped), stack(drawn)
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("name", list(CASES))
 def test_from_unit_and_sample_have_one_distribution(name):
     """Fails if a coordinate of the cube map differs in law from ``sample``.
@@ -108,6 +109,7 @@ def _law_checks(block, model, mapped):
     return checks
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("name", ["classical-a", "classical-period"])
 def test_from_unit_matches_the_laws_that_log_prob_is_built_from(name):
     """Fails if the cube map's marginals are not the exact marginals of the law.
@@ -123,6 +125,7 @@ def test_from_unit_matches_the_laws_that_log_prob_is_built_from(name):
         assert ks_1samp(values, cdf).pvalue > ALPHA, (name, label)
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("name", list(CASES))
 def test_from_unit_lands_where_log_prob_is_finite_and_is_deterministic(name):
     """Fails if a cube point maps outside the support, or the map is not a function."""
@@ -136,6 +139,7 @@ def test_from_unit_lands_where_log_prob_is_finite_and_is_deterministic(name):
     assert bool(jnp.all(jnp.isfinite(logp)))
 
 
+@pytest.mark.float64_only(reason="orbital inference coordinates and log densities")
 @pytest.mark.parametrize("name", list(CASES))
 def test_from_unit_preserves_locality(name):
     """Fails if nearby cube points are sent far apart on most of the cube.

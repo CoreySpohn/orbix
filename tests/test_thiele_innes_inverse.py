@@ -9,7 +9,16 @@ from hwoutils.constants import two_pi
 from orbix.equations import thiele_innes_constants, thiele_innes_to_elements
 
 
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        jnp.float32,
+        pytest.param(
+            jnp.float64,
+            marks=pytest.mark.float64_only(reason="explicit float64 orbital inputs"),
+        ),
+    ],
+)
 def test_thiele_innes_inverse_roundtrip_and_degeneracies(dtype):
     """Floating-point basis: 64 eps covers sums, products and angle recovery.
 

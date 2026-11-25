@@ -47,7 +47,27 @@ def _reference(m, e):
 
 
 @pytest.mark.parametrize(
-    "e", [0.0, 1e-8, 0.3, 0.78, 0.95, 0.9999, 1 - 1e-12, np.nextafter(1.0, 0.0)]
+    "e",
+    [
+        0.0,
+        1e-8,
+        0.3,
+        0.78,
+        0.95,
+        0.9999,
+        pytest.param(
+            1 - 1e-12,
+            marks=pytest.mark.float64_only(
+                reason="eccentricity just below one rounds to one in float32"
+            ),
+        ),
+        pytest.param(
+            np.nextafter(1.0, 0.0),
+            marks=pytest.mark.float64_only(
+                reason="eccentricity just below one rounds to one in float32"
+            ),
+        ),
+    ],
 )
 def test_matches_high_precision_roots(e):
     """Fails if the trig pair loses 8e-15 accuracy against high-precision roots.
@@ -71,6 +91,7 @@ def test_matches_high_precision_roots(e):
     np.testing.assert_allclose(np.array(result), reference[1:], rtol=0, atol=8e-15)
 
 
+@pytest.mark.float64_only(reason="eccentricity just below one rounds to one in float32")
 def test_tiny_signed_mean_anomalies():
     """Preserve relative precision at periapsis; no absolute tolerance (fp)."""
     means = np.geomspace(1e-24, 1e-8, 24)
@@ -149,6 +170,7 @@ def test_broadcast_wrapping_equation_and_trig(means, eccs):
     assert step / (1 + eccs[0]) - roundoff <= delta <= step / (1 - eccs[0]) + roundoff
 
 
+@pytest.mark.float64_only(reason="finite-difference derivative reference")
 @pytest.mark.parametrize("e", [0.0, 0.3, 0.95])
 def test_implicit_derivatives(e):
     """Both AD modes and second derivatives match finite differences (fp)."""
@@ -181,18 +203,15 @@ def test_gradients_with_integer_constants():
     np.testing.assert_allclose(periapsis, 0.0, rtol=0, atol=0)
 
 
-@pytest.mark.parametrize(
-    "x64,dtype", [(False, np.float32), (True, np.float32), (True, np.float64)]
-)
-def test_tracing_precision_context(x64, dtype):
+def test_tracing_precision_context(precision):
     """High-precision roots agree within 16 eps; catches int32 literal overflow.
 
     The tolerance covers argument reduction and conditioning at e=0.95 on
     these interior points. Explicit float32 inputs stay float32 under x64.
     """
-    with jax.enable_x64(x64):
+    for dtype in dict.fromkeys((np.dtype(np.float32), precision)):
         means = np.array([-0.2, 0.0, 0.01, 1.0, 3.0, 6.1], dtype=dtype)
-        eccentricity = dtype(0.95)
+        eccentricity = dtype.type(0.95)
         expected = np.array(
             [_reference(float(m) % two_pi, eccentricity) for m in means]
         ).T

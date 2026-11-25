@@ -144,6 +144,7 @@ NBODY_STAR_AU = np.array(
 )
 
 
+@pytest.mark.float64_only(reason="float64 reference values for orbital validation")
 def test_two_planets_against_nbody():
     """Fails if the hierarchy regresses to independent star-planet two-body motion.
 
@@ -212,9 +213,8 @@ def test_host_time_observables_and_solver_trace():
     """
     frame = SkyFrame(10.0, Epoch(2460000.0, 0.125, "tdb"))
     dates = np.array([2460000.125, 2460001.25])
-    with jax.enable_x64(False):
-        np.testing.assert_array_equal(frame.time_d(jd=dates), [0.0, 1.125])
-        assert frame.time_d(jd=dates).dtype == np.float64
+    np.testing.assert_array_equal(frame.time_d(jd=dates), [0.0, 1.125])
+    assert frame.time_d(jd=dates).dtype == np.float64
     assert len(jax.tree.leaves(frame)) == 1
     sys = _system()
     times = jnp.array([0.0, 200.0, 700.0])
@@ -421,6 +421,7 @@ def test_system_from_cartesian_rejects_wrong_shapes(field, shape):
         System.from_cartesian(Body(1.0), Body([0.001, 0.001]), SkyFrame(10.0), **states)
 
 
+@pytest.mark.float64_only(reason="float64 reference values for orbital validation")
 def test_cartesian_chain_against_nbody(record_property):
     """Truth: independent Newtonian RK4 of the three bodies.
 
