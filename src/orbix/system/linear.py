@@ -3,6 +3,8 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from hwoutils.numerics import COARSEST, eps
+from hwoutils.precision import like, require_float64
 from jax.scipy.linalg import solve_triangular
 from jaxtyping import Array
 
@@ -43,14 +45,36 @@ def sky_block_geometry(A, B, F, G) -> tuple[Array, Array]:
     return (plus + minus) / 2, plus * minus
 
 
+def _quaternion_sheet(quat):
+    """Read the represented away row on a common relative-magnitude grid."""
+    # Both the rotation and the pivot comparison use the decision precision.
+    # R.T @ away gives the away components of all three rotated axes.
+    quat = quat.astype(COARSEST)
+    conjugate = quat * jnp.array([1, -1, -1, -1], dtype=quat.dtype)
+    away = rotate(conjugate, jnp.array([0, 0, 1], dtype=quat.dtype))[..., :2]
+    scale = jnp.max(jnp.abs(away), axis=-1, keepdims=True)
+    relative = away / jnp.where(scale > 0, scale, 1)
+    c, h = jnp.moveaxis(relative, -1, 0)
+    first = jnp.abs(h) - jnp.abs(c) <= 4 * eps(COARSEST)
+    pivot = jnp.where(first, c, h)
+    return jnp.where(pivot < 0, -1, 1)
+
+
+def _reflected_quaternion(quat):
+    # Reflecting both coordinate frames through their xy planes negates
+    # the away row of the plane axes and preserves a proper rotation.
+    return quat * jnp.array([1, -1, -1, 1], dtype=quat.dtype)
+
+
 def line_of_sight_sheet(orbit: FrameOrbit) -> Array:
     """Return the line-of-sight sheet (+1 or -1) of orbits.
 
     The sheet is the one ``sky_block_to_frame`` defines: the sign of the
     largest-magnitude entry of the away row of
-    ``orbit.plane_basis()``; the first entry wins ties and a zero row (face-on)
-    is +1. Orbits reflected through the sky plane share their sky block and
-    differ only in this sign. The result has the orbit's batch shape, dtype int.
+    ``orbit.plane_basis()``. After scaling the larger magnitude to one, the
+    first entry wins a tie within four float32 epsilons. A face-on orbit gives +1.
+    Reflected orbits share the sky block and differ only in this sign. The result
+    has the orbit's batch shape, dtype int.
 
     Args:
         orbit: Orbits with batch shape B.
@@ -58,10 +82,7 @@ def line_of_sight_sheet(orbit: FrameOrbit) -> Array:
     Returns:
         Integer array of shape B holding +1 or -1.
     """
-    away = orbit.plane_basis()[..., 2, :]
-    pivot = jnp.where(jnp.abs(away[..., 0]) >= jnp.abs(away[..., 1]), 0, 1)
-    sign = jnp.sign(jnp.take_along_axis(away, pivot[..., None], axis=-1)[..., 0])
-    return jnp.where(sign == 0, 1, sign).astype(int)
+    return _quaternion_sheet(orbit.quat)
 
 
 def reflect_line_of_sight(orbits: FrameOrbit, planet: int) -> FrameOrbit:
@@ -86,14 +107,11 @@ def reflect_line_of_sight(orbits: FrameOrbit, planet: int) -> FrameOrbit:
         FrameOrbit with the same batch shape in which the selected planet is reflected
         through the sky plane.
     """
-    flip = jnp.asarray([1.0, 1.0, -1.0])
-    f = rotate(orbits.quat, jnp.asarray([1.0, 0.0, 0.0])) * flip
-    g = rotate(orbits.quat, jnp.asarray([0.0, 1.0, 0.0])) * flip
-    quat = from_basis(f, g, jnp.cross(f, g))
+    reflected = _reflected_quaternion(orbits.quat[..., planet, :])
     return eqx.tree_at(
         lambda o: o.quat,
         orbits,
-        orbits.quat.at[..., planet, :].set(quat[..., planet, :]),
+        orbits.quat.at[..., planet, :].set(reflected),
     )
 
 
@@ -108,9 +126,9 @@ def sky_block_to_frame(A, B, F, G, *, sheet=1) -> tuple[Array, Array]:
     Every finite nonzero real 2x2 block has a completion. Its largest
     singular value is a; a^2 I - S.T S = z z.T determines the away row
     z=(C,H). Static sheet must be +1 or -1 and sets the sign of z's
-    largest-magnitude entry (first wins ties). The other entry follows
-    from C*H=-(A*F+B*G). This is a local chart with a sign seam where
-    equally large, opposite-sign entries exchange pivot. The two sheets
+    largest-magnitude entry (first wins ties at float32 resolution). The
+    other entry follows from C*H=-(A*F+B*G). The chart has a sign seam
+    where equally large, opposite-sign entries exchange pivot. The two sheets
     coincide at face-on, where z=0; zero size is excluded.
 
     Values are finite at both face-on orientations and independent of
@@ -142,19 +160,24 @@ def sky_block_to_frame(A, B, F, G, *, sheet=1) -> tuple[Array, Array]:
     # subtracting squared column norms would manufacture an O(sqrt(eps)) tilt.
     plus_a, plus_b, minus_a, minus_b = A + G, B - F, A - G, B + F
     difference = -(plus_a * minus_a + plus_b * minus_b)
+    # Use the larger diagonal for conditioning. The sheet is assigned after
+    # quaternion conversion, which can exchange nearly equal away magnitudes.
     first = difference >= 0
-    # The larger diagonal of z z.T is at least gap/2; no cancellation.
     pivot2 = (gap + jnp.abs(difference)) / 2
     nonzero = pivot2 > 0
     pivot = jnp.sqrt(jnp.where(nonzero, pivot2, 1.0))
     other = -(plus_a * minus_b - minus_a * plus_b) / (2 * pivot)
     pivot = jnp.where(nonzero, pivot, 0.0)
     other = jnp.where(nonzero, other, 0.0)
-    C = sheet * jnp.where(first, pivot, other)
-    H = sheet * jnp.where(first, other, pivot)
+    C = jnp.where(first, pivot, other)
+    H = jnp.where(first, other, pivot)
     f = jnp.stack([B, A, C], -1) / a[..., None]
     g = jnp.stack([G, F, H], -1) / a[..., None]
-    return scale * a, from_basis(f, g, jnp.cross(f, g))
+    quat = from_basis(f, g, jnp.cross(f, g))
+    same_sheet = _quaternion_sheet(quat) == sheet
+    return scale * a, jnp.where(
+        same_sheet[..., None], quat, _reflected_quaternion(quat)
+    )
 
 
 def frame_to_sky_block(a_AU, quat) -> Array:
@@ -233,7 +256,8 @@ def linear_gaussian_conditional(
     with ``n`` the number of values of the active records. A record whose precision
     matrix is zero is inactive: it adds nothing to ``P`` or ``b`` and nothing to the
     first three terms of ``log Z``, whatever its target (mask a record by zeroing
-    its precision). Everything is differentiable in the design.
+    its precision). The design must have float64 precision. Observations and
+    noise or prior precisions widen before any arithmetic.
 
     Args:
         design: Shape ``(T, k, p)``, for example :func:`sky_design` with ``k = 2``,
@@ -248,9 +272,12 @@ def linear_gaussian_conditional(
         of ``P`` ``(p, p)`` (draw ``c = mean + solve_triangular(chol.T, z)`` with
         ``z`` standard normal) and the scalar ``log Z``.
     """
-    design, target, precision = map(jnp.asarray, (design, target, precision))
+    design = jnp.asarray(design)
+    require_float64("linear_gaussian_conditional", design)
+    target, precision, prior = (
+        like(value, design) for value in (target, precision, prior_precision)
+    )
     p = design.shape[-1]
-    prior = jnp.asarray(prior_precision)
     prior = jnp.diag(jnp.broadcast_to(prior, (p,))) if prior.ndim < 2 else prior
     weighted = jnp.einsum("tkl,tlp->tkp", precision, design)
     information = prior + jnp.einsum("tkp,tkq->pq", design, weighted)
@@ -277,11 +304,12 @@ def linear_gaussian_conditional(
 def fit_linear_map(orbit_shape: FrameOrbit, time_d, x, y, cov_or_errors, *, mask=None):
     """Fit the four sky constants at fixed nonlinear shape, with fixed shapes.
 
-    orbit_shape is an unbatched FrameOrbit; only n_rad_per_d, ex, ey and
+    orbit_shape is an unbatched float64 FrameOrbit; only n_rad_per_d, ex, ey and
     epoch_d enter. time_d, x, y have shape (T,), in days and east/north AU
     (the SkyFrame observable convention). Convert angular offsets and their
     uncertainties to AU using distance before calling. Size/orientation of
-    orbit_shape are ignored. External vmap handles batches of independent fits.
+    orbit_shape are ignored. Times, observations and noise widen to the orbit
+    precision. External vmap handles batches of independent fits.
 
     cov_or_errors is either a covariance array (2,2) or (T,2,2), in AU^2
     ordered east,north, or a tuple (x_err,y_err,corr), each scalar or (T,).
@@ -317,7 +345,8 @@ def fit_linear_map(orbit_shape: FrameOrbit, time_d, x, y, cov_or_errors, *, mask
         AU, shape (2, 2); the covariance of (A, B, F, G) in AU^2, shape (4, 4); the
         chi-square of the fit; and the integer numerical rank.
     """
-    time, x, y = map(jnp.asarray, (time_d, x, y))
+    require_float64("fit_linear_map", orbit_shape)
+    time, x, y = (like(value, orbit_shape) for value in (time_d, x, y))
     if (
         orbit_shape.a_AU.ndim != 0
         or time.ndim != 1
@@ -340,14 +369,14 @@ def fit_linear_map(orbit_shape: FrameOrbit, time_d, x, y, cov_or_errors, *, mask
     if active.shape != time.shape:
         raise ValueError("mask must have shape (T,)")
     if isinstance(cov_or_errors, tuple):
-        sx, sy, corr = map(jnp.asarray, cov_or_errors)
+        sx, sy, corr = (like(value, orbit_shape) for value in cov_or_errors)
         sx, sy, corr = jnp.broadcast_arrays(sx, sy, corr)
         cross = sx * sy * corr
         covariance = jnp.stack(
             [jnp.stack([sx * sx, cross], -1), jnp.stack([cross, sy * sy], -1)], -2
         )
     else:
-        covariance = jnp.asarray(cov_or_errors)
+        covariance = like(cov_or_errors, orbit_shape)
     covariance = jnp.broadcast_to(covariance, (count, 2, 2))
     covariance = jnp.where(active[:, None, None], covariance, jnp.eye(2))
     root = jnp.linalg.cholesky(covariance)

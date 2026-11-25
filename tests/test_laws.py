@@ -7,6 +7,8 @@ import numpy as np
 import priorities
 import pytest
 from hwoutils.constants import GM_SUN_AU3_PER_D2 as GM
+from hwoutils.leaves import canonical
+from hwoutils.precision import PrecisionError
 
 from orbix.system import (
     ClassicalChart,
@@ -107,7 +109,9 @@ def _a_law_spellings():
 
 
 @pytest.mark.parametrize("spelling", ["scalar", "shape1", "shape2"])
-def test_each_planet_gets_its_own_draw_whatever_the_parameter_shape(spelling):
+def test_each_planet_gets_its_own_draw_whatever_the_parameter_shape(
+    spelling, precision
+):
     """Fails if a size law of shape (1,) shares one draw among the planets.
 
     Truth: independent continuous variates are equal with probability zero, and their
@@ -127,9 +131,15 @@ def test_each_planet_gets_its_own_draw_whatever_the_parameter_shape(spelling):
         a = orbit.a_AU
         assert not jnp.any(a[:64, 0] == a[:64, 1])
         assert abs(np.corrcoef(a[:, 0], a[:, 1])[0, 1]) < band
-    score = law.log_prob(drawn)
-    assert jnp.all(jnp.isfinite(score))
-    np.testing.assert_allclose(score, scalar.log_prob(drawn), rtol=1e-12)
+    if precision == np.float32:
+        with pytest.raises(
+            PrecisionError, match=r"OrbitLaw\.log_prob requires float64"
+        ):
+            law.log_prob(drawn)
+    else:
+        score = law.log_prob(drawn)
+        assert jnp.all(jnp.isfinite(score))
+        np.testing.assert_allclose(score, scalar.log_prob(drawn), rtol=1e-12)
 
 
 def _mixture():
@@ -141,14 +151,17 @@ def _mixture():
 
 
 @pytest.mark.parametrize("size_law", [IsotropicInclination, _mixture])
-def test_laws_without_a_planet_axis_still_draw_each_planet_independently(size_law):
+def test_laws_without_a_planet_axis_still_draw_each_planet_independently(
+    size_law, precision
+):
     """Fails if a parameter-free law or a mixture's component axis shares one draw.
 
     A law with no parameters has no leaves to broadcast, and a mixture's component axis
     is not a planet axis. Truth and band as in the test above (3 standard errors at
     N = 4096, seed 0): no equal pair in 64 draws and the correlation of the two planets
     within the band; the mixture must also draw its first and last components. The
-    scores of the draws are finite.
+    float64 scores of the draws are finite. Widening float32 coordinates is exact,
+    so scoring a narrower draw must agree exactly with widening it explicitly.
     """
     n, band = 4096, 3.0 / np.sqrt(4096)
     law = OrbitLaw(E_LAW, a_AU=size_law())
@@ -156,7 +169,12 @@ def test_laws_without_a_planet_axis_still_draw_each_planet_independently(size_la
     assert a.shape == (n, 2)
     assert not jnp.any(a[:64, 0] == a[:64, 1])
     assert abs(np.corrcoef(a[:, 0], a[:, 1])[0, 1]) < band
-    assert jnp.all(jnp.isfinite(law.log_prob(law.sample(KEY, mu_AU3_per_d2=GM))))
+    if precision == np.float64:
+        narrow = canonical(law.sample(KEY, mu_AU3_per_d2=GM), precision="float32")
+        wide = canonical(narrow, precision="float64")
+        density = law.log_prob(narrow)
+        assert density.dtype == precision and jnp.all(jnp.isfinite(density))
+        np.testing.assert_array_equal(density, law.log_prob(wide))
     if size_law is _mixture:
         assert jnp.any(a < 2.0) and jnp.any(a > 5.0)
 

@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.precision import PrecisionError
 from scipy.stats import multivariate_normal
 
 from orbix.system import (
@@ -162,3 +163,45 @@ def test_conditional_is_differentiable_and_jits():
     )
     grads = f(design, target)
     assert all(bool(jnp.all(jnp.isfinite(g))) for g in grads)
+
+
+def test_fit_precision_refusals():
+    """Both curvature fits refuse a float32 forward, even when float64 is available."""
+    from hwoutils.leaves import canonical
+
+    orbit = canonical(_orbit(), precision="float32")
+    x = jnp.zeros(2, dtype=jnp.float32)
+    with pytest.raises(PrecisionError, match="fit_linear_map requires float64"):
+        fit_linear_map(orbit, x, x, x, jnp.eye(2))
+    design = jnp.ones((1, 1, 1), dtype=jnp.float32)
+    with pytest.raises(
+        PrecisionError, match="linear_gaussian_conditional requires float64"
+    ):
+        linear_gaussian_conditional(design, jnp.zeros((1, 1)), jnp.ones((1, 1, 1)), 1.0)
+
+
+@pytest.mark.float64_only(reason="Gaussian fit coefficients, precision and evidence")
+def test_fits_widen_observations_before_arithmetic():
+    """Exact widening of data and noise gives the same fits as an explicit cast."""
+    from hwoutils.leaves import canonical
+
+    design, target, precision, cov, orbit, time = _records()
+    inputs = canonical((target, precision, 3.0), precision="float32")
+    wide = canonical(inputs, precision="float64")
+    for actual, expected in zip(
+        linear_gaussian_conditional(design, *inputs),
+        linear_gaussian_conditional(design, *wide),
+        strict=True,
+    ):
+        assert actual.dtype == np.float64
+        np.testing.assert_array_equal(actual, expected)
+
+    for noise in (cov, (0.02, 0.04, 0.25)):
+        inputs = canonical(
+            (time, target[:, 0], target[:, 1], noise), precision="float32"
+        )
+        wide = canonical(inputs, precision="float64")
+        for actual, expected in zip(
+            fit_linear_map(orbit, *inputs), fit_linear_map(orbit, *wide), strict=True
+        ):
+            np.testing.assert_array_equal(actual, expected)

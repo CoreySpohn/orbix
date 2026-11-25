@@ -6,6 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from hwoutils.epoch import Epoch
+from hwoutils.testing import ulps
 
 from orbix.observatory import Observatory, ObservatoryL2Halo, is_observable
 
@@ -124,6 +125,8 @@ def test_annual_observability_against_dense_grid(keepout_observatory):
     Each midpoint errs by delta/2. Dense first/last samples err by at most
     h=365.25/9999 d < delta/2, so delta bounds their disagreement.
     Fraction tolerance sums delta/2+h/2 per transition, divided by the span.
+    The coarse grid divides its span and scales the sample index, giving
+    two rounding operations at the scale of the year.
     """
     obs = keepout_observatory
     year = 365.25
@@ -157,7 +160,12 @@ def test_annual_observability_against_dense_grid(keepout_observatory):
     )
     np.testing.assert_allclose(result.first_d, times[dense][0], rtol=0, atol=delta)
     np.testing.assert_allclose(result.last_d, times[dense][-1], rtol=0, atol=delta)
-    np.testing.assert_array_equal(result.time_d, np.linspace(0.0, year, 16))
+    np.testing.assert_allclose(
+        result.time_d,
+        np.linspace(0.0, year, 16),
+        rtol=0,
+        atol=float(ulps(2, result.time_d[-1])),
+    )
     np.testing.assert_array_equal(
         result.is_observable,
         obs.is_observable_at(180.0, 0.0, _EPOCH, result.time_d),

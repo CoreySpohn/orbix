@@ -6,6 +6,7 @@ import mpmath as mp
 import numpy as np
 import pytest
 from hwoutils.constants import two_pi
+from hwoutils.testing import ulps
 from hypothesis import example, given
 from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
@@ -33,7 +34,7 @@ def _angle_and_pair(mean, e):
 def _reference(m, e):
     """Bisect the monotonic Kepler equation at 70 decimal digits."""
     with mp.workdps(70):
-        mean = mp.mpf(float(m))
+        mean = mp.mpf(float(m)) % (2 * mp.pi)
         eccentricity = mp.mpf(float(e))
         low, high = mp.mpf(0), 2 * mp.pi
         for _ in range(240):
@@ -55,26 +56,26 @@ def _reference(m, e):
         0.78,
         0.95,
         0.9999,
-        pytest.param(
-            1 - 1e-12,
-            marks=pytest.mark.float64_only(
-                reason="eccentricity just below one rounds to one in float32"
-            ),
-        ),
-        pytest.param(
-            np.nextafter(1.0, 0.0),
-            marks=pytest.mark.float64_only(
-                reason="eccentricity just below one rounds to one in float32"
-            ),
-        ),
+        "near-parabolic",
+        "last-elliptic",
     ],
 )
-def test_matches_high_precision_roots(e):
-    """Fails if the trig pair loses 8e-15 accuracy against high-precision roots.
+def test_matches_high_precision_roots(e, precision):
+    """Fails if the trig pair disagrees with high-precision periapsis roots.
 
     The logarithmic periapsis points expose cancellation that a small equation
-    residual would hide when dM/dE approaches zero.
+    residual would hide when dM/dE approaches zero. Use the represented
+    eccentricity so near-parabolic input rounding is not solver error. At
+    unit trig scale allow 32 roundings for argument reduction, polynomial
+    sin/cos, the three root corrections and final rotation. At the seam,
+    check the signed sine with the same relative allowance and zero absolute
+    slack so that rounding a tiny phase to zero also fails.
     """
+    if e == "near-parabolic":
+        e = 1 - max(1e-12, 4 * np.finfo(precision).eps)
+    elif e == "last-elliptic":
+        e = np.nextafter(precision.type(1), precision.type(0))
+    wraps = np.nextafter([two_pi, -2 * two_pi, 3 * two_pi], 0)
     means = np.unique(
         np.r_[
             0.0,
@@ -83,25 +84,64 @@ def test_matches_high_precision_roots(e):
             np.nextafter(np.pi, 0),
             np.pi,
             np.nextafter(np.pi, 4),
-            np.nextafter(2 * np.pi, 0),
+            wraps,
         ]
     )
+    e = precision.type(e)
     reference = np.array([_reference(m, e) for m in means]).T
-    result = jax.jit(_pair)(jnp.array(means), jnp.array(e))
-    np.testing.assert_allclose(np.array(result), reference[1:], rtol=0, atol=8e-15)
+    # Supply the host longitudes intact, including the point just below a turn.
+    result = _pair(means, e)
+    bound = float(ulps(32, precision.type(1)))
+    np.testing.assert_allclose(np.array(result), reference[1:], rtol=0, atol=bound)
+    seam_indices = np.searchsorted(means, wraps)
+    np.testing.assert_allclose(
+        np.asarray(result[0])[seam_indices],
+        reference[1, seam_indices],
+        rtol=bound,
+        atol=0,
+    )
+    direct = Markley().solve(wraps, e)
+    np.testing.assert_allclose(
+        direct[0], reference[1, seam_indices], rtol=bound, atol=0
+    )
+    np.testing.assert_allclose(
+        direct[1], reference[2, seam_indices], rtol=0, atol=bound
+    )
+    # The compiled grid sees represented inputs, including a float32 wrap
+    # point above the seam where the original host input lay below it.
+    represented = means.astype(precision)
+    expected = (
+        reference
+        if np.array_equal(represented, means)
+        else np.array([_reference(m, e) for m in represented]).T
+    )
+    for solve in (_pair, Markley().solve):
+        compiled = jax.jit(solve)(jnp.array(represented), jnp.array(e))
+        np.testing.assert_allclose(compiled, expected[1:], rtol=0, atol=bound)
+        np.testing.assert_allclose(
+            np.asarray(compiled[0])[seam_indices],
+            expected[1, seam_indices],
+            rtol=bound,
+            atol=0,
+        )
 
 
-@pytest.mark.float64_only(reason="eccentricity just below one rounds to one in float32")
-def test_tiny_signed_mean_anomalies():
-    """Preserve relative precision at periapsis; no absolute tolerance (fp)."""
-    means = np.geomspace(1e-24, 1e-8, 24)
-    e = np.nextafter(1.0, 0.0)
+def test_tiny_signed_mean_anomalies(precision):
+    """Keep both signs of the closest elliptic orbit accurate at periapsis.
+
+    At each lane's largest e below one, allow 32 relative roundings for
+    the small-angle polynomial, cubic starter, three corrections and trig
+    rotation. Zero absolute slack exposes loss of the tiniest signed means.
+    """
+    means = np.geomspace(1e-24, 1e-8, 24, dtype=precision)
+    e = np.nextafter(precision.type(1), precision.type(0))
     expected = np.array([_reference(m, e) for m in means]).T
     positive = jax.jit(_pair)(jnp.array(means), jnp.array(e))
     negative = jax.jit(_pair)(-jnp.array(means), jnp.array(e))
-    np.testing.assert_allclose(positive[0], expected[1], rtol=5e-14, atol=0)
-    np.testing.assert_allclose(negative[0], -expected[1], rtol=5e-14, atol=0)
-    np.testing.assert_allclose(negative[1], expected[2], rtol=5e-14, atol=0)
+    relative = float(ulps(32, precision.type(1)))
+    np.testing.assert_allclose(positive[0], expected[1], rtol=relative, atol=0)
+    np.testing.assert_allclose(negative[0], -expected[1], rtol=relative, atol=0)
+    np.testing.assert_allclose(negative[1], expected[2], rtol=relative, atol=0)
 
 
 _broadcast_solve = jax.jit(_angle_and_pair)
@@ -129,44 +169,49 @@ _scalar_solve = jax.jit(_wrapped_angle)
         elements=st.floats(0.0, 0.99, allow_nan=False, allow_infinity=False),
     ),
 )
-def test_broadcast_wrapping_equation_and_trig(means, eccs):
+def test_broadcast_wrapping_equation_and_trig(precision, means, eccs):
     """Fails if broadcast/vmap/scalar paths disagree or wrapping corrupts the root.
 
-    The 4e-15 residual and 2e-15 trig bounds retain the float64 regressions.
+    Allow four roundings at a turn for angle recovery, wrapping and the
+    equation residual, and eight at unit scale for the trig identity.
     A sorted interior pair checks monotonicity and continuity via analytic
     slope bounds; wrapped endpoints are lifted around their mean anomaly.
     """
+    means = np.asarray(jnp.asarray(means)).astype(np.float64)
+    eccs = np.asarray(jnp.asarray(eccs)).astype(np.float64)
+    angle_bound = float(ulps(4, precision.type(two_pi)))
+    trig_bound = float(ulps(8, precision.type(1)))
     eccentric, sine, cosine = map(
         np.asarray, _broadcast_solve(jnp.asarray(means), jnp.asarray(eccs[:, None]))
     )
     # Endpoint rounding (including subnormal flushing) may return 0 or 2*pi.
-    assert np.all((eccentric >= -2e-15) & (eccentric <= two_pi + 2e-15))
+    assert np.all((eccentric >= 0) & (eccentric <= eccentric.dtype.type(two_pi)))
     residual = eccentric - eccs[:, None] * sine - means
     np.testing.assert_allclose(
-        np.arctan2(np.sin(residual), np.cos(residual)), 0, rtol=0, atol=4e-15
+        np.arctan2(np.sin(residual), np.cos(residual)), 0, rtol=0, atol=angle_bound
     )
-    np.testing.assert_allclose(sine, np.sin(eccentric), rtol=0, atol=2e-15)
-    np.testing.assert_allclose(cosine, np.cos(eccentric), rtol=0, atol=2e-15)
-    np.testing.assert_allclose(sine**2 + cosine**2, 1, rtol=0, atol=2e-15)
+    np.testing.assert_allclose(sine, np.sin(eccentric), rtol=0, atol=trig_bound)
+    np.testing.assert_allclose(cosine, np.cos(eccentric), rtol=0, atol=trig_bound)
+    np.testing.assert_allclose(sine**2 + cosine**2, 1, rtol=0, atol=trig_bound)
     np.testing.assert_allclose(
         _mapped_solve(jnp.asarray(means), jnp.asarray(eccs)),
         eccentric,
         rtol=0,
-        atol=2e-15,
+        atol=trig_bound,
     )
     np.testing.assert_allclose(
         _scalar_solve(jnp.asarray(means[0]), jnp.asarray(eccs[0])),
         eccentric[0, 0],
         rtol=0,
-        atol=2e-15,
+        atol=trig_bound,
     )
-    pair = np.array([means[0], means[0] + 1e-7])
+    pair = np.asarray(jnp.asarray([means[0], means[0] + 1e-7])).astype(np.float64)
     result = np.asarray(_scalar_solve(jnp.asarray(pair), jnp.asarray(eccs[0])))
     offset = result - pair
     lifted = pair + np.arctan2(np.sin(offset), np.cos(offset))
     delta = lifted[1] - lifted[0]
     step = pair[1] - pair[0]
-    roundoff = 4e-15 / (1 - eccs[0])
+    roundoff = 2 * angle_bound / (1 - eccs[0])
     assert step / (1 + eccs[0]) - roundoff <= delta <= step / (1 - eccs[0]) + roundoff
 
 
@@ -196,10 +241,16 @@ def test_float32():
 
 
 def test_gradients_with_integer_constants():
-    """Integer circular/periapsis constants must not break real AD (alg)."""
+    """Integer constants preserve the circular analytic derivative.
+
+    Four unit-scale roundings cover sin/cos, division and multiplication
+    in the implicit derivative. The periapsis derivative is exactly zero.
+    """
     circular = jax.jit(jax.grad(lambda m: _pair(m, 0)[0]))(1.0)
     periapsis = jax.jit(jax.grad(lambda e: _pair(0, e)[0]))(0.3)
-    np.testing.assert_allclose(circular, np.cos(1.0), rtol=0, atol=2e-15)
+    np.testing.assert_allclose(
+        circular, np.cos(1.0), rtol=0, atol=float(ulps(4, circular.dtype.type(1)))
+    )
     np.testing.assert_allclose(periapsis, 0.0, rtol=0, atol=0)
 
 

@@ -50,6 +50,9 @@ print(r_AU.shape)  # (5, 3): (T times, xyz)
 `at(time_d)`. Times are days on the same origin as `epoch_d`; positions and
 velocities have shape `(*batch, T, 3)`. `System` constructs Jacobi orbits for
 multiple bodies and returns a solve-once `Ephemeris` through `solve(time_d)`.
+For a Julian-date schedule, set the reference date on `SkyFrame.epoch` and
+pass `frame.time_d(jd=dates)` to propagation and animation. Supply host dates
+so the subtraction keeps sub-day offsets before the device cast.
 The package root exports only `__version__`; import engine names from
 `orbix.system` and solver names from `orbix.kepler`.
 
@@ -134,6 +137,11 @@ derivative of that map. In the Thiele-Innes chart the sky
 position of a planet is linear in the four constants `(A, B, F, G)`: `sky_design` gives the
 design matrix at a fixed orbit shape and `linear_gaussian_conditional` the exact Gaussian
 conditional of the constants under Gaussian astrometric errors.
+
+Block coordinates and log densities require float64. A float64 block can fit a
+float32 `System`. It widens the model values for inference and returns each model
+update in the destination leaf's dtype. The linear astrometric fit requires a
+float64 orbit, and the Gaussian conditional requires a float64 design matrix.
 
 A radial-velocity or phase-dependent likelihood can tell apart two orbits that share one
 sky track and differ only in the sign of the line-of-sight coordinate. `line_of_sight_sheet`

@@ -442,8 +442,8 @@ class FrameOrbit(eqx.Module):
             Plane-to-sky matrix of shape B + (3, 2) in AU, with rows (east, north, away)
             and columns the f and g axes.
         """
-        f = rotate(self.quat, jnp.array([1.0, 0.0, 0.0]))
-        g = rotate(self.quat, jnp.array([0.0, 1.0, 0.0]))
+        f = rotate(self.quat, jnp.array([1.0, 0.0, 0.0], dtype=self.quat.dtype))
+        g = rotate(self.quat, jnp.array([0.0, 1.0, 0.0], dtype=self.quat.dtype))
         return self.a_AU[..., None, None] * jnp.stack([f, g], -1)
 
     @property

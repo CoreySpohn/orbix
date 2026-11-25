@@ -4,7 +4,9 @@ The model holds a :class:`System` at the path ``system`` (for example ``"dynamic
 a skyscapes ``Scene``) whose ``orbits`` are stacked over the K Jacobi bodies, inner to
 outer. A block frees a static tuple of those rows and reads the held rows from the
 model. Coordinates are real numbers, a dict keyed by the block's ``coordinate_names``,
-each of shape ``(len(rows),)`` per draw.
+each of shape ``(len(rows),)`` per draw. Block coordinate and density operations
+require float64, and accept narrower coordinates by exact widening. Layout,
+support and map comparisons are available in either precision.
 
 A block composes three peers: a chart (the coordinate map and its volume), an orbit law
 (the density, independent of the chart) and the placement (``rows`` and ``system``).
@@ -57,7 +59,9 @@ import priorities
 from hwoutils.blocks import AbstractBlock
 from hwoutils.constants import GM_SUN_AU3_PER_D2, two_pi
 from hwoutils.conversions import arcsec_to_au
+from hwoutils.leaves import as_float_leaf, is_traced
 from hwoutils.model_paths import join, resolve
+from hwoutils.precision import like, require_float64
 from jaxtyping import Array
 
 from orbix.equations.orbit import mean_motion
@@ -88,7 +92,7 @@ def _take(orbit: FrameOrbit, rows) -> FrameOrbit:
     )
 
 
-def _splice(held: FrameOrbit, rows, new: FrameOrbit) -> FrameOrbit:
+def _splice(held: FrameOrbit, rows, new: FrameOrbit, target: FrameOrbit) -> FrameOrbit:
     """Replace the listed rows of a stacked orbit, broadcasting held rows to a batch."""
     idx = jnp.asarray(rows)
     batch = new.a_AU.shape[:-1]
@@ -96,12 +100,14 @@ def _splice(held: FrameOrbit, rows, new: FrameOrbit) -> FrameOrbit:
     def put(name):
         old = getattr(held, name)
         old = jnp.broadcast_to(old, (*batch, *old.shape))
-        return old.at[..., idx].set(getattr(new, name))
+        return (
+            old.at[..., idx].set(getattr(new, name)).astype(getattr(target, name).dtype)
+        )
 
     quat = jnp.broadcast_to(held.quat, (*batch, *held.quat.shape))
     return FrameOrbit(
         *(put(name) for name in ("a_AU", "n_rad_per_d", "ex", "ey")),
-        quat.at[..., idx, :].set(new.quat),
+        quat.at[..., idx, :].set(new.quat).astype(target.quat.dtype),
         put("epoch_d"),
     )
 
@@ -136,6 +142,12 @@ class OrbitBlock(AbstractBlock):
     rows: tuple[int, ...] = eqx.field(static=True)
     system: str = eqx.field(static=True)
 
+    _walls: tuple[str, ...] = eqx.field(static=True, init=False)
+
+    def __post_init__(self):
+        """Classify the supplied support before any model precision conversion."""
+        self._walls = _orbit_walls(self.chart, self.law)
+
     def __check_init__(self):
         """Validate the static choice of chart and rows."""
         if isinstance(self.chart, ThieleInnesChart):
@@ -161,9 +173,9 @@ class OrbitBlock(AbstractBlock):
         ``"a_AU"`` or ``"period_d"`` for a size edge that is neither zero (or below
         it) nor infinite when the size coordinate is not mapped, and ``"e"`` for an
         upper eccentricity edge below 1 that is not mapped or a lower one above 0 that
-        is not mapped by a logit. Evaluated on the host.
+        is not mapped by a logit. Fixed at construction from the supplied law.
         """
-        return _orbit_walls(self.chart, self.law)
+        return self._walls
 
     @property
     def owns(self) -> str:
@@ -190,7 +202,8 @@ class OrbitBlock(AbstractBlock):
 
     def _mu(self, model) -> Array:
         return enclosed_mu(
-            resolve(model, self._star_mass), resolve(model, self._planet_masses)
+            like(resolve(model, self._star_mass), self),
+            like(resolve(model, self._planet_masses), self),
         )
 
     def chart_support(self, model) -> dict[str, tuple[Array, Array]]:
@@ -208,7 +221,7 @@ class OrbitBlock(AbstractBlock):
             Dictionary from "ln_size" and "e" to (low, high) bounds in chart
             coordinates, for the coordinates the law bounds and the chart maps.
         """
-        _owned(self, model)
+        _owned(self, model, inference=False)
         mu = self._mu(model)[..., jnp.asarray(self.rows)]
         return _chart_support(self.chart, self.law.support(), mu)
 
@@ -218,7 +231,7 @@ class OrbitBlock(AbstractBlock):
         rows = jnp.asarray(self.rows)
         mu = self._mu(model)
         coords, log_jac = self.chart.constrain(
-            _stack(self.coordinate_names, self.rows, x), self.chart_support(model)
+            _stack(self, x), self.chart_support(model)
         )
         return held, mu, coords, held.epoch_d[..., rows], log_jac
 
@@ -237,7 +250,11 @@ class OrbitBlock(AbstractBlock):
         new = self.chart.to_orbit(
             coords, mu_AU3_per_d2=mu[..., jnp.asarray(self.rows)], epoch_d=epoch
         )
-        return {self.owns: _splice(_rated(held, mu), self.rows, new)}
+        return {
+            self.owns: _splice(
+                _rated(held, mu), self.rows, new, resolve(model, self.owns)
+            )
+        }
 
     def log_prob(self, x, model) -> Array:
         """Sum over the freed rows of the law and the chart volume.
@@ -416,6 +433,16 @@ class ThieleInnesBlock(AbstractBlock):
     system: str = eqx.field(static=True)
     chart: ThieleInnesChart = eqx.field(static=True, default=ThieleInnesChart())
 
+    _walls: tuple[str, ...] = eqx.field(static=True, init=False)
+
+    def __post_init__(self):
+        """Classify the supplied orbit and mass supports at construction."""
+        low, high = self.star_mass_Msun.support()
+        mass = _beyond(low, np.isfinite) or _beyond(high, np.isfinite)
+        self._walls = _orbit_walls(self.chart, self.law) + (
+            ("star_mass_Msun",) if mass else ()
+        )
+
     def __check_init__(self):
         """Validate the static rows; one row only."""
         _check_rows(self.rows)
@@ -439,13 +466,9 @@ class ThieleInnesBlock(AbstractBlock):
         ``"star_mass_Msun"`` is listed whenever either edge of the star-mass law is
         finite, zero included: the implied star mass is the enclosed mass less the
         planet masses, so for a model with a massive planet it reaches every real
-        value at finite coordinates. Evaluated on the host.
+        value at finite coordinates. Fixed at construction from the supplied laws.
         """
-        low, high = self.star_mass_Msun.support()
-        mass = _beyond(low, np.isfinite) or _beyond(high, np.isfinite)
-        return _orbit_walls(self.chart, self.law) + (
-            ("star_mass_Msun",) if mass else ()
-        )
+        return self._walls
 
     @property
     def owns(self) -> str:
@@ -471,7 +494,7 @@ class ThieleInnesBlock(AbstractBlock):
         return (self.owns, self._star_mass)
 
     def _inner_mass(self, model) -> Array:
-        planets = resolve(model, self._planet_masses)
+        planets = like(resolve(model, self._planet_masses), self)
         return jnp.sum(planets[..., : self.rows[0] + 1], axis=-1)
 
     def _enclosed_mass(self, coords) -> Array:
@@ -494,9 +517,7 @@ class ThieleInnesBlock(AbstractBlock):
 
     def _coords(self, x, model):
         """Chart coordinates of block coordinates ``x`` and the map's log Jacobian."""
-        return self.chart.constrain(
-            _stack(self.coordinate_names, self.rows, x), self.chart_support(model)
-        )
+        return self.chart.constrain(_stack(self, x), self.chart_support(model))
 
     def forward(self, x, model) -> dict[str, object]:
         """Build the row and return it with the star mass it implies.
@@ -518,10 +539,12 @@ class ThieleInnesBlock(AbstractBlock):
             epoch_d=held.epoch_d[..., jnp.asarray(self.rows)],
         )
         star_mass = self._enclosed_mass(coords) - self._inner_mass(model)
-        mu = enclosed_mu(star_mass, resolve(model, self._planet_masses))
+        mu = enclosed_mu(star_mass, like(resolve(model, self._planet_masses), self))
         return {
-            self.owns: _splice(_rated(held, mu), self.rows, new),
-            self._star_mass: star_mass,
+            self.owns: _splice(
+                _rated(held, mu), self.rows, new, resolve(model, self.owns)
+            ),
+            self._star_mass: star_mass.astype(resolve(model, self._star_mass).dtype),
         }
 
     def log_prob(self, x, model) -> Array:
@@ -669,11 +692,6 @@ class ThieleInnesBlock(AbstractBlock):
         )
 
 
-def _as_time(x) -> Array:
-    """A scalar time in days as an array of the active float dtype."""
-    return jnp.asarray(x, dtype=jnp.result_type(float))
-
-
 class SkyPositionBlock(AbstractBlock):
     """Free the sky offset of some planets at one time; the orbit shape is held.
 
@@ -732,7 +750,7 @@ class SkyPositionBlock(AbstractBlock):
 
     east_arcsec: priorities.AbstractDistribution
     north_arcsec: priorities.AbstractDistribution
-    time_d: Array = eqx.field(converter=_as_time)
+    time_d: Array = eqx.field(converter=as_float_leaf)
     rows: tuple[int, ...] = eqx.field(static=True)
     system: str = eqx.field(static=True)
 
@@ -796,7 +814,7 @@ class SkyPositionBlock(AbstractBlock):
 
     def _offsets(self, x) -> tuple[Array, Array]:
         """Offsets in arcseconds, shape (len(rows), 2), and the map's log Jacobian."""
-        coords = _stack(self.coordinate_names, self.rows, x)
+        coords = _stack(self, x)
         if coords.ndim != 2:
             raise ValueError("SkyPositionBlock takes one draw; batch with jax.vmap")
         pairs = [
@@ -819,7 +837,9 @@ class SkyPositionBlock(AbstractBlock):
 
     def _check_rows(self, model) -> None:
         """Refuse a freed row the model's System lacks, when a model is given."""
-        if model is not None:
+        if model is None:
+            require_float64(type(self).__name__, self)
+        else:
             _owned(self, model)
 
     def _held(self, model):
@@ -827,8 +847,8 @@ class SkyPositionBlock(AbstractBlock):
         orbits = _owned(self, model)
         if orbits.a_AU.ndim != 1:
             raise ValueError("SkyPositionBlock needs a System with no batch axes")
-        star = resolve(model, self._star_mass)
-        planets = resolve(model, self._planet_masses)
+        star = like(resolve(model, self._star_mass), self)
+        planets = like(resolve(model, self._planet_masses), self)
         return orbits, star, planets, enclosed_mu(star, planets)
 
     def forward(self, x, model) -> dict[str, FrameOrbit]:
@@ -845,7 +865,7 @@ class SkyPositionBlock(AbstractBlock):
         offsets, _ = self._offsets(x)
         held, _, planets, mu = self._held(model)
         rated = _rated(held, mu)
-        target = arcsec_to_au(offsets, resolve(model, self._dist))
+        target = arcsec_to_au(offsets, like(resolve(model, self._dist), self))
         r, v = rated.at_each(self.time_d)
         weight = planets * GM_SUN_AU3_PER_D2 / mu
         # Sky offset of the center of mass of the star and the inner planets from the
@@ -865,7 +885,7 @@ class SkyPositionBlock(AbstractBlock):
             mu_AU3_per_d2=mu[jnp.asarray(self.rows)],
             epoch_d=self.time_d,
         )
-        return {self.owns: _splice(rated, self.rows, new)}
+        return {self.owns: _splice(rated, self.rows, new, resolve(model, self.owns))}
 
     def log_prob(self, x, model) -> Array:
         """Sum over the freed rows of both laws and the log derivative of their maps.
@@ -919,7 +939,7 @@ class SkyPositionBlock(AbstractBlock):
         r, _ = held.at_each(self.time_d)
         position = jacobi_to_barycentric(r, star, planets)
         relative = (position[1:] - position[0])[jnp.asarray(self.rows)]
-        east, north = offset_arcsec(relative, resolve(model, self._dist))
+        east, north = offset_arcsec(relative, like(resolve(model, self._dist), self))
         return self._coordinates(jnp.stack([east, north], -1))
 
     @property
@@ -1031,9 +1051,14 @@ def _mapped_keys(chart, bounds) -> frozenset[str]:
 
 def _beyond(edge, test) -> bool:
     """Whether ``test`` holds for any element of an edge; a traced edge counts."""
-    if isinstance(edge, jax.core.Tracer):
+    if is_traced(edge):
         return True
-    return bool(np.any(test(np.asarray(edge))))
+    return bool(np.any(test(np.asarray(edge, dtype=np.float64))))
+
+
+def _positive_edge(value):
+    """Finite lower limits strictly above the natural zero endpoint."""
+    return np.isfinite(value) & (value > 0.0)
 
 
 def _orbit_walls(chart, law) -> tuple[str, ...]:
@@ -1044,15 +1069,13 @@ def _orbit_walls(chart, law) -> tuple[str, ...]:
     size = next((k for k in ("a_AU", "period_d") if k in edges), None)
     if size is not None and "ln_size" not in mapped:
         low, high = edges[size]
-        if _beyond(low, lambda v: np.isfinite(v) & (v > 0)) or _beyond(
-            high, np.isfinite
-        ):
+        if _beyond(low, _positive_edge) or _beyond(high, np.isfinite):
             out.append(size)
     if "e" in edges:
         low, high = edges["e"]
         logit = "e" in mapped and chart.eccentricity_coordinate == "logit"
-        if ("e" not in mapped and _beyond(high, lambda v: v < 1)) or (
-            not logit and _beyond(low, lambda v: v > 0)
+        if ("e" not in mapped and _beyond(high, lambda v: v < 1.0)) or (
+            not logit and _beyond(low, _positive_edge)
         ):
             out.append("e")
     return tuple(out)
@@ -1114,16 +1137,22 @@ def _map_bounds(chart, bounds) -> dict:
 
 
 def _same_bounds(a, b) -> bool:
-    """Whether two ``law.support()`` dicts hold the same concrete bounds."""
-    if a.keys() != b.keys():
-        return False
-    for key in a:
-        for u, v in zip(a[key], b[key], strict=True):
-            if isinstance(u, jax.core.Tracer) or isinstance(v, jax.core.Tracer):
-                return False
-            if not np.array_equal(np.asarray(u), np.asarray(v)):
-                return False
-    return True
+    """Compare the exact endpoints of the broadcast inference maps on the host."""
+
+    def same_endpoint(u, v):
+        if is_traced(u) or is_traced(v):
+            return False
+        if isinstance(u, str) or isinstance(v, str):
+            return u == v
+        try:
+            left, right = np.broadcast_arrays(u, v)
+        except ValueError:
+            return False
+        return np.array_equal(left, right)
+
+    return a.keys() == b.keys() and all(
+        same_endpoint(u, v) for key in a for u, v in zip(a[key], b[key], strict=True)
+    )
 
 
 def _check_rows(rows) -> None:
@@ -1135,7 +1164,7 @@ def _check_rows(rows) -> None:
         raise ValueError("rows must be a nonempty tuple of distinct nonnegative ints")
 
 
-def _owned(block, model) -> FrameOrbit:
+def _owned(block, model, *, inference=True) -> FrameOrbit:
     """The block's stacked orbits, after checking that every freed row exists.
 
     Every block type reads its orbits through here. Rows are static, so the check
@@ -1149,6 +1178,9 @@ def _owned(block, model) -> FrameOrbit:
             f"{type(block).__name__} rows {bad} are beyond the orbit's {count} "
             f"planet(s) at {block.owns!r}"
         )
+    if inference:
+        require_float64(type(block).__name__, block)
+        return jax.tree.map(lambda value: like(value, block), orbit)
     return orbit
 
 
@@ -1164,14 +1196,17 @@ def _unit_rows(block, c, rows=None) -> Array:
     c = jnp.asarray(c)
     if c.shape != (size,):
         raise ValueError(f"the unit-cube point must have shape ({size},)")
-    return c.reshape(rows or len(block.rows), -1)
+    require_float64(type(block).__name__, block)
+    return like(c, block).reshape(rows or len(block.rows), -1)
 
 
-def _stack(names, rows, x) -> Array:
+def _stack(block, x) -> Array:
     """Stack named coordinates to shape ``(..., len(rows), n_coords)``."""
+    names, rows = block.coordinate_names, block.rows
+    require_float64(type(block).__name__, block)
     if set(x) != set(names):
         raise ValueError(f"coordinates must be exactly {names}, got {tuple(x)}")
-    coords = jnp.stack([jnp.asarray(x[name]) for name in names], axis=-1)
+    coords = jnp.stack([like(x[name], block) for name in names], axis=-1)
     if coords.shape[-2:-1] != (len(rows),):
         raise ValueError(f"each coordinate needs a trailing axis of {len(rows)} rows")
     return coords

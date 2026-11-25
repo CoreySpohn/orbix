@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 from hwoutils.constants import G, Msun2kg
+from hwoutils.epoch import Epoch
+from hwoutils.testing import ulps
 
 matplotlib.use("Agg")
 
@@ -36,11 +38,12 @@ def _orbit(K=1):
         w_rad=-0.7 + spread,
         M0_rad=0.4 + spread,
         mu_AU3_per_d2=G * Msun2kg,
-        epoch_d=jnp.full((K,), 2460000.0),
+        epoch_d=0.0,
     )
 
 
-T_JD = jnp.linspace(2460000.0, 2460500.0, 60)
+_EPOCH = Epoch(2460000.0)
+TIME_D = _EPOCH.days(jd=np.linspace(_EPOCH.jd1, _EPOCH.jd1 + 500, 60))
 STELLAR = dict(dist_pc=jnp.atleast_1d(10.0))
 
 
@@ -50,7 +53,7 @@ def test_plot_sky_track_single_orbit_contract():
 
     from orbix.viz import plot_sky_track
 
-    result = plot_sky_track(_orbit(), time_d=T_JD, **STELLAR)
+    result = plot_sky_track(_orbit(), time_d=TIME_D, **STELLAR)
     assert isinstance(result, MplResult)
     assert "path/0" in result.parts and "star" in result.parts
     assert "path/1" not in result.parts
@@ -71,7 +74,7 @@ def test_plot_sky_track_fan_with_weights_iwa_observations():
     obs = (np.array([[0.05, 0.02], [-0.03, 0.06]]), np.full(2, 0.01), np.full(2, 0.01))
     result = plot_sky_track(
         _orbit(K),
-        time_d=T_JD,
+        time_d=TIME_D,
         **STELLAR,
         weights=weights,
         iwa_arcsec=0.06,
@@ -99,7 +102,7 @@ def test_plot_sky_track_propagates_once(monkeypatch):
         return original(self, *args, **kwargs)
 
     monkeypatch.setattr(FrameOrbit, "at", counting)
-    plot_sky_track(_orbit(3), time_d=T_JD, **STELLAR)
+    plot_sky_track(_orbit(3), time_d=TIME_D, **STELLAR)
     assert len(calls) == 1
 
 
@@ -120,7 +123,7 @@ def test_plot_sky_track_bare_arrays_door():
     np.testing.assert_array_equal(result.parts["path/1"].get_xydata(), stacked[1])
 
     with pytest.raises(TypeError, match="time_d"):
-        plot_sky_track((ra, dec), time_d=T_JD)
+        plot_sky_track((ra, dec), time_d=TIME_D)
 
 
 def test_plot_sky_track_shape_errors_name_shapes():
@@ -138,16 +141,16 @@ def test_plot_sky_track_missing_propagation_args_named():
     from orbix.viz import plot_sky_track
 
     with pytest.raises(TypeError, match="dist_pc"):
-        plot_sky_track(_orbit(), time_d=T_JD)
+        plot_sky_track(_orbit(), time_d=TIME_D)
 
 
 def test_plot_sky_track_overplot_keeps_ra_inverted_and_both_tracks():
     """A second call on the same axes keeps RA left and widens to both views."""
     from orbix.viz import plot_sky_track
 
-    first = plot_sky_track(_orbit(), time_d=T_JD, **STELLAR)
+    first = plot_sky_track(_orbit(), time_d=TIME_D, **STELLAR)
     before = sorted(first.ax.get_xlim()), sorted(first.ax.get_ylim())
-    second = plot_sky_track(_orbit(3), time_d=T_JD, **STELLAR, ax=first.ax)
+    second = plot_sky_track(_orbit(3), time_d=TIME_D, **STELLAR, ax=first.ax)
     assert first.ax.xaxis_inverted()
     after = sorted(first.ax.get_xlim()), sorted(first.ax.get_ylim())
     for (lo0, hi0), (lo1, hi1) in zip(before, after, strict=True):
@@ -163,7 +166,7 @@ def test_plot_sky_track_geometry_stays_in_handed_slot():
     from orbix.viz import plot_sky_track
 
     _fig, axes = plt.subplots(1, 2, layout="constrained")
-    plot_sky_track(_orbit(), time_d=T_JD, **STELLAR, ax=axes[0])
+    plot_sky_track(_orbit(), time_d=TIME_D, **STELLAR, ax=axes[0])
     w0 = axes[0].get_position(original=True).width
     w1 = axes[1].get_position(original=True).width
     assert w0 == pytest.approx(w1)
@@ -175,7 +178,7 @@ def test_plot_orbit_single_contract():
 
     from orbix.viz import plot_orbit
 
-    result = plot_orbit(_orbit(), time_d=T_JD)
+    result = plot_orbit(_orbit(), time_d=TIME_D)
     assert isinstance(result, ep.PlotResult)
     assert result.ax.name == "3d"
     assert "line" in result.artists and "scatter" in result.artists
@@ -190,7 +193,7 @@ def test_plot_orbit_batch_returns_lists():
     from orbix.viz import plot_orbit
 
     K = 3
-    result = plot_orbit(_orbit(K), time_d=T_JD)
+    result = plot_orbit(_orbit(K), time_d=TIME_D)
     assert len(result.artists["lines"]) == K
     assert len(result.artists["scatter"]) == K
 
@@ -214,19 +217,28 @@ def test_plot_orbit_bare_arrays_door():
 
 
 def test_plot_orbit_mark_geometry_is_exact():
-    """Periapsis sits at a(1-e) and both nodes sit in the sky plane."""
+    """Periapsis sits at a(1-e) and the nodes point along the sky plane.
+
+    Sixteen unit-scale operations cover quaternion-to-basis products,
+    periapsis rotation, scaling and norm. The node reconstruction and
+    normalization add a second such path. Use orbital size in AU for z
+    residuals and unit scale for normalized directions.
+    """
     from orbix.viz._prepare import _frame_geometry
     from orbix.viz.orbit import _mark_geometry
 
     orbit = _orbit(3)
     periapsis, ascending, descending = _mark_geometry(_frame_geometry(orbit))
+    unit = jnp.ones((), dtype=orbit.a_AU.dtype)
+    node_atol = float(ulps(32, jnp.max(orbit.a_AU)))
     np.testing.assert_allclose(
         np.linalg.norm(periapsis, axis=-1),
         np.asarray(orbit.a_AU) * (1.0 - np.asarray(orbit.e)),
-        rtol=1e-10,
+        rtol=float(ulps(16, unit)),
+        atol=0,
     )
-    np.testing.assert_allclose(ascending[:, 2], 0.0, atol=1e-12)
-    np.testing.assert_allclose(descending[:, 2], 0.0, atol=1e-12)
+    np.testing.assert_allclose(ascending[:, 2], 0.0, atol=node_atol, rtol=0)
+    np.testing.assert_allclose(descending[:, 2], 0.0, atol=node_atol, rtol=0)
     assert not np.allclose(ascending, descending)
     # Node PA is measured north through east in the new east-first raw frame.
     direction = ascending[:, :2] / np.linalg.norm(ascending[:, :2], axis=1)[:, None]
@@ -239,13 +251,18 @@ def test_plot_orbit_mark_geometry_is_exact():
             ],
             axis=1,
         ),
-        atol=1e-12,
+        atol=float(ulps(32, unit)),
         rtol=0,
     )
 
 
 def test_observer_3d_view_matches_sky_panel():
-    """Looking from -z must show east left and north up, without a mirror."""
+    """Looking from -z must show east left and north up.
+
+    Both panels use the same propagated position. Dividing by distance,
+    projecting and normalizing a two-component direction require eight
+    rounded operations at unit scale.
+    """
     from mpl_toolkits.mplot3d import proj3d
 
     from orbix.viz import plot_orbit, plot_sky_track
@@ -254,8 +271,8 @@ def test_observer_3d_view_matches_sky_panel():
     fig = plt.figure()
     ax = fig.add_subplot(projection="3d", proj_type="ortho")
     ax.view_init(elev=-90, azim=90, roll=0)
-    spatial = plot_orbit(orbit, time_d=T_JD, ax=ax, depth="none")
-    sky = plot_sky_track(orbit, time_d=T_JD, **STELLAR)
+    spatial = plot_orbit(orbit, time_d=TIME_D, ax=ax, depth="none")
+    sky = plot_sky_track(orbit, time_d=TIME_D, **STELLAR)
     xyz = spatial.artists["lines"][0].get_data_3d()
     projected = np.array(proj3d.proj_transform(*xyz, ax.get_proj()))[:2].T
     origin = np.array(proj3d.proj_transform(0, 0, 0, ax.get_proj()))[:2]
@@ -268,7 +285,7 @@ def test_observer_3d_view_matches_sky_panel():
     np.testing.assert_allclose(
         projected / np.linalg.norm(projected, axis=1)[:, None],
         expected / np.linalg.norm(expected, axis=1)[:, None],
-        atol=1e-12,
+        atol=float(ulps(8, jnp.ones((), dtype=orbit.a_AU.dtype))),
         rtol=0,
     )
     assert "east" in ax.get_xlabel().lower()
@@ -284,7 +301,7 @@ def test_plot_orbit_ascending_node_rises():
     orbit = _orbit()
     _, ascending, _ = _mark_geometry(_frame_geometry(orbit))
 
-    t_dense = jnp.linspace(2460000.0, 2460900.0, 4000)
+    t_dense = np.linspace(0.0, 900.0, 4000)
     r_AU, _ = orbit.at(t_dense)
     xyz = np.asarray(r_AU)[0]
     nearest = np.argmin(np.linalg.norm(xyz - ascending[0], axis=-1))
@@ -298,7 +315,7 @@ def test_plot_orbit_marks_smoke_and_errors():
 
     result = plot_orbit(
         _orbit(),
-        time_d=T_JD,
+        time_d=TIME_D,
         marks={"periapsis", "nodes"},
     )
     assert len(result.artists["scatter"]) == 4
@@ -307,7 +324,7 @@ def test_plot_orbit_marks_smoke_and_errors():
     with pytest.raises(ValueError, match="elements"):
         plot_orbit(np.zeros((10, 3)), marks={"periapsis"})
     with pytest.raises(ValueError, match="unknown marks"):
-        plot_orbit(_orbit(), time_d=T_JD, marks={"apoapsis"})
+        plot_orbit(_orbit(), time_d=TIME_D, marks={"apoapsis"})
 
 
 def test_plot_sky_track_sources_color_the_fan():
@@ -340,7 +357,7 @@ def test_plot_orbit_panes_take_the_axes_facecolor():
     """The 3D panes follow the axes facecolor instead of matplotlib gray."""
     from orbix.viz import plot_orbit
 
-    result = plot_orbit(_orbit(), time_d=T_JD)
+    result = plot_orbit(_orbit(), time_d=TIME_D)
     face = result.ax.get_facecolor()
     for pane_axis in (result.ax.xaxis, result.ax.yaxis, result.ax.zaxis):
         assert tuple(pane_axis.pane.get_facecolor()) == pytest.approx(face)
@@ -352,7 +369,7 @@ def test_plot_orbit_star_chart_look_under_markers():
 
     from orbix.viz import plot_orbit
 
-    result = plot_orbit(_orbit(), time_d=T_JD, depth="markers")
+    result = plot_orbit(_orbit(), time_d=TIME_D, depth="markers")
     line = result.artists["line"]
     assert line.get_linestyle() == "--"
     assert line.get_alpha() == pytest.approx(0.5)
@@ -360,7 +377,7 @@ def test_plot_orbit_star_chart_look_under_markers():
     scatter_rgba = tuple(result.artists["scatter"].get_facecolor()[0])
     assert scatter_rgba == pytest.approx(text_rgba)
 
-    styled = plot_orbit(_orbit(), time_d=T_JD, style="#22aabb", depth="markers")
+    styled = plot_orbit(_orbit(), time_d=TIME_D, style="#22aabb", depth="markers")
     assert styled.artists["line"].get_linestyle() == "-"
     assert styled.artists["line"].get_color() == "#22aabb"
 
@@ -376,7 +393,7 @@ def test_plot_orbit_unstyled_path_is_visible_without_markers():
 
     from orbix.viz import plot_orbit
 
-    result = plot_orbit(_orbit(), time_d=T_JD)
+    result = plot_orbit(_orbit(), time_d=TIME_D)
     text_rgba = matplotlib.colors.to_rgba(mpl.rcParams["text.color"])
     line_rgba = matplotlib.colors.to_rgba(result.artists["line"].get_color())
     assert line_rgba == pytest.approx(text_rgba)
@@ -406,7 +423,7 @@ def test_plot_orbit_per_track_marker_scale():
 
     result = plot_orbit(
         _orbit(2),
-        time_d=T_JD,
+        time_d=TIME_D,
         marker_scale=[0.0, 20.0],
         depth="markers",
     )
@@ -415,7 +432,7 @@ def test_plot_orbit_per_track_marker_scale():
     assert np.max(second.get_sizes()) > 0.0
 
     with pytest.raises(ValueError, match="marker_scale has 3"):
-        plot_orbit(_orbit(2), time_d=T_JD, marker_scale=[1, 2, 3])
+        plot_orbit(_orbit(2), time_d=TIME_D, marker_scale=[1, 2, 3])
 
 
 def test_depth_helpers_are_public():

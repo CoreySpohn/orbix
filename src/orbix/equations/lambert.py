@@ -63,7 +63,9 @@ def _geometry(r1: Array, r2: Array, long_way) -> tuple:
     r2n = jnp.linalg.norm(r2)
     c = jnp.linalg.norm(r2 - r1)
     s = 0.5 * (r1n + r2n + c)
-    lam_mag = jnp.sqrt(jnp.clip((s - c) / s, 0.0, 1.0))
+    # sqrt((s-c)/s) loses the small half-angle near antipodal endpoints.
+    half_angle = jnp.linalg.norm(r1 / r1n + r2 / r2n) / 2
+    lam_mag = jnp.minimum(jnp.sqrt(r1n * r2n) * half_angle / s, 1.0)
     lam = jnp.where(long_way, -lam_mag, lam_mag)
     return r1n, r2n, c, s, lam
 
@@ -148,10 +150,12 @@ def _terminal_velocities(r1, r2, x, s, lam, mu, long_way, r1n, r2n, c) -> tuple:
     alpha = 2.0 * jnp.arccos(x)
     beta = 2.0 * jnp.arcsin(lam * jnp.sqrt(one_m_x2))
     p = 4.0 * a * (s - r1n) * (s - r2n) / c**2 * jnp.sin((alpha + beta) / 2.0) ** 2
-    cosdth = jnp.clip(jnp.dot(r1, r2) / (r1n * r2n), -1.0, 1.0)
-    sindth = jnp.where(long_way, -1.0, 1.0) * jnp.sqrt(1.0 - cosdth**2)
+    u1, u2 = r1 / r1n, r2 / r2n
+    cosdth = jnp.clip(jnp.dot(u1, u2), -1.0, 1.0)
+    sin_mag = jnp.linalg.norm(jnp.cross(u1, u2))
+    sindth = jnp.where(long_way, -sin_mag, sin_mag)
     f = 1.0 - r2n / p * (1.0 - cosdth)
-    g = r1n * r2n * sindth / jnp.sqrt(mu * p)
+    g = sindth * r1n * r2n / jnp.sqrt(mu * p)
     gdot = 1.0 - r1n / p * (1.0 - cosdth)
     v1 = (r2 - f * r1) / g
     v2 = (gdot * r2 - r1) / g

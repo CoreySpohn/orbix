@@ -18,6 +18,8 @@ from hwoutils.constants import (
     yr2s,
 )
 from hwoutils.epoch import Epoch
+from hwoutils.numerics import roundoff
+from hwoutils.testing import ulps
 
 from orbix.kepler import Markley
 from orbix.system import (
@@ -91,28 +93,34 @@ def test_hierarchy_mass_conservation_and_third_law(second_mass):
     """Fails if cumulative masses or the Jacobi barycentric map are incorrect.
 
     Truth: sum(m*r)=sum(m*v)=0 and n^2*a^3=G*M_enclosed (Murray and
-    Dermott). Allow 4e-17 Msun AU, 4e-19 Msun AU/day and 3e-15 relative
-    in the third law for x64 cancellation. A massless outer companion
-    leaves inner states unchanged to 2e-15 AU and AU/day roundoff.
+    Dermott). Allow two steps of six operations each (mass fraction,
+    weighted state and ordered prefix/total sums) at the summed mass-moment
+    scale. Eight powers, products and divisions bound the third law.
+    A massless outer companion must leave the inner states bit-identical.
     """
     sys = _system(second_mass)
     time = jnp.array([0.0, 200.0, 700.0])
     eph = sys.solve(time)
     masses = np.array([1.0, 0.001, second_mass])
-    np.testing.assert_allclose(
-        np.einsum("k,ktc->tc", masses, eph.position_AU), 0.0, atol=4e-17
-    )
-    np.testing.assert_allclose(
-        np.einsum("k,ktc->tc", masses, eph.velocity_AU_per_d), 0.0, atol=4e-19
-    )
+    for state in (eph.position_AU, eph.velocity_AU_per_d):
+        moments = np.asarray(state) * masses[:, None, None]
+        scale = np.max(np.sum(np.abs(moments), axis=0))
+        np.testing.assert_allclose(
+            moments.sum(axis=0),
+            0,
+            atol=float(roundoff(scale, n_ops=12, dtype=state.dtype)),
+            rtol=0,
+        )
+    tol = float(roundoff(1.0, n_ops=8, dtype=sys.orbits.n_rad_per_d.dtype))
     expected_mu = G * Msun2kg * np.array([1.001, 1.001 + second_mass])
     np.testing.assert_allclose(
-        enclosed_mu(1.0, jnp.array([0.001, second_mass])), expected_mu, rtol=3e-15
+        enclosed_mu(1.0, jnp.array([0.001, second_mass])), expected_mu, rtol=tol, atol=0
     )
     np.testing.assert_allclose(
         (2 * np.pi / np.asarray(sys.orbits.period_d)) ** 2 * np.array([1.0, 5.0]) ** 3,
         expected_mu,
-        rtol=3e-15,
+        rtol=tol,
+        atol=0,
     )
     if second_mass == 0.0:
         single = System.from_classical(
@@ -121,11 +129,9 @@ def test_hierarchy_mass_conservation_and_third_law(second_mass):
             SkyFrame(10.0),
             **{k: v[0] for k, v in ELEMENTS.items()},
         ).solve(time)
-        np.testing.assert_allclose(
-            eph.position_AU[:2], single.position_AU, atol=2e-15, rtol=0
-        )
-        np.testing.assert_allclose(
-            eph.velocity_AU_per_d[:2], single.velocity_AU_per_d, atol=2e-15, rtol=0
+        np.testing.assert_array_equal(eph.position_AU[:2], single.position_AU)
+        np.testing.assert_array_equal(
+            eph.velocity_AU_per_d[:2], single.velocity_AU_per_d
         )
 
 
@@ -207,7 +213,9 @@ def test_host_time_observables_and_solver_trace():
     """Fails if JD precision, paired rows, solve reuse or observable references drift.
 
     Truth: host float64 subtraction and Euclidean vector projections; allow
-    2e-15 relative for x64 unit conversion. Equal solver configurations
+    eight operations for vector norms and angle/length conversions. At each
+    time, allow 32 operations for Kepler solution, frame rotation and the
+    Jacobi sums, at the largest position scale. Equal solver configurations
     must add exactly one trace on the first call and none on the second.
     Row pairing is checked against separately evaluated systems at each time.
     """
@@ -234,29 +242,35 @@ def test_host_time_observables_and_solver_trace():
     draws = jax.tree.map(lambda x: jnp.stack([x] * 3), sys)
     paired = jax.vmap(lambda system, time: system.solve(time))(draws, times)
     np.testing.assert_allclose(
-        paired.position_AU, jnp.moveaxis(eph.position_AU, 1, 0), atol=2e-14, rtol=0
+        paired.position_AU,
+        jnp.moveaxis(eph.position_AU, 1, 0),
+        atol=float(ulps(32, jnp.max(jnp.abs(eph.position_AU)))),
+        rtol=0,
     )
     r = eph.position_AU[1] - eph.position_AU[0]
     v = eph.velocity_AU_per_d[1] - eph.velocity_AU_per_d[0]
+    tol = float(roundoff(1.0, n_ops=8, dtype=r.dtype))
     east, north = eph.offset_arcsec(1)
     np.testing.assert_allclose(
-        eph.separation_arcsec(1), np.hypot(east, north), rtol=2e-15
+        eph.separation_arcsec(1), np.hypot(east, north), rtol=tol, atol=0
     )
     np.testing.assert_allclose(
-        eph.distance_AU(1), np.sqrt(np.sum(r * r, -1)), rtol=2e-15
+        eph.distance_AU(1), np.sqrt(np.sum(r * r, -1)), rtol=tol, atol=0
     )
     np.testing.assert_allclose(
-        eph.radial_velocity_m_per_s(1, 0), v[..., 2] * AU2m / d2s, rtol=2e-15
+        eph.radial_velocity_m_per_s(1, 0), v[..., 2] * AU2m / d2s, rtol=tol, atol=0
     )
     np.testing.assert_allclose(
         eph.phase_angle_rad(1),
         np.arctan2(np.hypot(r[..., 0], r[..., 1]), r[..., 2]),
-        rtol=2e-15,
+        rtol=tol,
+        atol=0,
     )
     np.testing.assert_allclose(
         eph.position_angle_deg(1),
         np.rad2deg(np.arctan2(r[..., 0], r[..., 1])) % 360,
-        rtol=2e-15,
+        rtol=tol,
+        atol=0,
     )
     with pytest.raises(ValueError, match="reference"):
         eph.distance_AU(1, "invalid")
@@ -314,7 +328,11 @@ def test_batch_and_massless_tail(batch_shape):
 
 @pytest.mark.parametrize("planet_count", [1, 2, 3, 4])
 def test_jacobi_inverse_removes_only_barycenter(planet_count):
-    """Truth: mass-weighted Cartesian barycenter; 1e-13 covers x64 sums.
+    """Truth: mass-weighted Cartesian barycenter.
+
+    Each companion adds a weight division, two products and three prefix
+    additions in the two Jacobi maps. Four more operations remove the
+    origin and recover the inertial states.
 
     Random masses span four decades, and extra time axes exercise the
     same inverse for positions or velocities in an arbitrary common origin.
@@ -333,12 +351,58 @@ def test_jacobi_inverse_removes_only_barycenter(planet_count):
     expected = values - center
     error = np.linalg.norm((actual - expected).reshape(2, -1), axis=-1)
     scale = np.linalg.norm(expected.reshape(2, -1), axis=-1)
-    assert np.all(error / scale < 1e-13)
+    assert np.all(
+        error / scale
+        < float(roundoff(1.0, n_ops=6 * planet_count + 4, dtype=actual.dtype))
+    )
+
+
+def test_absolute_cartesian_snapshot_preserves_small_relative_orbit():
+    """A float64 host snapshot fixes the radius and velocity before transfer.
+
+    A 1/16 AU orbit and its circular velocity are both smaller than the
+    float32 spacing at the common origin. Eight operations for the mass,
+    norms, and energy give the semimajor-axis bound; the Jacobi chart and
+    rotation add up to 32 operations at the position and velocity scales.
+    """
+    star, planets = Body(1.0), Body([0.0])
+    radius = 0.0625
+    speed = np.sqrt(GM_SUN_AU3_PER_D2 / radius)
+    origin = 2.0**21
+    position = np.array([[origin, 0, 0], [origin + radius, 0, 0]])
+    velocity = np.array([[0, origin, 0], [0, origin + speed, 0]])
+    r, v = position[1] - position[0], velocity[1] - velocity[0]
+    # Host subtraction must also work for a float32 owner in an x64 process.
+    jacobi = barycentric_to_jacobi(position, jnp.float32(1), jnp.zeros(1, jnp.float32))
+    assert jacobi.dtype == jnp.float32
+    np.testing.assert_array_equal(jacobi[0], r)
+    expected_a = 1 / (2 / np.linalg.norm(r) - v @ v / GM_SUN_AU3_PER_D2)
+    system = System.from_cartesian(
+        star, planets, SkyFrame(10.0), position_AU=position, velocity_AU_per_d=velocity
+    )
+    np.testing.assert_allclose(
+        system.orbits.a_AU,
+        expected_a,
+        atol=float(roundoff(radius, n_ops=8, dtype=system.orbits.a_AU.dtype)),
+        rtol=0,
+    )
+    for values, expected in zip(system.orbits.to_cartesian(), (r, v), strict=True):
+        np.testing.assert_allclose(
+            values[0],
+            expected,
+            atol=float(
+                roundoff(np.linalg.norm(expected), n_ops=32, dtype=values.dtype)
+            ),
+            rtol=0,
+        )
 
 
 @pytest.mark.parametrize("batch_shape", [(), (2,)])
 def test_system_from_cartesian_epoch_round_trip(batch_shape):
-    """Truth: input Cartesian snapshot; 1e-12 AU and AU/day allow x64 solves.
+    """Truth: input Cartesian snapshot in AU and AU/day.
+
+    Allow 64 operations at each state scale for the Jacobi sums, norms,
+    eccentric longitude, quaternion construction and final rotation.
 
     Measured: 1.8e-15 AU in position and 4.3e-18 AU/day in velocity, so
     the epoch round trip is exact to rounding. A translated origin and
@@ -365,13 +429,17 @@ def test_system_from_cartesian_epoch_round_trip(batch_shape):
         np.testing.assert_allclose(
             actual[..., 1:, :] - actual[..., :1, :],
             expected[..., 1:, :] - expected[..., :1, :],
-            atol=1e-12,
+            atol=float(ulps(64, jnp.max(jnp.abs(expected)))),
             rtol=0,
         )
 
 
 def test_system_from_cartesian_per_system_epochs():
-    """Truth: snapshots at 23 and 35 days; 1e-12 AU and AU/day allow x64 solves."""
+    """Truth: snapshots at 23 and 35 days.
+
+    Allow 64 operations at the state scale for the Jacobi sums,
+    Cartesian chart, Kepler solve and quaternion rotation.
+    """
     epochs = jnp.array([23.0, 35.0])
     source = _system().solve(epochs)
     r = jnp.moveaxis(source.position_AU, 1, 0)
@@ -392,7 +460,7 @@ def test_system_from_cartesian_per_system_epochs():
         np.testing.assert_allclose(
             actual[:, 1:] - actual[:, :1],
             expected[:, 1:] - expected[:, :1],
-            atol=1e-12,
+            atol=float(ulps(64, jnp.max(jnp.abs(expected)))),
             rtol=0,
         )
 

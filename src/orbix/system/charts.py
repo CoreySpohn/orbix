@@ -21,6 +21,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from hwoutils.constants import two_pi
+from hwoutils.numerics import COARSEST, eps
 from jax.nn import log_sigmoid, sigmoid
 from jax.scipy.special import gammainc, log_ndtr, ndtr, ndtri
 from jaxtyping import Array
@@ -182,17 +183,47 @@ def _interval(y, low, high):
     return pick(0), pick(1)
 
 
-def _interval_inverse(value, low, high):
+def _inside_support(value, low, high):
+    """Compare signed distances on a common float32 significand grid.
+
+    Keep the working exponent range for intervals outside float32's range.
+    The four roundings cover conversion to a chart coordinate and its inverse.
+    """
+    value, low, high = map(jnp.asarray, (value, low, high))
+    scale = jnp.maximum(
+        jnp.where(jnp.isfinite(value), jnp.abs(value), 0),
+        jnp.maximum(
+            jnp.where(jnp.isfinite(low), jnp.abs(low), 0),
+            jnp.where(jnp.isfinite(high), jnp.abs(high), 0),
+        ),
+    )
+    # A shared power of two preserves endpoint distances and keeps even
+    # float64-only interval scales in range on the decision grid.
+    magnitude, exponent = jnp.frexp(scale)
+    value, low, high = (
+        jnp.ldexp(x, -exponent).astype(COARSEST) for x in (value, low, high)
+    )
+    slack = (4 * eps(COARSEST)) * magnitude.astype(COARSEST)
+    return (
+        (low <= high)
+        & ((value == low) | (low - value <= slack))
+        & ((value == high) | (value - high <= slack))
+    )
+
+
+def _interval_inverse(value, low, high, *, decision_value=None):
     """Invert :func:`_interval`; NaN outside the interval by more than rounding.
 
-    A value within ``sqrt(eps)`` of a finite bound (relative to the width for two
-    finite ends, in the units of the value for one) is held ``eps`` inside it; one
-    further out has no coordinate and returns NaN.
+    Resolve membership at four epsilons of the coarsest supported precision
+    at the interval scale. Hold values on either boundary one working-precision
+    epsilon inside it so that the coordinate remains finite.
     """
-    eps = jnp.finfo(jnp.result_type(value, float)).eps
+    inside = _inside_support(
+        value if decision_value is None else decision_value, low, high
+    )
+    eps = jnp.finfo(jnp.result_type(value, 1.0)).eps
     open_low, open_high, low, high = _finite_ends(low, high)
     position = (value - low) / (high - low)
-    outside = (position < -jnp.sqrt(eps)) | (position > 1.0 + jnp.sqrt(eps))
     position = jnp.clip(position, eps, 1.0 - eps)
     two = jnp.log(position) - jnp.log1p(-position)
     gap_high = jnp.minimum(value - high, -eps)
@@ -204,12 +235,7 @@ def _interval_inverse(value, low, high):
         jnp.where(open_high, value, below),
         jnp.where(open_high, above, two),
     )
-    outside = jnp.where(
-        open_low,
-        ~open_high & (value - high > jnp.sqrt(eps)),
-        jnp.where(open_high, value - low < -jnp.sqrt(eps), outside),
-    )
-    return jnp.where(outside, jnp.nan, inverse)
+    return jnp.where(inside, inverse, jnp.nan)
 
 
 class AbstractChart(eqx.Module):
@@ -396,10 +422,9 @@ class AbstractChart(eqx.Module):
     def unconstrain(self, x, support) -> Array:
         """Invert :meth:`constrain`: wall-free coordinates of chart coordinates ``x``.
 
-        A coordinate within one rounding of its bound is held ``eps`` inside it, so
-        the result is finite. One outside by more than ``sqrt(eps)`` of the interval
-        width (of ``high`` for the eccentricity disk) has no wall-free coordinate: the
-        whole row of the result is NaN.
+        A coordinate indistinguishable from a bound at the precision of the
+        support mask is held one working-precision epsilon inside it. A coordinate
+        outside the support has no wall-free coordinate and the whole row is NaN.
 
         Args:
             x: Chart coordinates, shape B + (n_coords,).
@@ -417,13 +442,19 @@ class AbstractChart(eqx.Module):
         if self.eccentricity_coordinate is not None and "e" in support:
             low, high = support["e"]
             if self.eccentricity_coordinate == "logit":
-                y = y.at[..., 1].set(_interval_inverse(sigmoid(x[..., 1]), low, high))
+                value = sigmoid(x[..., 1])
+                decision = sigmoid(x[..., 1].astype(COARSEST))
+                y = y.at[..., 1].set(
+                    _interval_inverse(value, low, high, decision_value=decision)
+                )
             else:
                 k = 1 - high**2
                 u2 = jnp.sum(x[..., 1:3] ** 2, axis=-1)
                 eps = jnp.finfo(x.dtype).eps
                 e = jnp.sqrt(u2 / (1.0 + u2))
-                outside = e > high * (1.0 + jnp.sqrt(eps))
+                decision_u2 = jnp.sum(x[..., 1:3].astype(COARSEST) ** 2, axis=-1)
+                decision_e = jnp.sqrt(decision_u2 / (1.0 + decision_u2))
+                outside = ~_inside_support(decision_e, 0.0, high)
                 e2 = jnp.minimum(e, high * (1.0 - eps)) ** 2
                 u2_held = e2 / (1.0 - e2)
                 u2_held = jnp.where(e > high * (1.0 - eps), u2_held, u2)

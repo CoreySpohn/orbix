@@ -66,7 +66,7 @@ _CLOCK_XY = (0.02, 0.98)
 _MARGIN = 0.05
 _MAX_CLOCK_DECIMALS = 3
 # Offsets within this many days of a printed value count as printed exactly.
-_CLOCK_EXACT_D = 1e-6
+_CLOCK_EXACT_D = 1e-6  # tol: physical, one microday of displayed clock time
 # Largest rounding error, as a fraction of the smallest step, accepted when
 # no clock precision prints every offset exactly. Under half a step keeps
 # adjacent labels distinct and in order; a quarter leaves margin.
