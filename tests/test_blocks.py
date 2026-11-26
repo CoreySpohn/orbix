@@ -1062,7 +1062,11 @@ def test_block_inference_with_float32_model(kind):
 
 
 def test_map_and_wall_decisions_at_float32_boundaries(precision):
-    """Distinct bounds change the map. An upper edge below one is a wall."""
+    """Distinct bounds change the map. Wall membership uses the common grid.
+
+    Fails if the value below one on the wider grid alone changes admission.
+    Membership is exact for representable inputs and after canonical narrowing.
+    """
     spacing = float(np.spacing(np.float32(1)))
     blocks = [
         _block(
@@ -1092,8 +1096,31 @@ def test_map_and_wall_decisions_at_float32_boundaries(precision):
         assert ("e" in cartesian.walls) == (edge < 1)
         assert jax.jit(lambda block: "e" in block.walls)(cartesian) == (edge < 1)
     if precision == np.float64:
-        # A narrower copy of a constructed block retains the host wall decision.
         law = OrbitLaw(priorities.Uniform(0.0, 1 - spacing / 8), a_AU=A_LAW.a_AU)
-        block = canonical(_block(CartesianChart(), (0,), law), precision="float32")
-        assert float(block.law.edges()["e"][1]) == 1.0
-        assert "e" in block.walls
+        wide = _block(CartesianChart(), (0,), law)
+        narrow = canonical(wide, precision="float32")
+        assert float(wide.law.edges()["e"][1]) < float(narrow.law.edges()["e"][1])
+        for block in (wide, narrow):
+            assert "e" not in block.walls
+            assert not bool(jax.jit(lambda b: b.wall_flags()["e"])(block))
+
+
+def test_edited_frame_block_redeclares_the_current_eccentricity_wall():
+    """A zero floor maps onto a full disk; a positive floor leaves a hole.
+
+    Exact membership for the same block edited in place and rebuilt, including
+    a dynamic JIT argument. Fails if an old declaration hides the edited wall.
+    """
+    block = _block(
+        FrameChart(),
+        (0,),
+        OrbitLaw(priorities.Uniform(0.0, 0.95), a_AU=A_LAW.a_AU),
+    )
+    selector = lambda b: b.law.eccentricity  # noqa: E731
+    compiled = jax.jit(lambda b: b.wall_flags()["e"])
+    for floor, walled in ((0.2, True), (0.0, False)):
+        block = eqx.tree_at(selector, block, priorities.Uniform(floor, 0.95))
+        rebuilt = _block(block.chart, block.rows, block.law)
+        for test_block in (block, rebuilt):
+            assert ("e" in test_block.walls) == walled
+            assert bool(compiled(test_block)) == walled

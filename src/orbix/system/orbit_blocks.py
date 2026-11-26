@@ -61,6 +61,7 @@ from hwoutils.constants import GM_SUN_AU3_PER_D2, two_pi
 from hwoutils.conversions import arcsec_to_au
 from hwoutils.leaves import as_float_leaf, is_traced
 from hwoutils.model_paths import join, resolve
+from hwoutils.numerics import COARSEST
 from hwoutils.precision import like, require_float64
 from jaxtyping import Array
 
@@ -146,7 +147,7 @@ class OrbitBlock(AbstractBlock):
 
     def __post_init__(self):
         """Classify the supplied support before any model precision conversion."""
-        self._walls = _orbit_walls(self.chart, self.law)
+        self._walls = self.walls
 
     def __check_init__(self):
         """Validate the static choice of chart and rows."""
@@ -173,9 +174,19 @@ class OrbitBlock(AbstractBlock):
         ``"a_AU"`` or ``"period_d"`` for a size edge that is neither zero (or below
         it) nor infinite when the size coordinate is not mapped, and ``"e"`` for an
         upper eccentricity edge below 1 that is not mapped or a lower one above 0 that
-        is not mapped by a logit. Fixed at construction from the supplied law.
+        is not mapped by a logit. Concrete blocks use their current laws.
+        For dynamic admission under transformations, use :meth:`wall_flags`.
         """
-        return self._walls
+        return _declared_walls(self, self.law)
+
+    def wall_flags(self) -> dict[str, jax.Array]:
+        """Return current wall predicates, including for traced law parameters.
+
+        Returns:
+            Mapping from each possibly unmapped coordinate to a scalar Boolean
+            indicating whether that coordinate has a wall.
+        """
+        return _orbit_wall_flags(self.chart, self.law)
 
     @property
     def owns(self) -> str:
@@ -437,11 +448,7 @@ class ThieleInnesBlock(AbstractBlock):
 
     def __post_init__(self):
         """Classify the supplied orbit and mass supports at construction."""
-        low, high = self.star_mass_Msun.support()
-        mass = _beyond(low, np.isfinite) or _beyond(high, np.isfinite)
-        self._walls = _orbit_walls(self.chart, self.law) + (
-            ("star_mass_Msun",) if mass else ()
-        )
+        self._walls = self.walls
 
     def __check_init__(self):
         """Validate the static rows; one row only."""
@@ -466,9 +473,23 @@ class ThieleInnesBlock(AbstractBlock):
         ``"star_mass_Msun"`` is listed whenever either edge of the star-mass law is
         finite, zero included: the implied star mass is the enclosed mass less the
         planet masses, so for a model with a massive planet it reaches every real
-        value at finite coordinates. Fixed at construction from the supplied laws.
+        value at finite coordinates. Concrete blocks use their current laws.
+        For dynamic admission under transformations, use :meth:`wall_flags`.
         """
-        return self._walls
+        return _declared_walls(self, self.law, self.star_mass_Msun)
+
+    def wall_flags(self) -> dict[str, jax.Array]:
+        """Return current orbit and star-mass wall predicates.
+
+        Returns:
+            Mapping from each possibly unmapped coordinate to a scalar Boolean
+            indicating whether that coordinate has a wall.
+        """
+        low, high = self.star_mass_Msun.support()
+        return {
+            **_orbit_wall_flags(self.chart, self.law),
+            "star_mass_Msun": jnp.any(jnp.isfinite(low)) | jnp.any(jnp.isfinite(high)),
+        }
 
     @property
     def owns(self) -> str:
@@ -1049,36 +1070,35 @@ def _mapped_keys(chart, bounds) -> frozenset[str]:
     return frozenset(keys)
 
 
-def _beyond(edge, test) -> bool:
-    """Whether ``test`` holds for any element of an edge; a traced edge counts."""
-    if is_traced(edge):
-        return True
-    return bool(np.any(test(np.asarray(edge, dtype=np.float64))))
+def _declared_walls(block, *laws):
+    """Name concrete walls; traced readers use the static declaration for display."""
+    if any(is_traced(x) for x in jax.tree.leaves(laws)):
+        if hasattr(block, "_walls"):
+            return block._walls
+        return tuple(block.wall_flags())
+    with jax.ensure_compile_time_eval():
+        return tuple(name for name, flag in block.wall_flags().items() if bool(flag))
 
 
-def _positive_edge(value):
-    """Finite lower limits strictly above the natural zero endpoint."""
-    return np.isfinite(value) & (value > 0.0)
-
-
-def _orbit_walls(chart, law) -> tuple[str, ...]:
-    """Names of the law's elements whose edges the chart's coordinates do not map."""
+def _orbit_wall_flags(chart, law) -> dict[str, jax.Array]:
+    """Test the law's edges that the chart's coordinates do not map."""
     edges = law.edges()
     mapped = _mapped_keys(chart, law.support())
-    out = []
+    out = {}
     size = next((k for k in ("a_AU", "period_d") if k in edges), None)
     if size is not None and "ln_size" not in mapped:
         low, high = edges[size]
-        if _beyond(low, _positive_edge) or _beyond(high, np.isfinite):
-            out.append(size)
+        out[size] = jnp.any(
+            jnp.isfinite(low) & (jnp.asarray(low, COARSEST) > 0)
+        ) | jnp.any(jnp.isfinite(high))
     if "e" in edges:
         low, high = edges["e"]
         logit = "e" in mapped and chart.eccentricity_coordinate == "logit"
-        if ("e" not in mapped and _beyond(high, lambda v: v < 1.0)) or (
-            not logit and _beyond(low, _positive_edge)
-        ):
-            out.append("e")
-    return tuple(out)
+        if not logit:
+            lower = jnp.any(jnp.isfinite(low) & (jnp.asarray(low, COARSEST) > 0))
+            upper = jnp.any(jnp.asarray(high, COARSEST) < 1)
+            out["e"] = lower if "e" in mapped else lower | upper
+    return out
 
 
 def _coordinate_names(chart, bounds) -> tuple[str, ...]:
