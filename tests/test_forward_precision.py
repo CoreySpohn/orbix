@@ -2,7 +2,6 @@
 
 from functools import partial
 
-import equinox as eqx
 import jax
 import jax.numpy as jnp
 import mpmath as mp
@@ -14,8 +13,6 @@ from hwoutils.epoch import Epoch
 from hwoutils.leaves import canonical
 from hwoutils.precision import float_dtype
 from hwoutils.testing import assert_precision_closed, precision_pair, ulps
-from hwoutils.testing._numerical import _first_wide, _subjaxprs, _wide_dtype
-from jax.extend.source_info_util import summarize
 
 from orbix import equations as eq
 from orbix.kepler import Grid, Halley, Markley, kepler
@@ -862,49 +859,6 @@ def test_obliquity_rotation_helpers_are_precision_closed(rotate_basis):
     )
 
 
-class _PrioritiesPromotion(AssertionError):
-    """A float64 intermediate at the known priorities guard."""
-
-
-_PRIORITIES_WIDE_SITE = (
-    "/priorities/_distribution.py:126:17 (bounded.<locals>.<genexpr>)"
-)
-
-
-def _widening_caller(jaxpr):
-    """Find the first attributable frame above an anonymous nested conversion."""
-    for eqn in jaxpr.eqns:
-        for child in _subjaxprs(eqn.params):
-            if _first_wide(child) is not None:
-                return _widening_caller(child) or summarize(eqn.source_info)
-        if _wide_dtype((*eqn.invars, *eqn.outvars)) is not None:
-            return summarize(eqn.source_info)
-    return ""
-
-
-def _assert_orbit_law_closed(fn, *args):
-    try:
-        assert_precision_closed(fn, *args)
-    except AssertionError as error:
-        trace, _, _ = eqx.filter_make_jaxpr(fn)(*args)
-        hit = _first_wide(trace.jaxpr)
-        if (
-            hit is not None
-            and hit[1] == np.float64
-            and _widening_caller(trace.jaxpr).endswith(_PRIORITIES_WIDE_SITE)
-        ):
-            raise _PrioritiesPromotion(
-                f"{_PRIORITIES_WIDE_SITE} widens to float64"
-            ) from error
-        raise
-
-
-@pytest.mark.xfail(
-    float_dtype() == np.float64,
-    reason="priorities/_distribution.py:126 bounded widens to float64",
-    raises=_PrioritiesPromotion,
-    strict=True,
-)
 @pytest.mark.parametrize("method", ["sample", "from_unit"])
 def test_orbit_law_with_typed_uniforms(method):
     """Check real typed scalar laws against the affine uniform quantile.
@@ -955,4 +909,4 @@ def test_orbit_law_with_typed_uniforms(method):
         args = (law, source, mu)
         if method == "from_unit":
             precision_pair(draw, args, bound=float(ulps(16, np.float32(1))))
-        _assert_orbit_law_closed(draw, *jax.tree.map(narrow, args))
+        assert_precision_closed(draw, *jax.tree.map(narrow, args))
