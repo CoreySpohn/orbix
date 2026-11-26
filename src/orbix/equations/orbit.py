@@ -2,7 +2,7 @@
 
 import jax.numpy as jnp
 from hwoutils.constants import G, two_pi
-from hwoutils.numerics import COARSEST, eps
+from hwoutils.numerics import COARSEST, eps, roundoff
 from hwoutils.precision import like
 from jax import lax
 
@@ -268,7 +268,6 @@ def thiele_innes_constants_reduced(sinW, cosW, sinw, cosw, sinwcosi, coswcosi):
 
 # Eight roundings in the normalized cross product and norms define an equatorial node.
 _NODE_RESOLUTION = 8 * eps(COARSEST)
-_TOL_N = 1e-9  # Dimensionless angular momentum fraction defining a radial state.
 
 
 def _safe_norm(x):
@@ -327,8 +326,9 @@ def state_vector_to_keplerian(r, v, mu):
     The direction of a nonzero eccentricity vector sets periapsis. At
     zero eccentricity, periapsis is zero and the anomaly is the argument
     of latitude from the node, or true longitude if also equatorial.
-    The node-length fraction is compared with eight float32 epsilons on
-    a shared float32 grid to identify an equatorial plane.
+    A state is radial when every angular momentum component is within
+    roundoff on a shared float32 grid. The node-length fraction is compared
+    with eight float32 epsilons on that grid to identify an equatorial plane.
     Equatorial orbits use ``W = 0``; ``w`` (or the circular true longitude)
     is measured from north toward east and multiplied by the sign of
     ``h_z`` in the classical (north, east, away) component order.
@@ -337,10 +337,10 @@ def state_vector_to_keplerian(r, v, mu):
     consistent unit system (e.g. meters / m/s / m^3 s^-2, or the AU / day
     units used elsewhere in this library); the function does not enforce
     or convert any particular unit system, and ``a`` is returned in the
-    same length unit as ``r``. Every degeneracy test is dimensionless (the
-    energy against ``mu / r``, the angular momentum against ``r * v``, the
-    node vector against the angular momentum), so the elements do not
-    depend on the choice of units.
+    same length unit as ``r``. The degeneracy thresholds scale with the
+    terms that produce the energy, angular momentum, and node vector, so
+    the elements do not depend on the choice of units. The semi-major axis
+    is infinite when the specific orbital energy is within roundoff of zero.
 
     Args:
         r: Star-centered (east, north, away) position vector ``(3,)``,
@@ -362,13 +362,15 @@ def state_vector_to_keplerian(r, v, mu):
     # Exact power-of-two rescaling keeps the common-grid cross product in range.
     coarse_r, coarse_v = _plane_decision_vector(r), _plane_decision_vector(v)
     coarse_h = jnp.cross(coarse_r, coarse_v)
-    coarse_h_mag = jnp.linalg.norm(coarse_h)
-    has_h = coarse_h_mag > _TOL_N * jnp.linalg.norm(coarse_r) * jnp.linalg.norm(
-        coarse_v
-    )
-    is_inclined = has_h & (
-        jnp.linalg.norm(coarse_h[:2]) > _NODE_RESOLUTION * coarse_h_mag
-    )
+    # The two input casts, product, and subtraction can round each term.
+    # Use the terms of each component so a small transverse velocity can
+    # still define the plane when there is no cancellation in that component.
+    rx, ry, rz = jnp.abs(coarse_r)
+    vx, vy, vz = jnp.abs(coarse_v)
+    cross_scale = jnp.stack([ry * vz + rz * vy, rz * vx + rx * vz, rx * vy + ry * vx])
+    has_h = jnp.any(jnp.abs(coarse_h) > roundoff(cross_scale, n_ops=4))
+    coarse_h_mag = _safe_norm(coarse_h)
+    is_inclined = has_h & (_safe_norm(coarse_h[:2]) > _NODE_RESOLUTION * coarse_h_mag)
 
     # Work in units of |r| and |v|: every element is homogeneous in these two
     # scales, so constant (stop-gradient) scales leave the derivatives exact
@@ -400,8 +402,12 @@ def state_vector_to_keplerian(r, v, mu):
     e_vec = (1 / mu) * ((v_mag**2 - mu / r_mag) * r - jnp.dot(r, v) * v)
     e = _safe_norm(e_vec)
 
-    E_energy = 0.5 * v_mag**2 - mu / r_mag
-    non_parabolic = jnp.abs(E_energy * r_mag / mu) > 1e-10
+    kinetic = 0.5 * v_mag**2
+    binding = mu / r_mag
+    E_energy = kinetic - binding
+    # Allow for roundoff from the norms, normalization, and energy subtraction.
+    energy_roundoff = roundoff(kinetic + jnp.abs(binding), n_ops=8)
+    non_parabolic = jnp.abs(E_energy) > energy_roundoff
     E_energy_safe = jnp.where(non_parabolic, E_energy, jnp.ones_like(E_energy))
     a = jnp.where(non_parabolic, -mu / (2 * E_energy_safe), like(jnp.inf, E_energy))
 

@@ -156,6 +156,7 @@ def test_face_on_inclination_endpoints():
     """Truth: classical h along +/-z; exact zero and one ULP at pi suffice.
 
     A radial state (no angular momentum) keeps the i = pi/2 convention.
+    Fails if a small but resolved transverse component takes the radial gauge.
     """
     r = jnp.array([0.0, 1.0, 0.0])
     v = jnp.array([1.0, 0.0, 0.0])
@@ -168,6 +169,23 @@ def test_face_on_inclination_endpoints():
     )
     radial = state_vector_to_keplerian(r, jnp.array([0.0, 0.5, 0.0]), 1.0)[2]
     assert radial == np.pi / 2
+    near_radial = jnp.array([2.0**-32, 0.5, 0.0])
+    assert state_vector_to_keplerian(r, near_radial, 1.0)[2] == 0.0
+
+
+def test_near_parabolic_semimajor_axis(precision):
+    """At unit radius and squared speed two, escape occurs at mu = 1.
+
+    Fails if cancellation at escape yields a finite axis, or a resolved
+    negative energy takes the infinite-axis branch.
+    """
+    r = jnp.array([0.0, 0.0, 1.0], dtype=precision)
+    v = jnp.array([1.0, 1.0, 0.0], dtype=precision)
+    solve = jax.jit(state_vector_to_keplerian)
+    assert jnp.isposinf(solve(r, v, 1.0)[0])
+
+    a = solve(r, v, 1.0 + 64 * eps(precision))[0]
+    assert jnp.isfinite(a) and a > 0.0
 
 
 def test_elements_state_round_trip_degenerate_grid():
