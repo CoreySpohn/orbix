@@ -4,6 +4,7 @@ Positions are AU and velocities AU/day. Distances in parsecs broadcast
 against the leading vector shape. No orbit state or Kepler solve is needed.
 """
 
+import jax
 import jax.numpy as jnp
 from hwoutils.constants import AU2m, d2s, pc2AU, rad2arcsec
 
@@ -19,8 +20,9 @@ def offset_arcsec(r_AU, dist_pc):
         Tuple of east and north offsets in arcseconds, each with the leading shape of
         r_AU.
     """
-    r = jnp.asarray(r_AU)
-    distance = jnp.asarray(dist_pc)
+    dtype = jnp.result_type(*jax.tree.leaves((r_AU, dist_pc)), 0.0)
+    r = jnp.asarray(r_AU, dtype=dtype)
+    distance = jnp.asarray(dist_pc, dtype=dtype)
     distance = distance.reshape(distance.shape + (1,) * (r.ndim - 1 - distance.ndim))
     factor = rad2arcsec / (pc2AU * distance)
     return r[..., 0] * factor, r[..., 1] * factor
@@ -51,7 +53,7 @@ def position_angle_deg(r_AU):
     """
     r = jnp.asarray(r_AU)
     angle = jnp.rad2deg(jnp.arctan2(r[..., 0], r[..., 1])) % 360
-    return jnp.where(angle == 360, 0.0, angle)
+    return jnp.where(angle == 360, jnp.zeros_like(angle), angle)
 
 
 def phase_angle_rad(r_AU):

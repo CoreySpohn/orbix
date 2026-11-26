@@ -16,7 +16,8 @@ def _hypot_with_zero_gradient(x, y):
     # Select the zero subgradient at the origin. Guard the inputs to hypot
     # as well as its output so a masked derivative cannot propagate NaNs.
     zero = (x == 0) & (y == 0)
-    return jnp.where(zero, 0.0, jnp.hypot(jnp.where(zero, 1.0, x), y))
+    safe_x = jnp.where(zero, jnp.ones_like(x), x)
+    return jnp.where(zero, jnp.zeros_like(safe_x), jnp.hypot(safe_x, y))
 
 
 def sky_block_geometry(A, B, F, G) -> tuple[Array, Array]:
@@ -165,10 +166,10 @@ def sky_block_to_frame(A, B, F, G, *, sheet=1) -> tuple[Array, Array]:
     first = difference >= 0
     pivot2 = (gap + jnp.abs(difference)) / 2
     nonzero = pivot2 > 0
-    pivot = jnp.sqrt(jnp.where(nonzero, pivot2, 1.0))
+    pivot = jnp.sqrt(jnp.where(nonzero, pivot2, jnp.ones_like(pivot2)))
     other = -(plus_a * minus_b - minus_a * plus_b) / (2 * pivot)
-    pivot = jnp.where(nonzero, pivot, 0.0)
-    other = jnp.where(nonzero, other, 0.0)
+    pivot = jnp.where(nonzero, pivot, jnp.zeros_like(pivot))
+    other = jnp.where(nonzero, other, jnp.zeros_like(other))
     C = jnp.where(first, pivot, other)
     H = jnp.where(first, other, pivot)
     f = jnp.stack([B, A, C], -1) / a[..., None]

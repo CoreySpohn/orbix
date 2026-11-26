@@ -22,7 +22,8 @@ from hwoutils.precision import like, require_float64
 from jax import Array
 
 from orbix.equations.orbit import mean_motion
-from orbix.system.frame_orbit import FrameOrbit
+from orbix.system.frame_orbit import FrameOrbit, _element_dtype
+from orbix.system.orientation import IsotropicInclination
 
 
 class AbstractOrbitLaw(eqx.Module):
@@ -142,7 +143,7 @@ def _batch_shape(*parts) -> tuple[int, ...]:
     of a mixture, rather than the shapes of its parameter leaves.
     """
     shapes = [
-        part.support()[0].shape
+        _distribution_batch(part)
         if isinstance(part, priorities.AbstractDistribution)
         else jnp.shape(part)
         for part in parts
@@ -150,7 +151,11 @@ def _batch_shape(*parts) -> tuple[int, ...]:
     return jnp.broadcast_shapes(*shapes)
 
 
-def _draw(dist: priorities.AbstractDistribution, key, batch) -> Array:
+def _distribution_batch(dist):
+    return () if type(dist) is IsotropicInclination else dist.support()[0].shape
+
+
+def _draw(dist: priorities.AbstractDistribution, key, batch, *, dtype=None) -> Array:
     """Draw a scalar law at ``batch``, one independent variate per element.
 
     The law's own batch broadcasts to ``batch``. Sample axes are requested exactly
@@ -159,13 +164,16 @@ def _draw(dist: priorities.AbstractDistribution, key, batch) -> Array:
     ``sample`` (``sample_shape + batch``) is used; no parameter is touched.
     """
     batch = tuple(batch)
-    own = dist.support()[0].shape
+    own = _distribution_batch(dist)
     lead = len(batch) - len(own)
     fresh = tuple(i for i in range(len(batch)) if i < lead or own[i - lead] != batch[i])
     shape = tuple(batch[i] for i in fresh)
     name = type(dist).__name__
     try:
-        out = dist.sample(key, shape)
+        if type(dist) is IsotropicInclination:
+            out = dist.sample(key, shape, dtype=dtype)
+        else:
+            out = dist.sample(key, shape)
     except (ValueError, TypeError, IndexError) as err:
         raise ValueError(
             f"{name}.sample failed for sample_shape {shape} with batch shape {own}; "
@@ -270,20 +278,35 @@ class OrbitLaw(AbstractOrbitLaw):
             Sampled orbits with the broadcast batch shape of mu_AU3_per_d2 and the law's
             parameters.
         """
-        mu = jnp.asarray(mu_AU3_per_d2)
         size_law = self.a_AU if self.a_AU is not None else self.period_d
+        parameters = jax.tree.leaves((self.eccentricity, size_law))
+        dtype = _element_dtype(
+            tuple(filter(eqx.is_inexact_array, parameters)), mu_AU3_per_d2, epoch_d
+        )
+        mu = jnp.asarray(mu_AU3_per_d2, dtype=dtype)
         batch = _batch_shape(self.eccentricity, size_law, mu)
         k_e, k_size, k_phase, k_quat = jax.random.split(key, 4)
-        e = _draw(self.eccentricity, k_e, batch)
-        if self.a_AU is not None:
-            a = _draw(self.a_AU, k_size, batch)
-        else:
-            period = _draw(self.period_d, k_size, batch)
-            a = (mu * (period / two_pi) ** 2) ** (1.0 / 3.0)
-        phase = jax.random.uniform(k_phase, batch, maxval=two_pi)
-        quat = jax.random.normal(k_quat, (*batch, 4))
+        e = _draw(self.eccentricity, k_e, batch, dtype=dtype)
+        size = _draw(size_law, k_size, batch, dtype=dtype)
+        dtype = _element_dtype(dtype, e, size)
+        mu = jnp.asarray(mu, dtype=dtype)
+        size = jnp.asarray(size, dtype=dtype)
+        a = (
+            size
+            if self.a_AU is not None
+            else (mu * (size / two_pi) ** 2) ** (1.0 / 3.0)
+        )
+        phase = jax.random.uniform(
+            k_phase,
+            batch,
+            dtype=dtype,
+            minval=jnp.zeros((), dtype),
+            maxval=jnp.asarray(two_pi, dtype=dtype),
+        )
+        quat = jax.random.normal(k_quat, (*batch, 4), dtype=dtype)
         quat = quat / jnp.linalg.norm(quat, axis=-1, keepdims=True)
-        a, mu, epoch = jnp.broadcast_arrays(a, mu, jnp.asarray(epoch_d))
+        epoch = jnp.asarray(epoch_d, dtype=dtype)
+        a, mu, epoch = jnp.broadcast_arrays(a, mu, epoch)
         return FrameOrbit(
             a,
             mean_motion(a, mu),
@@ -367,7 +390,9 @@ class OrbitLaw(AbstractOrbitLaw):
         if self.unit_size is None:
             raise NotImplementedError("a scalar law has no inverse CDF")
         c = jnp.asarray(c)
-        mu = jnp.asarray(mu_AU3_per_d2)
+        mu = jnp.asarray(
+            mu_AU3_per_d2, dtype=jnp.result_type(*jax.tree.leaves(mu_AU3_per_d2), c)
+        )
         e = self.eccentricity.icdf(c[..., 0])
         if self.a_AU is not None:
             a = self.a_AU.icdf(c[..., 1])
@@ -375,9 +400,10 @@ class OrbitLaw(AbstractOrbitLaw):
             a = (mu * (self.period_d.icdf(c[..., 1]) / two_pi) ** 2) ** (1.0 / 3.0)
         phase = two_pi * c[..., 2]
         quat = _uniform_quaternion(c[..., 3:6])
-        e, phase, a, mu, epoch = jnp.broadcast_arrays(
-            e, phase, a, mu, jnp.asarray(epoch_d)
+        epoch = jnp.asarray(
+            epoch_d, dtype=jnp.result_type(*jax.tree.leaves(epoch_d), c)
         )
+        e, phase, a, mu, epoch = jnp.broadcast_arrays(e, phase, a, mu, epoch)
         return FrameOrbit(
             a,
             mean_motion(a, mu),

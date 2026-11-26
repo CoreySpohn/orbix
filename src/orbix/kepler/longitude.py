@@ -174,11 +174,7 @@ def _longitude_function(solver):
         solve_anomaly = solver.solve
 
     @jax.custom_jvp
-    def solve(mean_longitude, ex, ey):
-        dtype = jnp.result_type(mean_longitude, ex, ey, 0.0)
-        lam, ex, ey = (
-            jnp.asarray(value, dtype=dtype) for value in (mean_longitude, ex, ey)
-        )
+    def solve(lam, ex, ey):
         e = jnp.sqrt(ex * ex + ey * ey)
         circular = e == 0
         one = like(1.0, e)
@@ -238,4 +234,7 @@ def kepler(mean_longitude, ex, ey, *, solver=_DEFAULT_SOLVER):
         shape of the inputs.
     """
     mean_longitude = _condition_host_phase(mean_longitude, ex, ey)
-    return _longitude_function(solver)(mean_longitude, ex, ey)
+    dtype = jnp.result_type(mean_longitude, ex, ey, 0.0)
+    return _longitude_function(solver)(
+        *(jnp.asarray(value, dtype=dtype) for value in (mean_longitude, ex, ey))
+    )

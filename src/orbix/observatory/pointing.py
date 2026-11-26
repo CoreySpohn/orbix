@@ -8,6 +8,7 @@ time offset, with no further inputs.
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 from hwoutils.epoch import Epoch
 from jaxtyping import Array, ArrayLike
@@ -50,7 +51,11 @@ def ecliptic_pointing(
         The result is not defined at the ecliptic poles, where the longitude is
         degenerate.
     """
-    target_lon, beta = equatorial_to_ecliptic_deg(ra_deg, dec_deg)
-    dlon = target_lon - sun_ecliptic_longitude_deg(epoch, time_d)
-    dlon = jnp.mod(dlon + 180.0, 360.0) - 180.0
+    dtype = jnp.result_type(*jax.tree.leaves((ra_deg, dec_deg, time_d)), 0.0)
+    ra, dec, time = (
+        jnp.asarray(value, dtype=dtype) for value in (ra_deg, dec_deg, time_d)
+    )
+    target_lon, beta = equatorial_to_ecliptic_deg(ra, dec)
+    dlon = target_lon - sun_ecliptic_longitude_deg(epoch, time)
+    dlon = (dlon + 180) % 360 - 180
     return beta, dlon

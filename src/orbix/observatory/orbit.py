@@ -20,6 +20,7 @@ import numpy as np
 from hwoutils.constants import MJD_ZERO_JD
 from hwoutils.conversions import days_to_years, years_to_days
 from hwoutils.epoch import Epoch
+from hwoutils.precision import like
 from jaxtyping import Array, ArrayLike
 
 from orbix.observatory.keepout import body_angle_deg
@@ -77,8 +78,12 @@ class ObservatoryL2Halo(eqx.Module):
     around the Sun-Earth L2 point.
 
     The reference equinox and the start offset only feed a host-side reduction
-    of the halo phase at the query epoch, so they are static; the interpolators
-    are the only array leaves.
+    of the halo phase at the query epoch, so they are static. The tabulated
+    times and positions are the array leaves.
+
+    Attributes:
+        t_yr: Halo sample times in years from the reference equinox.
+        r_earth_AU: Earth-relative halo vectors at each sample, in AU.
 
     Example:
         >>> obs = ObservatoryL2Halo.from_default()
@@ -86,10 +91,8 @@ class ObservatoryL2Halo(eqx.Module):
         >>> pos = obs.position_ecliptic(epoch, 10.0)  # AU, shape (3,)
     """
 
-    # Pre-built interpolators for halo position components
-    _interp_x: interpax.Interpolator1D
-    _interp_y: interpax.Interpolator1D
-    _interp_z: interpax.Interpolator1D
+    t_yr: Array
+    r_earth_AU: Array
     _period_yr: float = eqx.field(static=True)  # halo period in years
     _L2_dist_AU: float = eqx.field(static=True)  # L2 distance from Sun in AU
     _mu: float = eqx.field(static=True)  # mass ratio
@@ -112,19 +115,7 @@ class ObservatoryL2Halo(eqx.Module):
         Returns:
             Configured ObservatoryL2Halo instance.
         """
-        data = _load_default_halo_data()
-        t_yr = jnp.array(data["t_yr"])
-        r = jnp.array(data["r_earth_AU"])
-        return cls(
-            _interp_x=interpax.Interpolator1D(t_yr, r[:, 0], method="linear"),
-            _interp_y=interpax.Interpolator1D(t_yr, r[:, 1], method="linear"),
-            _interp_z=interpax.Interpolator1D(t_yr, r[:, 2], method="linear"),
-            _period_yr=float(data["period_yr"]),
-            _L2_dist_AU=float(data["L2_dist_AU"]),
-            _mu=float(data["mu"]),
-            _equinox=Epoch(MJD_ZERO_JD, equinox_mjd),
-            _halo_start_yr=days_to_years(halo_start_day),
-        )
+        return cls._from_data(_load_default_halo_data(), equinox_mjd, halo_start_day)
 
     @classmethod
     def from_npz(
@@ -143,13 +134,21 @@ class ObservatoryL2Halo(eqx.Module):
         Returns:
             Configured ObservatoryL2Halo instance.
         """
-        data = dict(np.load(npz_path))
-        t_yr = jnp.array(data["t_yr"])
-        r = jnp.array(data["r_earth_AU"])
+        with np.load(npz_path) as data:
+            return cls._from_data(data, equinox_mjd, halo_start_day)
+
+    @classmethod
+    def _from_data(cls, data, equinox_mjd, halo_start_day):
+        """Build from one time axis and the first three position components."""
+        time, position = data["t_yr"], data["r_earth_AU"]
+        if time.ndim != 1 or position.ndim != 2 or position.shape[0] != time.size:
+            raise ValueError("Halo times and positions must share one sample axis")
+        if position.shape[1] < 3:
+            raise ValueError("Halo positions must have three Cartesian components")
+        dtype = jnp.result_type(time, position, 0.0)
         return cls(
-            _interp_x=interpax.Interpolator1D(t_yr, r[:, 0], method="linear"),
-            _interp_y=interpax.Interpolator1D(t_yr, r[:, 1], method="linear"),
-            _interp_z=interpax.Interpolator1D(t_yr, r[:, 2], method="linear"),
+            t_yr=jnp.asarray(time, dtype=dtype),
+            r_earth_AU=jnp.asarray(position[:, :3], dtype=dtype),
             _period_yr=float(data["period_yr"]),
             _L2_dist_AU=float(data["L2_dist_AU"]),
             _mu=float(data["mu"]),
@@ -180,7 +179,7 @@ class ObservatoryL2Halo(eqx.Module):
 
     def _halo_time(self, epoch: Epoch, time_d: ArrayLike) -> Array:
         """Periodic halo time in years at ``time_d`` days from ``epoch``."""
-        period_d = years_to_days(self._period_yr)
+        period_d = like(years_to_days(self._period_yr), time_d)
         # Reduce time_d first so the sum stays below two periods: a sum of
         # phase0 and a time of 1000 d would double the float32 spacing.
         phase_d = (self._phase0_d(epoch) + time_d % period_d) % period_d
@@ -197,13 +196,16 @@ class ObservatoryL2Halo(eqx.Module):
         Returns:
             Position vector in heliocentric ecliptic frame (AU), shape ``(3,)``.
         """
-        time_d = jnp.asarray(time_d)
+        time_d = jnp.asarray(time_d, dtype=jnp.result_type(time_d, self.t_yr))
         t_halo = self._halo_time(epoch, time_d)
 
-        # Evaluate pre-built interpolators
-        r_halo_x = self._interp_x(t_halo)
-        r_halo_y = self._interp_y(t_halo)
-        r_halo_z = self._interp_z(t_halo)
+        r_halo_x, r_halo_y, r_halo_z = interpax.interp1d(
+            t_halo,
+            self.t_yr,
+            self.r_earth_AU,
+            method="linear",
+            extrap=like(jnp.nan, self.r_earth_AU),
+        )
 
         # Get Earth position
         r_earth = earth_position_ecliptic(epoch, time_d)
@@ -220,8 +222,9 @@ class ObservatoryL2Halo(eqx.Module):
         # cos(lon) and sin(lon) come straight from the Earth vector: an arccos
         # of the ratio loses half the digits near lon = 0 or pi (3.5e-4 rad in
         # float32).
-        cos_lon = r_earth[0] / jnp.maximum(r_earth_norm, 1e-30)
-        sin_lon = r_earth[1] / jnp.maximum(r_earth_norm, 1e-30)
+        safe_norm = jnp.maximum(r_earth_norm, like(1e-30, r_earth_norm))
+        cos_lon = r_earth[0] / safe_norm
+        sin_lon = r_earth[1] / safe_norm
 
         # Apply rotation about z-axis (matches EXOSIMS sign convention)
         x = cos_lon * r_halo_x - sin_lon * r_halo_y
@@ -248,4 +251,4 @@ class ObservatoryL2Halo(eqx.Module):
             Solar elongation in degrees, [0, 180].
         """
         obs_pos = self.position_ecliptic(epoch, time_d)
-        return body_angle_deg(obs_pos, jnp.zeros(3), ra_deg, dec_deg)
+        return body_angle_deg(obs_pos, jnp.zeros_like(obs_pos), ra_deg, dec_deg)

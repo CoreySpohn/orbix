@@ -58,7 +58,7 @@ def _sin_cos(E):
 def _denominator(sine, cosine, e):
     """Evaluate 1 - e*cos(E) without cancellation close to periapsis."""
     positive = cosine > 0
-    divisor = jnp.where(positive, 1 + cosine, 1.0)
+    divisor = jnp.where(positive, 1 + cosine, jnp.ones_like(cosine))
     one_minus_cos = jnp.where(positive, sine * sine / divisor, 1 - cosine)
     return (1 - e) + e * one_minus_cos
 
