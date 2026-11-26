@@ -149,8 +149,16 @@ _mapped_solve = jax.jit(
     jax.vmap(jax.vmap(_wrapped_angle, in_axes=(0, None)), in_axes=(None, 0))
 )
 _scalar_solve = jax.jit(_wrapped_angle)
+_direct_solve = jax.jit(Markley().solve)
 
 
+@example(
+    means=np.array(
+        [0.0, np.finfo(np.float32).tiny, 1.6e-43, -1.6e-43, 1.1e-39, -1.1e-39],
+        dtype=np.float32,
+    ),
+    eccs=np.array([0.0, 0.4, 0.9], dtype=np.float32),
+)
 @example(
     means=np.array([0.1, 1.0, 3.0, 5.0, 0.1, 1.0]), eccs=np.array([0.0, 0.4, 0.999])
 )
@@ -184,6 +192,17 @@ def test_broadcast_wrapping_equation_and_trig(precision, means, eccs):
     eccentric, sine, cosine = map(
         np.asarray, _broadcast_solve(jnp.asarray(means), jnp.asarray(eccs[:, None]))
     )
+    if eccs[0] == 0:
+        reads_zero = np.asarray(jnp.asarray(means) == 0)
+        nodes = reads_zero | (means == np.finfo(np.float32).tiny)
+        expected = np.where(reads_zero, 0, means)
+        direct = _direct_solve(jnp.asarray(means), jnp.asarray(eccs[0]))
+        for s, c in ((sine[0], cosine[0]), direct):
+            assert np.all(np.isfinite(s)) and np.all(np.isfinite(c))
+            # At zero and the smallest normal, sin(M) rounds to M and cos(M)
+            # to 1. Widen on the host so angle recovery preserves the normal.
+            angle = np.arctan2(np.asarray(s, dtype=np.float64), np.asarray(c))
+            np.testing.assert_array_equal(angle[nodes], expected[nodes])
     # Endpoint rounding (including subnormal flushing) may return 0 or 2*pi.
     assert np.all((eccentric >= 0) & (eccentric <= eccentric.dtype.type(two_pi)))
     residual = eccentric - eccs[:, None] * sine - means

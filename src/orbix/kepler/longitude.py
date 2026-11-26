@@ -14,7 +14,7 @@ import numpy as np
 from hwoutils.precision import like
 
 from orbix.kepler._grid import _build_trig_grid, _indices_frac
-from orbix.kepler._markley import _markley_pair, _markley_reduced
+from orbix.kepler._markley import _markley_pair, _markley_reduced, _principal_angle
 
 
 def _condition_host_phase(mean, *components):
@@ -102,7 +102,7 @@ class Halley(AbstractKeplerSolver):
         mean, e = jnp.broadcast_arrays(
             jnp.asarray(mean_anomaly, dtype=dtype), jnp.asarray(e, dtype=dtype)
         )
-        mean = jnp.arctan2(jnp.sin(mean), jnp.cos(mean))
+        mean = _principal_angle(jnp.sin(mean), jnp.cos(mean))
         initial = mean + 0.85 * e * jnp.sign(mean)
 
         def step(_, eccentric):
@@ -146,7 +146,7 @@ class Grid(AbstractKeplerSolver):
         mean, e = jnp.broadcast_arrays(
             jnp.asarray(mean_anomaly, dtype=dtype), jnp.asarray(e, dtype=dtype)
         )
-        return self._solve_reduced(jnp.arctan2(jnp.sin(mean), jnp.cos(mean)), e)
+        return self._solve_reduced(_principal_angle(jnp.sin(mean), jnp.cos(mean)), e)
 
     def _solve_reduced(self, signed_mean, e):
         """Interpolate the positive phase and restore the odd sine's sign."""
@@ -182,13 +182,14 @@ def _longitude_function(solver):
         c = jnp.where(circular, one, ex / divisor)
         s = jnp.where(circular, like(0.0, e), ey / divisor)
         sin_lam, cos_lam = jnp.sin(lam), jnp.cos(lam)
-        mean = jnp.arctan2(sin_lam * c - cos_lam * s, cos_lam * c + sin_lam * s)
+        mean = _principal_angle(sin_lam * c - cos_lam * s, cos_lam * c + sin_lam * s)
         sin_e, cos_e = solve_anomaly(mean, e)
         # The exact circular value also avoids interpolation error at e = 0.
-        return (
-            jnp.where(circular, sin_lam, sin_e * c + cos_e * s),
-            jnp.where(circular, cos_lam, cos_e * c - sin_e * s),
-        )
+        sine = jnp.where(circular, sin_lam, sin_e * c + cos_e * s)
+        cosine = jnp.where(circular, cos_lam, cos_e * c - sin_e * s)
+        # A CPU sin can copy subnormal bits even when arithmetic reads zero.
+        signed_zero = jnp.copysign(jnp.zeros_like(sine), sine)
+        return jnp.where(sine == 0, signed_zero, sine), cosine
 
     @solve.defjvp
     def solve_jvp(primals, tangents):
