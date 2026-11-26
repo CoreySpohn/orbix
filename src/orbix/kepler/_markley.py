@@ -63,11 +63,21 @@ def _denominator(sine, cosine, e):
     return (1 - e) + e * one_minus_cos
 
 
+def _principal_angle(sine, cosine):
+    """Recover the signed phase from a unit pair at working precision."""
+    # Here |s/c| <= 2*tiny, so atan(s/c) rounds to s/c. CPU atan2 can
+    # lose the smallest normal or misread subnormal bits under flush-to-zero.
+    tiny = (jnp.abs(sine) <= jnp.finfo(sine.dtype).tiny) & (cosine >= 0.5)
+    divisor = jnp.where(tiny, cosine, 1)
+    angle = jnp.arctan2(jnp.where(tiny, 0, sine), cosine)
+    return jnp.where(tiny, sine / divisor, angle)
+
+
 def _markley_pair(M, e):
     """Evaluate Markley's algorithm without a derivative rule."""
     dtype = jnp.result_type(M, e, 0.0)
     M, e = jnp.asarray(M, dtype=dtype), jnp.asarray(e, dtype=dtype)
-    reduced = jnp.arctan2(jnp.sin(M), jnp.cos(M))
+    reduced = _principal_angle(jnp.sin(M), jnp.cos(M))
     return _markley_reduced(reduced, e)
 
 
@@ -83,6 +93,9 @@ def _markley_reduced(signed_mean, e):
     r = (3 * alpha * d * (d - ome) + mean * mean) * mean
     w = jnp.cbrt(jnp.abs(r) + jnp.sqrt(q**3 + r * r)) ** 2
     initial = (2 * r * w / (w * w + w * q + q * q) + mean) / d
+    # A one-ULP starter error at the smallest normal can flush out of the
+    # residual. For a circular orbit the exact starter is the mean itself.
+    initial = jnp.where((e == 0) & (mean <= jnp.finfo(mean.dtype).tiny), mean, initial)
     sine, cosine = _sin_cos(initial)
 
     # For E < 0.3 the omitted E**15/15! term is below 1.1e-20. Evaluating

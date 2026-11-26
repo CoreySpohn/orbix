@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.numerics import roundoff
 from hwoutils.precision import PrecisionError
 from scipy.stats import multivariate_normal
 
@@ -66,14 +67,19 @@ def _direct(design, target, cov, prior_precision, active=None):
 def test_sky_design_reproduces_the_projected_positions():
     """Fails if the design matrix or the constants' ordering is wrong.
 
-    ``design @ (A, B, F, G)`` is the east/north offset of the orbit's own sky block,
-    checked against the orbit's positions to 1e-12 AU (float64 products).
+    Each projected coordinate sums two nonzero products. Each term can round
+    in its multiply and again in the sum, on each of the two paths. The sum
+    of absolute products in AU bounds the scale even when the terms cancel.
     """
     orbit = _orbit()
     time = jnp.linspace(-30.0, 200.0, 7)
     (B, G), (A, F) = np.asarray(orbit.linear_map[:2])
-    predicted = sky_design(orbit, time) @ jnp.array([A, B, F, G])
-    np.testing.assert_allclose(predicted, orbit.at(time)[0][:, :2], atol=1e-12, rtol=0)
+    design = sky_design(orbit, time)
+    constants = jnp.array([A, B, F, G])
+    predicted = design @ constants
+    scale = jnp.max(jnp.abs(design) @ jnp.abs(constants))
+    bound = roundoff(scale, n_ops=4)  # tol: floating-point, two roundings per path
+    np.testing.assert_allclose(predicted, orbit.at(time)[0][:, :2], atol=bound, rtol=0)
     with pytest.raises(ValueError, match="unbatched"):
         sky_design(orbit, jnp.zeros((2, 2)))
 
