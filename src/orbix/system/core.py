@@ -14,12 +14,13 @@ import jax.numpy as jnp
 import numpy as np
 from hwoutils.constants import GM_SUN_AU3_PER_D2
 from hwoutils.epoch import Epoch
+from hwoutils.leaves import canonical
 from hwoutils.precision import like
 from jaxtyping import Array
 
 from orbix.kepler import Markley
 from orbix.system import observables
-from orbix.system.frame_orbit import FrameOrbit
+from orbix.system.frame_orbit import FrameOrbit, _element_dtype
 
 _DEFAULT_SOLVER = Markley()
 
@@ -34,6 +35,12 @@ def _ordered_sum(values):
     return jax.lax.scan(add, jnp.zeros(values.shape[1:], values.dtype), values)
 
 
+def _mass_arrays(star_mass, planet_mass):
+    """Coerce scalar and array-like masses before adding them in a trace."""
+    dtype = jnp.result_type(*jax.tree.leaves((star_mass, planet_mass)), 0.0)
+    return jnp.asarray(star_mass, dtype=dtype), jnp.asarray(planet_mass, dtype=dtype)
+
+
 def enclosed_mu(star_mass_Msun, planet_mass_Msun):
     """Return Jacobi mu for star shape B and inner-to-outer masses B + (K,).
 
@@ -46,11 +53,9 @@ def enclosed_mu(star_mass_Msun, planet_mass_Msun):
         Gravitational parameter GM of the mass enclosed by each Jacobi orbit, in
         AU^3/day^2, shape B + (K,).
     """
-    masses = jnp.asarray(planet_mass_Msun)
+    star, masses = _mass_arrays(star_mass_Msun, planet_mass_Msun)
     _, cumulative = _ordered_sum(jnp.moveaxis(masses, -1, 0))
-    return GM_SUN_AU3_PER_D2 * (
-        jnp.asarray(star_mass_Msun)[..., None] + jnp.moveaxis(cumulative, 0, -1)
-    )
+    return GM_SUN_AU3_PER_D2 * (star[..., None] + jnp.moveaxis(cumulative, 0, -1))
 
 
 def jacobi_to_barycentric(relative, star_mass_Msun, planet_mass_Msun):
@@ -71,12 +76,10 @@ def jacobi_to_barycentric(relative, star_mass_Msun, planet_mass_Msun):
         (3,). Index zero along the body axis is the star.
     """
     relative = jnp.asarray(relative)
-    masses = jnp.asarray(planet_mass_Msun)
+    star_mass, masses = _mass_arrays(star_mass_Msun, planet_mass_Msun)
     axis = masses.ndim - 1
     _, cumulative_mass = _ordered_sum(jnp.moveaxis(masses, -1, 0))
-    enclosed = jnp.asarray(star_mass_Msun)[..., None] + jnp.moveaxis(
-        cumulative_mass, 0, -1
-    )
+    enclosed = star_mass[..., None] + jnp.moveaxis(cumulative_mass, 0, -1)
     weights = masses / enclosed
     weighted = relative * weights.reshape(
         masses.shape + (1,) * (relative.ndim - masses.ndim)
@@ -109,7 +112,7 @@ def barycentric_to_jacobi(values, star_mass_Msun, planet_mass_Msun):
     Returns:
         Jacobi vectors in the units of values, shape B + (K,) + time_shape + (3,).
     """
-    masses = jnp.asarray(planet_mass_Msun)
+    star, masses = _mass_arrays(star_mass_Msun, planet_mass_Msun)
     axis = masses.ndim - 1
     if any(isinstance(x, jax.Array) for x in jax.tree.leaves(values)):
         rows = jnp.moveaxis(jnp.asarray(values), axis, 0)
@@ -121,7 +124,7 @@ def barycentric_to_jacobi(values, star_mass_Msun, planet_mass_Msun):
     preceding_mass = jnp.concatenate(
         [jnp.zeros_like(cumulative_mass[:1]), cumulative_mass], axis=0
     )[:-1]
-    enclosed = jnp.asarray(star_mass_Msun) + preceding_mass
+    enclosed = star + preceding_mass
     weights = jnp.moveaxis(masses, -1, 0).reshape(
         (masses.shape[-1], *masses.shape[:-1]) + (1,) * (relative.ndim - masses.ndim)
     )
@@ -509,22 +512,39 @@ class System(eqx.Module):
                 "Cartesian positions and velocities must have shape B + (K+1, 3) "
                 f"= {expected}; got {pos_shape} and {vel_shape}"
             )
-        epoch = jnp.asarray(epoch_d)
+        states = (position_AU, velocity_AU_per_d)
+        device_states = tuple(
+            x for x in jax.tree.leaves(states) if isinstance(x, jax.Array)
+        )
+        mass_dtype = _element_dtype(star.mass_Msun, planets.mass_Msun, device_states)
+        star_mass = jnp.asarray(star.mass_Msun, dtype=mass_dtype)
+        planet_mass = jnp.asarray(planets.mass_Msun, dtype=mass_dtype)
+        epoch_dtype = _element_dtype(epoch_d, mass_dtype)
+        if any(isinstance(x, jax.Array) for x in jax.tree.leaves(epoch_d)):
+            epoch = jnp.asarray(epoch_d, dtype=epoch_dtype)
+        else:
+            with jax.ensure_compile_time_eval():
+                epoch = canonical(
+                    np.asarray(epoch_d, dtype=np.float64), precision=epoch_dtype
+                )
         if epoch.shape not in ((), batch):
             raise ValueError(
                 "epoch_d must be a scalar or have exactly the batch shape B"
             )
         epoch = jnp.broadcast_to(epoch[..., None], planets.mass_Msun.shape)
         orbits = FrameOrbit.from_cartesian(
-            barycentric_to_jacobi(position_AU, star.mass_Msun, planets.mass_Msun),
-            barycentric_to_jacobi(velocity_AU_per_d, star.mass_Msun, planets.mass_Msun),
-            mu_AU3_per_d2=enclosed_mu(star.mass_Msun, planets.mass_Msun),
+            barycentric_to_jacobi(position_AU, star_mass, planet_mass),
+            barycentric_to_jacobi(velocity_AU_per_d, star_mass, planet_mass),
+            mu_AU3_per_d2=enclosed_mu(star_mass, planet_mass),
             epoch_d=epoch,
         )
         return cls(star, planets, orbits, frame)
 
     def solve(self, time_d, *, solver=_DEFAULT_SOLVER):
         """Solve once at all times; return (K+1,) + time_shape + (3,) states.
+
+        Host times are re-referenced to the orbit epochs. Device times
+        participate in selecting the propagation dtype.
 
         Args:
             time_d: Times in days, shape (T,) or B + (T,).
@@ -534,26 +554,31 @@ class System(eqx.Module):
             Ephemeris with the barycentric positions and velocities of the star and all
             planets at the requested times.
         """
+        return self._solve_time_parts(*self.orbits._time_parts(time_d), solver=solver)
+
+    def _solve_time_parts(self, time, remainder, *, solver):
         batch = self.star.mass_Msun.shape
         if batch:
-            time = jnp.asarray(time_d)
             paired = time.ndim != 1
             if paired and time.shape[:-1] != batch:
                 raise ValueError("time_d must have shape (T,) or B + (T,)")
 
-            def solve(system, time):
-                return system.solve(time, solver=solver)
+            def solve(system, time, remainder):
+                return system._solve_time_parts(time, remainder, solver=solver)
 
+            axis = 0 if paired else None
             for _ in batch:
-                solve = jax.vmap(solve, in_axes=(0, 0 if paired else None))
-            solved = solve(self, time)
+                solve = jax.vmap(
+                    solve, in_axes=(0, axis, axis if remainder is not None else None)
+                )
+            solved = solve(self, time, remainder)
             return Ephemeris(
                 solved.position_AU,
                 solved.velocity_AU_per_d,
                 solved.dist_pc,
                 batch_ndim=len(batch),
             )
-        r, v = self.orbits.at(time_d, solver=solver)
+        r, v = self.orbits._at_time_parts(time, remainder, solver=solver)
         return Ephemeris(
             jacobi_to_barycentric(r, self.star.mass_Msun, self.planets.mass_Msun),
             jacobi_to_barycentric(v, self.star.mass_Msun, self.planets.mass_Msun),

@@ -22,9 +22,10 @@ from __future__ import annotations
 from functools import lru_cache
 from math import comb
 
+import jax
 import jax.numpy as jnp
 import numpy as np
-from hwoutils.constants import J2000_JD
+from hwoutils.constants import J2000_JD, two_pi
 from hwoutils.conversions import years_to_days
 from hwoutils.epoch import Epoch
 from hwoutils.precision import like
@@ -73,8 +74,9 @@ def equat2eclip(r_equat: ArrayLike) -> Array:
     Returns:
         Vector(s) in the ecliptic frame, same shape as the input.
     """
-    rotation = _rot1(jnp.radians(OBLIQUITY_J2000_DEG))
-    return jnp.asarray(r_equat) @ rotation.T
+    vector = jnp.asarray(r_equat)
+    rotation = _rot1(jnp.radians(like(OBLIQUITY_J2000_DEG, vector)))
+    return vector @ rotation.T
 
 
 def eclip2equat(r_eclip: ArrayLike) -> Array:
@@ -86,8 +88,9 @@ def eclip2equat(r_eclip: ArrayLike) -> Array:
     Returns:
         Vector(s) in the equatorial frame, same shape as the input.
     """
-    rotation = _rot1(-jnp.radians(OBLIQUITY_J2000_DEG))
-    return jnp.asarray(r_eclip) @ rotation.T
+    vector = jnp.asarray(r_eclip)
+    rotation = _rot1(-jnp.radians(like(OBLIQUITY_J2000_DEG, vector)))
+    return vector @ rotation.T
 
 
 def equatorial_to_ecliptic_deg(ra_deg: ArrayLike, dec_deg: ArrayLike) -> tuple:
@@ -101,13 +104,17 @@ def equatorial_to_ecliptic_deg(ra_deg: ArrayLike, dec_deg: ArrayLike) -> tuple:
         ``(longitude_deg, latitude_deg)`` with longitude in [0, 360) and
         latitude in [-90, 90].
     """
-    ra, dec = jnp.broadcast_arrays(jnp.radians(ra_deg), jnp.radians(dec_deg))
+    dtype = jnp.result_type(*jax.tree.leaves((ra_deg, dec_deg)), 0.0)
+    ra, dec = jnp.broadcast_arrays(
+        jnp.radians(jnp.asarray(ra_deg, dtype=dtype)),
+        jnp.radians(jnp.asarray(dec_deg, dtype=dtype)),
+    )
     direction = jnp.stack(
         [jnp.cos(dec) * jnp.cos(ra), jnp.cos(dec) * jnp.sin(ra), jnp.sin(dec)],
         axis=-1,
     )
     x, y, z = jnp.moveaxis(equat2eclip(direction), -1, 0)
-    longitude = jnp.mod(jnp.degrees(jnp.arctan2(y, x)), 360.0)
+    longitude = jnp.degrees(jnp.arctan2(y, x)) % 360
     return longitude, jnp.degrees(jnp.arctan2(z, jnp.hypot(x, y)))
 
 
@@ -313,7 +320,7 @@ def _planet_position_ecliptic_rel(body: str, epoch: Epoch, time_d: ArrayLike) ->
 
     # Argument of perihelion and mean anomaly
     w = w_tilde - W
-    M = (lM - w_tilde) % (2.0 * jnp.pi)
+    M = (lM - w_tilde) % like(two_pi, lM)
 
     # Solve Kepler's equation using orbix solver
     sinE, cosE = kepler(M, e, 0.0)
@@ -411,4 +418,4 @@ def sun_ecliptic_longitude_deg(epoch: Epoch, time_d: ArrayLike) -> Array:
         r_earth = _planet_position_ecliptic_rel("Earth", epoch, d)
         return jnp.degrees(jnp.arctan2(-r_earth[1], -r_earth[0]))
 
-    return jnp.mod(jnp.vectorize(longitude)(jnp.asarray(time_d)), 360.0)
+    return jnp.vectorize(longitude)(jnp.asarray(time_d)) % 360

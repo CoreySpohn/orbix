@@ -3,6 +3,10 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
+from hwoutils.constants import two_pi
+from hwoutils.leaves import canonical
+from hwoutils.precision import like
 from jaxtyping import Array
 
 from orbix.equations.orbit import mean_motion
@@ -11,6 +15,11 @@ from orbix.system.observables import offset_arcsec
 from orbix.system.rotation import from_basis, rotate
 
 _DEFAULT_SOLVER = Markley()
+
+
+def _element_dtype(*values):
+    """Select the element dtype before staging array-like inputs."""
+    return jnp.result_type(*jax.tree.leaves(values), 0.0)
 
 
 class FrameOrbit(eqx.Module):
@@ -79,7 +88,12 @@ class FrameOrbit(eqx.Module):
         Returns:
             FrameOrbit with the batch shape of the broadcast inputs.
         """
-        inc, node, peri, mean = map(jnp.asarray, (i_rad, W_rad, w_rad, M0_rad))
+        dtype = _element_dtype(
+            a_AU, e, i_rad, W_rad, w_rad, M0_rad, mu_AU3_per_d2, epoch_d
+        )
+        inc, node, peri, mean = (
+            jnp.asarray(angle, dtype=dtype) for angle in (i_rad, W_rad, w_rad, M0_rad)
+        )
         return cls.from_classical_trig(
             a_AU=a_AU,
             e=e,
@@ -143,24 +157,23 @@ class FrameOrbit(eqx.Module):
         Returns:
             FrameOrbit with the batch shape of the broadcast inputs.
         """
+        elements = (
+            a_AU,
+            e,
+            cos_i,
+            sin_i,
+            cos_W,
+            sin_W,
+            cos_w,
+            sin_w,
+            cos_M0,
+            sin_M0,
+            mu_AU3_per_d2,
+            epoch_d,
+        )
+        dtype = _element_dtype(*elements)
         a, e, ci, si, cO, sO, cw, sw, cm, sm, mu, epoch = jnp.broadcast_arrays(
-            *map(
-                jnp.asarray,
-                (
-                    a_AU,
-                    e,
-                    cos_i,
-                    sin_i,
-                    cos_W,
-                    sin_W,
-                    cos_w,
-                    sin_w,
-                    cos_M0,
-                    sin_M0,
-                    mu_AU3_per_d2,
-                    epoch_d,
-                ),
-            )
+            *(jnp.asarray(value, dtype=dtype) for value in elements)
         )
         cu, su = cw * cm - sw * sm, sw * cm + cw * sm
         f = jnp.stack([sO * cu + cO * ci * su, cO * cu - sO * ci * su, si * su], -1)
@@ -199,14 +212,16 @@ class FrameOrbit(eqx.Module):
         Returns:
             FrameOrbit whose epoch is tp_d and whose mean anomaly there is zero.
         """
-        cos_i = jnp.asarray(cos_i)
+        dtype = _element_dtype(a_AU, e, cos_i, W_rad, cos_w, sin_w, tp_d, mu_AU3_per_d2)
+        cos_i = jnp.asarray(cos_i, dtype=dtype)
+        node = jnp.asarray(W_rad, dtype=dtype)
         return cls.from_classical_trig(
             a_AU=a_AU,
             e=e,
             cos_i=cos_i,
             sin_i=jnp.sqrt(1.0 - cos_i**2),
-            cos_W=jnp.cos(W_rad),
-            sin_W=jnp.sin(W_rad),
+            cos_W=jnp.cos(node),
+            sin_W=jnp.sin(node),
             cos_w=cos_w,
             sin_w=sin_w,
             cos_M0=1.0,
@@ -232,13 +247,16 @@ class FrameOrbit(eqx.Module):
             FrameOrbit with a semi-major axis of 1 AU, periapsis on the f axis, and the
             broadcast batch shape of the inputs.
         """
-        e, tp, n = jnp.broadcast_arrays(e, tp_d, n_rad_per_d)
+        dtype = _element_dtype(e, tp_d, n_rad_per_d)
+        e, tp, n = jnp.broadcast_arrays(
+            *(jnp.asarray(value, dtype=dtype) for value in (e, tp_d, n_rad_per_d))
+        )
         return cls(
             jnp.ones_like(e),
             n,
             e,
             jnp.zeros_like(e),
-            jnp.broadcast_to(jnp.array([1.0, 0.0, 0.0, 0.0]), (*e.shape, 4)),
+            jnp.broadcast_to(jnp.array([1, 0, 0, 0], dtype=dtype), (*e.shape, 4)),
             tp,
         )
 
@@ -269,21 +287,22 @@ class FrameOrbit(eqx.Module):
             Dictionary with a_AU (AU), e, i_rad, W_rad, w_rad and M0_rad (radians), each
             of the orbit's batch shape.
         """
-        f = rotate(self.quat, jnp.array([1.0, 0.0, 0.0]))
-        normal = rotate(self.quat, jnp.array([0.0, 0.0, 1.0]))
+        f = rotate(self.quat, jnp.array([1, 0, 0], dtype=self.quat.dtype))
+        normal = rotate(self.quat, jnp.array([0, 0, 1], dtype=self.quat.dtype))
         inc = jnp.arctan2(jnp.linalg.norm(normal[..., :2], axis=-1), -normal[..., 2])
         node = jnp.arctan2(-normal[..., 1], normal[..., 0])
         node_axis = jnp.stack([jnp.sin(node), jnp.cos(node), jnp.zeros_like(node)], -1)
         tangent = jnp.cross(normal, node_axis)
         u = jnp.arctan2(jnp.sum(f * tangent, -1), jnp.sum(f * node_axis, -1))
         mean = jnp.arctan2(-self.ey, self.ex)
+        peri = u - mean
         return dict(
             a_AU=self.a_AU,
             e=self.e,
             i_rad=inc,
-            W_rad=node % (2 * jnp.pi),
-            w_rad=(u - mean) % (2 * jnp.pi),
-            M0_rad=mean % (2 * jnp.pi),
+            W_rad=node % like(two_pi, node),
+            w_rad=peri % like(two_pi, peri),
+            M0_rad=mean % like(two_pi, mean),
         )
 
     @classmethod
@@ -314,9 +333,12 @@ class FrameOrbit(eqx.Module):
             r.shape[:-1], v.shape[:-1], jnp.shape(mu_AU3_per_d2), jnp.shape(epoch_d)
         )
         r, v = jnp.broadcast_to(r, (*shape, 3)), jnp.broadcast_to(v, (*shape, 3))
+        dtype = _element_dtype(r, v, mu_AU3_per_d2)
         mu, epoch = (
-            jnp.broadcast_to(jnp.asarray(mu_AU3_per_d2), shape),
-            jnp.broadcast_to(jnp.asarray(epoch_d), shape),
+            jnp.broadcast_to(jnp.asarray(mu_AU3_per_d2, dtype=dtype), shape),
+            jnp.broadcast_to(
+                jnp.asarray(epoch_d, dtype=_element_dtype(epoch_d, dtype)), shape
+            ),
         )
         radius = jnp.linalg.norm(r, axis=-1)
         h = jnp.cross(r, v)
@@ -359,6 +381,8 @@ class FrameOrbit(eqx.Module):
     def at(self, time_d, *, solver=_DEFAULT_SOLVER):
         """Evaluate the outer product: B + time_shape + (3,), AU and AU/day.
 
+        Host times are re-referenced before narrowing to the propagation dtype.
+
         Args:
             time_d: Times in days on the same axis as epoch_d.
             solver: Value-only Kepler strategy. Defaults to Markley.
@@ -367,10 +391,11 @@ class FrameOrbit(eqx.Module):
             Tuple of position in AU and velocity in AU/day, each of shape B + time_shape
             + (3,), in the (east, north, away) frame.
         """
-        xy, xy_rate = self.plane_coordinates(time_d, solver=solver)
-        basis = self.plane_basis().reshape(
-            (*self.a_AU.shape, *(1,) * jnp.ndim(time_d), 3, 2)
-        )
+        return self._at_time_parts(*self._time_parts(time_d), solver=solver)
+
+    def _at_time_parts(self, time, remainder, *, solver):
+        xy, xy_rate = self._plane_coordinates_outer(time, remainder, solver=solver)
+        basis = self.plane_basis().reshape((*self.a_AU.shape, *(1,) * time.ndim, 3, 2))
 
         def apply(coordinates):
             first = jax.lax.optimization_barrier(basis[..., 0] * coordinates[..., :1])
@@ -497,7 +522,7 @@ class FrameOrbit(eqx.Module):
             Tuple of dimensionless plane position and its rate in 1/day, each of shape
             broadcast(B, time_shape) + (2,).
         """
-        return self._plane_coordinates_each(time_d, solver=solver)
+        return self._plane_coordinates_each(*self._time_parts(time_d), solver=solver)
 
     def plane_coordinates(
         self, time_d, *, solver=_DEFAULT_SOLVER
@@ -517,7 +542,9 @@ class FrameOrbit(eqx.Module):
             Tuple of dimensionless plane position, in units of the semi-major axis, and
             its rate in 1/day, each of shape B + time_shape + (2,).
         """
-        time = jnp.asarray(time_d)
+        return self._plane_coordinates_outer(*self._time_parts(time_d), solver=solver)
+
+    def _plane_coordinates_outer(self, time, remainder, *, solver):
         shape = self.a_AU.shape + (1,) * time.ndim
         expanded = FrameOrbit(
             self.a_AU.reshape(shape),
@@ -527,7 +554,7 @@ class FrameOrbit(eqx.Module):
             self.quat.reshape((*shape, 4)),
             self.epoch_d.reshape(shape),
         )
-        return expanded._plane_coordinates_each(time, solver=solver)
+        return expanded._plane_coordinates_each(time, remainder, solver=solver)
 
     def perifocal_coordinates(
         self, time_d, *, solver=_DEFAULT_SOLVER
@@ -554,7 +581,8 @@ class FrameOrbit(eqx.Module):
         xy, xy_rate = self.plane_coordinates(time_d, solver=solver)
         nonzero = (self.ex != 0) | (self.ey != 0)
         phi = jnp.arctan2(
-            jnp.where(nonzero, self.ey, 0.0), jnp.where(nonzero, self.ex, 1.0)
+            jnp.where(nonzero, self.ey, jnp.zeros_like(self.ey)),
+            jnp.where(nonzero, self.ex, jnp.ones_like(self.ex)),
         )
         shape = self.a_AU.shape + (1,) * jnp.ndim(time_d)
         c, s = jnp.cos(phi).reshape(shape), jnp.sin(phi).reshape(shape)
@@ -573,7 +601,7 @@ class FrameOrbit(eqx.Module):
         """Evaluate paired times: broadcast(B, time_shape) + (3,), AU and AU/day.
 
         One eccentric-longitude solve supplies both position and analytic
-        velocity; there is no trigonometry outside that solve.
+        velocity. Host times are re-referenced to the orbit epoch.
 
         Args:
             time_d: Times in days, broadcast against the batch shape B.
@@ -583,7 +611,9 @@ class FrameOrbit(eqx.Module):
             Tuple of position in AU and velocity in AU/day, each of shape broadcast(B,
             time_shape) + (3,), in the (east, north, away) frame.
         """
-        xy, xy_rate = self._plane_coordinates_each(time_d, solver=solver)
+        xy, xy_rate = self._plane_coordinates_each(
+            *self._time_parts(time_d), solver=solver
+        )
         basis = self.plane_basis()
 
         def apply(coordinates):
@@ -593,10 +623,31 @@ class FrameOrbit(eqx.Module):
 
         return apply(xy), apply(xy_rate)
 
-    def _plane_coordinates_each(self, time_d, *, solver):
+    def _time_parts(self, time_d):
+        """Stage a date and its residual separately when the epoch may be traced."""
+        if any(isinstance(x, jax.Array) for x in jax.tree.leaves(time_d)):
+            return jnp.asarray(time_d, dtype=_element_dtype(self, time_d)), None
+
+        dtype = _element_dtype(self)
+        host = np.asarray(time_d, dtype=np.float64)
+        with jax.ensure_compile_time_eval():
+            time = canonical(host, precision=dtype)
+            if dtype == host.dtype:
+                return time, None
+            # Split the host date about its representable neighbor. Subtracting
+            # the orbit epoch from the anchor first keeps the small host residual.
+            anchor = np.asarray(time, dtype=host.dtype)
+            delta = np.zeros_like(host)
+            np.subtract(host, anchor, out=delta, where=np.isfinite(host))
+            return time, canonical(delta, precision=dtype)
+
+    def _plane_coordinates_each(self, time, remainder, *, solver):
         """Evaluate dimensionless plane position and rate at paired times."""
+        offset = time - self.epoch_d
+        if remainder is not None:
+            offset = offset + remainder
         sine, cosine = kepler(
-            self.n_rad_per_d * (jnp.asarray(time_d) - self.epoch_d),
+            self.n_rad_per_d * offset,
             self.ex,
             self.ey,
             solver=solver,

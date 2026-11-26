@@ -11,6 +11,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from hwoutils.epoch import Epoch
+from hwoutils.precision import like
 from jaxtyping import Array, ArrayLike
 
 from orbix.observatory.keepout import is_observable
@@ -78,7 +79,11 @@ class Observatory(eqx.Module):
 
     def _is_observable_rel(self, ra_deg, dec_deg, epoch, time_d) -> Array:
         """Broadcast inputs and map the scalar keepout geometry over them."""
-        ra, dec, time = jnp.broadcast_arrays(ra_deg, dec_deg, time_d)
+        values = (ra_deg, dec_deg, time_d)
+        dtype = jnp.result_type(self.orbit.t_yr, *jax.tree.leaves(values), 0.0)
+        ra, dec, time = jnp.broadcast_arrays(
+            *(jnp.asarray(value, dtype=dtype) for value in values)
+        )
 
         def evaluate(r, d, t):
             return is_observable(
@@ -165,7 +170,9 @@ class Observatory(eqx.Module):
         """
         if n_samples < 2:
             raise ValueError("n_samples must be at least 2")
-        time = jnp.linspace(start_d, stop_d, n_samples)
+        dtype = jnp.result_type(self.orbit.t_yr, ra_deg, dec_deg, start_d, stop_d, 0.0)
+        start, stop = (jnp.asarray(t, dtype=dtype) for t in (start_d, stop_d))
+        time = jnp.linspace(start, stop, n_samples)
 
         def evaluate(t):
             return self._is_observable_rel(ra_deg, dec_deg, epoch, t)
@@ -186,22 +193,24 @@ class Observatory(eqx.Module):
         duration = jnp.where(
             transition,
             jnp.where(left_visible, boundary - left, right - boundary),
-            jnp.where(left_visible, right - left, 0.0),
+            jnp.where(left_visible, right - left, jnp.zeros_like(left)),
         )
-        span = jnp.asarray(stop_d) - jnp.asarray(start_d)
+        span = time[-1] - time[0]
+        one = jnp.ones_like(span)
         fraction = jnp.where(
             span == 0,
             visible[0].astype(time.dtype),
-            jnp.sum(duration) / jnp.where(span == 0, 1.0, span),
+            jnp.sum(duration) / jnp.where(span == 0, one, span),
         )
-        fraction = jnp.where(jnp.all(visible), 1.0, fraction)
+        fraction = jnp.where(jnp.all(visible), one, fraction)
+        inf = like(jnp.inf, time)
         first = jnp.minimum(
-            jnp.min(jnp.where(visible, time, jnp.inf)),
-            jnp.min(jnp.where(transition & right_visible, boundary, jnp.inf)),
+            jnp.min(jnp.where(visible, time, inf)),
+            jnp.min(jnp.where(transition & right_visible, boundary, inf)),
         )
         last = jnp.maximum(
-            jnp.max(jnp.where(visible, time, -jnp.inf)),
-            jnp.max(jnp.where(transition & left_visible, boundary, -jnp.inf)),
+            jnp.max(jnp.where(visible, time, -inf)),
+            jnp.max(jnp.where(transition & left_visible, boundary, -inf)),
         )
         return Observability(
             time_d=time,

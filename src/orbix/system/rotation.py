@@ -2,6 +2,8 @@
 
 import jax
 import jax.numpy as jnp
+import numpy as np
+from hwoutils.leaves import canonical
 
 
 def _cross(left, right):
@@ -25,9 +27,17 @@ def from_axis_angle(axis, angle_rad):
     Returns:
         Scalar-first unit quaternion (w, x, y, z), last axis of length 4.
     """
-    half = jnp.asarray(angle_rad) / 2
-    imaginary = jnp.sin(half)[..., None] * jnp.asarray(axis)
-    real = jnp.broadcast_to(jnp.cos(half)[..., None], (*imaginary.shape[:-1], 1))
+    dtype = jnp.result_type(*jax.tree.leaves((axis, angle_rad)), 0.0)
+    if any(isinstance(x, jax.Array) for x in jax.tree.leaves(angle_rad)):
+        half = jnp.asarray(angle_rad, dtype=dtype) / 2
+        sine, cosine = jnp.sin(half), jnp.cos(half)
+    else:
+        # Near a full turn, rounding the angle can change the sign of sin(half).
+        half = np.asarray(angle_rad, dtype=np.float64) / 2
+        with jax.ensure_compile_time_eval():
+            sine, cosine = canonical((np.sin(half), np.cos(half)), precision=dtype)
+    imaginary = sine[..., None] * jnp.asarray(axis, dtype=dtype)
+    real = jnp.broadcast_to(cosine[..., None], (*imaginary.shape[:-1], 1))
     return jnp.concatenate([real, imaginary], axis=-1)
 
 
@@ -44,7 +54,8 @@ def rotate(quat, vector):
         Rotated vectors, with the broadcast leading shape of the inputs and a last axis
         of length 3.
     """
-    vector = jnp.asarray(vector)
+    dtype = jnp.result_type(quat, *jax.tree.leaves(vector), 0.0)
+    vector = jnp.asarray(vector, dtype=dtype)
     imaginary = quat[..., 1:]
     twice_cross = 2 * _cross(imaginary, vector)
     first = jax.lax.optimization_barrier(quat[..., :1] * twice_cross)
@@ -90,7 +101,7 @@ def from_basis(f, g, normal):
         ],
         axis=-2,
     )
-    divisor = 2 * jnp.sqrt(jnp.where(squared > 0, squared, 1.0))
+    divisor = 2 * jnp.sqrt(jnp.where(squared > 0, squared, jnp.ones_like(squared)))
     candidates = rows / divisor[..., :, None]
     index = jnp.argmax(squared, axis=-1)
     quat = jnp.take_along_axis(candidates, index[..., None, None], axis=-2)[..., 0, :]

@@ -546,14 +546,15 @@ class FrameChart(AbstractChart):
         v = x[..., 3:]
         squared = jnp.sum(v * v, axis=-1, keepdims=True)
         nonzero = squared > 0
-        norm = jnp.sqrt(jnp.where(nonzero, squared, 1.0))
-        quat = jnp.where(nonzero, v / norm, jnp.array([1.0, 0.0, 0.0, 0.0]))
+        norm = jnp.sqrt(jnp.where(nonzero, squared, jnp.ones_like(squared)))
+        identity = jnp.array([1, 0, 0, 0], dtype=x.dtype)
+        quat = jnp.where(nonzero, v / norm, identity)
         a, ex, ey, mu, epoch = jnp.broadcast_arrays(
             jnp.exp(x[..., 0]),
             evec[..., 0],
             evec[..., 1],
-            jnp.asarray(mu_AU3_per_d2),
-            jnp.asarray(epoch_d),
+            jnp.asarray(mu_AU3_per_d2, dtype=jnp.result_type(mu_AU3_per_d2, x)),
+            jnp.asarray(epoch_d, dtype=jnp.result_type(epoch_d, x)),
         )
         return FrameOrbit(
             a,
@@ -579,7 +580,8 @@ class FrameChart(AbstractChart):
         pivot = jnp.take_along_axis(
             quat, jnp.argmax(jnp.abs(quat), axis=-1)[..., None], axis=-1
         )
-        quat = quat * jnp.where(pivot < 0, -1.0, 1.0)
+        one = jnp.ones_like(pivot)
+        quat = quat * jnp.where(pivot < 0, -one, one)
         return jnp.concatenate([jnp.log(orbit.a_AU)[..., None], u, quat], axis=-1)
 
     def log_volume(self, x) -> Array:
@@ -754,8 +756,8 @@ class EccentricityVectorChart(AbstractChart):
         Returns:
             Coordinates at the orbit's stored epoch, shape B + (6,).
         """
-        f = rotate(orbit.quat, jnp.array([1.0, 0.0, 0.0]))
-        normal = rotate(orbit.quat, jnp.array([0.0, 0.0, 1.0]))
+        f = rotate(orbit.quat, jnp.array([1, 0, 0], dtype=orbit.quat.dtype))
+        normal = rotate(orbit.quat, jnp.array([0, 0, 1], dtype=orbit.quat.dtype))
         inc = jnp.arctan2(jnp.linalg.norm(normal[..., :2], axis=-1), -normal[..., 2])
         node = jnp.arctan2(-normal[..., 1], normal[..., 0])
         node_axis = jnp.stack([jnp.sin(node), jnp.cos(node), jnp.zeros_like(node)], -1)
@@ -1152,8 +1154,9 @@ class ThieleInnesChart(AbstractChart):
         x = _coordinates(x, self.n_coords)
         a, quat = sky_block_to_frame(*jnp.moveaxis(x[..., 3:], -1, 0), sheet=self.sheet)
         evec = plane_to_disk(x[..., 1:3])
+        epoch = jnp.asarray(epoch_d, dtype=jnp.result_type(epoch_d, x))
         a, n, ex, ey, epoch = jnp.broadcast_arrays(
-            a, jnp.exp(x[..., 0]), evec[..., 0], evec[..., 1], jnp.asarray(epoch_d)
+            a, jnp.exp(x[..., 0]), evec[..., 0], evec[..., 1], epoch
         )
         return FrameOrbit(a, n, ex, ey, jnp.broadcast_to(quat, (*a.shape, 4)), epoch)
 

@@ -3,6 +3,7 @@
 import jax.numpy as jnp
 from hwoutils.constants import G, two_pi
 from hwoutils.numerics import COARSEST, eps
+from hwoutils.precision import like
 from jax import lax
 
 two_pi_G = two_pi * G
@@ -219,24 +220,23 @@ def thiele_innes_to_elements(A, B, F, G):
     r_minus = jnp.hypot(minus_x, minus_y)
     total = r_plus + r_minus
     a = total / 2.0
-    cos_i = (r_plus - r_minus) / jnp.where(total > 0.0, total, 1.0)
+    one, zero = jnp.ones_like(total), jnp.zeros_like(total)
+    cos_i = (r_plus - r_minus) / jnp.where(total > 0.0, total, one)
     tol = 8 * jnp.finfo(a.dtype).eps * a
     prograde = r_minus <= tol
     retrograde = r_plus <= tol
     sigma = jnp.arctan2(
-        jnp.where(retrograde, 0.0, plus_y),
-        jnp.where(retrograde, 1.0, plus_x),
+        jnp.where(retrograde, zero, plus_y),
+        jnp.where(retrograde, one, plus_x),
     )
     phi = jnp.arctan2(
-        jnp.where(prograde, 0.0, minus_y),
-        jnp.where(prograde, 1.0, minus_x),
+        jnp.where(prograde, zero, minus_y),
+        jnp.where(prograde, one, minus_x),
     )
     face_on = prograde | retrograde
-    W = jnp.where(face_on, 0.0, (sigma + phi) / 2.0) % two_pi
-    w = (
-        jnp.where(face_on, jnp.where(prograde, sigma, -phi), (sigma - phi) / 2.0)
-        % two_pi
-    )
+    turn = like(two_pi, sigma)
+    W = jnp.where(face_on, zero, (sigma + phi) / 2.0) % turn
+    w = jnp.where(face_on, jnp.where(prograde, sigma, -phi), (sigma - phi) / 2.0) % turn
     return a, cos_i, W, w
 
 
@@ -282,9 +282,9 @@ def _safe_norm(x):
     """
     scale = lax.stop_gradient(jnp.max(jnp.abs(x)))
     is_zero = scale == 0.0
-    scaled = x / jnp.where(is_zero, 1.0, scale)
+    scaled = x / jnp.where(is_zero, jnp.ones_like(scale), scale)
     norm = jnp.linalg.norm(jnp.where(is_zero, jnp.ones_like(x), scaled))
-    return jnp.where(is_zero, 0.0, scale * norm)
+    return jnp.where(is_zero, jnp.zeros_like(scale), scale * norm)
 
 
 def _plane_decision_vector(x):
@@ -304,9 +304,11 @@ def _oriented_angle(cosine, sine):
     """
     scale = lax.stop_gradient(jnp.maximum(jnp.abs(cosine), jnp.abs(sine)))
     is_zero = scale == 0.0
-    scale = jnp.where(is_zero, 1.0, scale)
+    one = jnp.ones_like(scale)
+    scale = jnp.where(is_zero, one, scale)
     return jnp.arctan2(
-        jnp.where(is_zero, 0.0, sine / scale), jnp.where(is_zero, 1.0, cosine / scale)
+        jnp.where(is_zero, jnp.zeros_like(scale), sine / scale),
+        jnp.where(is_zero, one, cosine / scale),
     )
 
 
@@ -372,9 +374,9 @@ def state_vector_to_keplerian(r, v, mu):
     # scales, so constant (stop-gradient) scales leave the derivatives exact
     # while keeping float32 SI products and their squares in range.
     length = lax.stop_gradient(_safe_norm(r))
-    length = jnp.where(length > 0, length, 1.0)
+    length = jnp.where(length > 0, length, jnp.ones_like(length))
     speed = lax.stop_gradient(_safe_norm(v))
-    speed = jnp.where(speed > 0, speed, 1.0)
+    speed = jnp.where(speed > 0, speed, jnp.ones_like(speed))
     r = r / length
     v = v / speed
     mu = mu / (length * speed**2)
@@ -383,11 +385,12 @@ def state_vector_to_keplerian(r, v, mu):
 
     h = jnp.cross(r, v)
     h_mag = _safe_norm(h)
-    h_mag_safe = jnp.where(has_h, h_mag, 1.0)
+    one, zero = jnp.ones_like(h_mag), jnp.zeros_like(h_mag)
+    h_mag_safe = jnp.where(has_h, h_mag, one)
 
     # A radial state (no angular momentum) keeps the i = pi/2 convention.
     i = jnp.arctan2(
-        jnp.where(has_h, _safe_norm(h[:2]), 1.0), jnp.where(has_h, h[2], 0.0)
+        jnp.where(has_h, _safe_norm(h[:2]), one), jnp.where(has_h, h[2], zero)
     )
 
     k = jnp.array([0.0, 0.0, 1.0], dtype=h.dtype)
@@ -399,13 +402,13 @@ def state_vector_to_keplerian(r, v, mu):
 
     E_energy = 0.5 * v_mag**2 - mu / r_mag
     non_parabolic = jnp.abs(E_energy * r_mag / mu) > 1e-10
-    E_energy_safe = jnp.where(non_parabolic, E_energy, 1.0)
-    a = jnp.where(non_parabolic, -mu / (2 * E_energy_safe), jnp.inf)
+    E_energy_safe = jnp.where(non_parabolic, E_energy, jnp.ones_like(E_energy))
+    a = jnp.where(non_parabolic, -mu / (2 * E_energy_safe), like(jnp.inf, E_energy))
 
     # A single longitude frame covers ellipses and circles. The same
     # projection measures the body's longitude and its periapsis, so their
     # difference retains phase even when the eccentricity direction is noisy.
-    node = n / jnp.where(is_inclined, n_mag, 1.0)
+    node = n / jnp.where(is_inclined, n_mag, one)
     node = jnp.where(is_inclined, node, jnp.array([1.0, 0.0, 0.0], dtype=r.dtype))
     tangent = jnp.cross(h / h_mag_safe, node)
     W = jnp.arctan2(node[1], node[0])
@@ -413,13 +416,14 @@ def state_vector_to_keplerian(r, v, mu):
     longitude = _oriented_angle(jnp.dot(r, node), jnp.dot(r, tangent))
     nu = longitude - w
 
-    W = W % (2 * jnp.pi)
-    w = w % (2 * jnp.pi)
-    nu = nu % (2 * jnp.pi)
+    turn = like(two_pi, nu)
+    W = W % turn
+    w = w % turn
+    nu = nu % turn
 
     E = jnp.arctan2(jnp.sqrt(1 - e**2) * jnp.sin(nu), e + jnp.cos(nu))
     M = E - e * jnp.sin(E)
-    M = M % (2 * jnp.pi)
-    M = jnp.where(e < 1.0, M, jnp.nan)
+    M = M % turn
+    M = jnp.where(e < 1.0, M, like(jnp.nan, M))
 
     return a * length, e, i, W, w, M

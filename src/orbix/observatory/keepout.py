@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 from hwoutils.epoch import Epoch
+from hwoutils.precision import like
 from jaxtyping import Array, ArrayLike
 
 from orbix.observatory.solar_system import (
@@ -20,14 +21,14 @@ from orbix.observatory.solar_system import (
 
 def _unit_vector(v: jnp.ndarray) -> jnp.ndarray:
     """Normalize vector to unit length."""
-    return v / jnp.maximum(jnp.linalg.norm(v), 1e-30)
+    return v / jnp.maximum(jnp.linalg.norm(v), like(1e-30, v))
 
 
 def _angular_sep_deg(v1: jnp.ndarray, v2: jnp.ndarray) -> float:
     """Angular separation between two direction vectors (degrees)."""
     u1 = _unit_vector(v1)
     u2 = _unit_vector(v2)
-    cos_a = jnp.clip(jnp.dot(u1, u2), -1.0, 1.0)
+    cos_a = jnp.clip(jnp.dot(u1, u2), -1, 1)
     return jnp.degrees(jnp.arccos(cos_a))
 
 
@@ -66,7 +67,11 @@ def body_angle_deg(
     """
     # Direction from observer to body, and to the target (at infinity)
     body_dir = body_pos_eclip - obs_pos_eclip
-    return _angular_sep_deg(body_dir, target_ecliptic_direction(ra_deg, dec_deg))
+    dtype = jnp.result_type(body_dir, ra_deg, dec_deg, 0.0)
+    target = target_ecliptic_direction(
+        jnp.asarray(ra_deg, dtype=dtype), jnp.asarray(dec_deg, dtype=dtype)
+    )
+    return _angular_sep_deg(body_dir, target)
 
 
 def is_observable(
@@ -97,12 +102,13 @@ def is_observable(
         True if the target is observable, False if it falls in a keepout zone.
     """
     # Sun is at origin in heliocentric frame
-    sun_pos = jnp.zeros(3)
+    sun_pos = jnp.zeros_like(obs_pos_eclip)
     sun_angle_deg = body_angle_deg(obs_pos_eclip, sun_pos, ra_deg, dec_deg)
     sun_ok = (sun_angle_deg >= ko_sun_min_deg) & (sun_angle_deg <= ko_sun_max_deg)
 
     # Earth
-    earth_pos = earth_position_ecliptic(epoch, time_d)
+    time = jnp.asarray(time_d, dtype=jnp.result_type(time_d, obs_pos_eclip, 0.0))
+    earth_pos = earth_position_ecliptic(epoch, time)
     earth_angle_deg = body_angle_deg(obs_pos_eclip, earth_pos, ra_deg, dec_deg)
     earth_ok = (earth_angle_deg >= ko_earth_min_deg) & (
         earth_angle_deg <= ko_earth_max_deg
