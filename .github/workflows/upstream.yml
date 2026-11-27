@@ -14,6 +14,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 env:
+  # A pinned sibling in the test extra depends on this checkout's next release.
+  SETUPTOOLS_SCM_PRETEND_VERSION_FOR_ORBIX: "6.0.0"
   JAX_PLATFORMS: cpu
   EYEPIECE_REQUIRE_MANIM: "1"
   # Batched programs can stall on 2-vCPU runners with the default Eigen threading.
