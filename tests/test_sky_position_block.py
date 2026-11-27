@@ -55,28 +55,13 @@ def _system_model(**changes):
     )
 
 
-def _scene_model():
-    pytest.importorskip("skyscapes")
-    from skyscapes.physical_model import LambertianPhysicalModel
-    from skyscapes.scene import FlatStar, Planet, Scene
+@pytest.fixture
+def model():
+    """A bare orbix model with the path layout of a skyscapes Scene.
 
-    def planet():
-        return Planet(jnp.ones(1), LambertianPhysicalModel(jnp.array([0.3])))
-
-    return Scene.from_classical(
-        FlatStar(1e9),
-        (planet(), planet(), planet()),
-        star_mass_Msun=1.1,
-        planet_mass_Msun=MASSES,
-        dist_pc=10.0,
-        **ORBITS,
-    )
-
-
-@pytest.fixture(params=["system", "scene"])
-def model(request):
-    """A bare orbix model, then a real skyscapes Scene, with the same orbits."""
-    return _system_model() if request.param == "system" else _scene_model()
+    The same blocks on a real Scene are exercised downstream, in photomancy.
+    """
+    return _system_model()
 
 
 def _block(rows, laws=REAL, time_d=TIME, system=DYN):

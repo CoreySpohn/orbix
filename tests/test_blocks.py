@@ -59,35 +59,13 @@ def _system_model():
     )
 
 
-def _scene_model():
-    pytest.importorskip("skyscapes")
-    from hwoutils.constants import Mearth2kg, Msun2kg
-    from skyscapes.physical_model import LambertianPhysicalModel
-    from skyscapes.scene import FlatStar, Planet, Scene
+@pytest.fixture
+def model():
+    """A bare orbix model with the path layout of a skyscapes Scene.
 
-    def planet():
-        return Planet(jnp.ones(1), LambertianPhysicalModel(jnp.array([0.3])))
-
-    return Scene.from_classical(
-        FlatStar(1e9),
-        (planet(), planet(), planet()),
-        star_mass_Msun=1.1,
-        planet_mass_Msun=jnp.array([1e3, 3e2, 1e2]) * Mearth2kg / Msun2kg,
-        dist_pc=10.0,
-        a_AU=jnp.array([1.0, 3.0, 8.0]),
-        e=jnp.array([0.1, 0.2, 0.3]),
-        i_rad=jnp.array([0.7, 0.9, 1.2]),
-        W_rad=jnp.array([0.5, 1.5, 2.5]),
-        w_rad=jnp.array([1.0, 2.0, 3.0]),
-        M0_rad=jnp.array([2.0, 0.3, 1.1]),
-        epoch_d=jnp.array([3.0, 4.0, 5.0]),
-    )
-
-
-@pytest.fixture(params=["system", "scene"])
-def model(request):
-    """A bare orbix model, then a real skyscapes Scene, with the same orbits."""
-    return _system_model() if request.param == "system" else _scene_model()
+    The same blocks on a real Scene are exercised downstream, in photomancy.
+    """
+    return _system_model()
 
 
 def _assign(model, updates):
