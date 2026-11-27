@@ -490,7 +490,7 @@ def test_system_from_cartesian_rejects_wrong_shapes(field, shape):
 
 
 @pytest.mark.float64_only(reason="float64 reference values for orbital validation")
-def test_cartesian_chain_against_nbody(record_property):
+def test_cartesian_chain_against_nbody(request):
     """Truth: independent Newtonian RK4 of the three bodies.
 
     Two initially circular Jupiter-mass planets at 1 and 5.2 AU share a
@@ -569,9 +569,15 @@ def test_cartesian_chain_against_nbody(record_property):
     eph = system.solve(jnp.asarray(times))
     actual = np.stack(eph.offset_arcsec(jnp.array([1, 2])), axis=-1) * arcsec2mas
     residual = np.linalg.norm(actual - truth, axis=-1)
-    record_property("nbody_sky_offsets_mas", truth.tolist())
-    record_property("jacobi_residual_mas", residual.tolist())
-    record_property("step_halving_max_mas", float(convergence.max()))
+    # user_properties is the public node attribute behind record_property; the
+    # record_property fixture warns under junit_family xunit2, which CI uses.
+    request.node.user_properties.extend(
+        [
+            ("nbody_sky_offsets_mas", truth.tolist()),
+            ("jacobi_residual_mas", residual.tolist()),
+            ("step_halving_max_mas", float(convergence.max())),
+        ]
+    )
     print("N-body east/north offsets [planet, year, coordinate] (mas):", truth)
     print("Jacobi residuals [planet, year] (mas):", residual)
     print("Step-halving maximum (mas):", convergence.max())

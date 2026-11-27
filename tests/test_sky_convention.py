@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from hwoutils.constants import G, Msun2kg, two_pi
 from hwoutils.numerics import roundoff
+from hwoutils.testing import ulps
 from hypothesis import example, given
 from hypothesis import strategies as st
 
@@ -159,7 +160,9 @@ def test_stellar_reflex_signs(mass_ratio):
     """Fails if stellar reflex shares the planet's position or velocity sign.
 
     At the descending node the planet approaches and the star recedes.
-    Signs are strict; allow 2e-15 arcsec for x64 mass-scaled offsets.
+    Allow four work-dtype roundings relative to the mass-scaled reflex
+    offset for quaternion and projection arithmetic, with a 2e-15 arcsec
+    absolute floor.
     """
     system = System.from_classical(
         Body(1.0),
@@ -176,8 +179,9 @@ def test_stellar_reflex_signs(mass_ratio):
     relative = np.asarray(eph.offset_arcsec(1))
     reflex = np.asarray(eph.offset_arcsec(0, "barycenter"))
     assert np.sum(relative * reflex) < 0
+    rtol = float(ulps(4, reflex.dtype.type(1)))
     np.testing.assert_allclose(
-        reflex, -mass_ratio / (1 + mass_ratio) * relative, atol=2e-15, rtol=0
+        reflex, -mass_ratio / (1 + mass_ratio) * relative, atol=2e-15, rtol=rtol
     )
     assert eph.velocity_AU_per_d[1, 0, 2] < 0
     assert eph.radial_velocity_m_per_s(0)[0] > 0
