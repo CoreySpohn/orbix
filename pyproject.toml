@@ -25,7 +25,6 @@ Issues = "https://github.com/CoreySpohn/orbix/issues"
 
 [tool.hatch.version]
 source = "vcs"
-raw-options = { dist_name = "orbix" }
 
 [tool.hatch.build.hooks.vcs]
 version-file = "src/orbix/_version.py"
@@ -74,7 +73,6 @@ test = [
     "astropy>=6.1",
     "packaging>=23.2",
     "blackjax>=1.6.2",
-    "skyscapes>=6.0.0",  # unreleased: next release, see .github/sibling-pins.txt
 ]
 # eyepiece>=0.15.0: orbix.viz imports eyepiece.prepared (added in 0.5.0) and
 # trail's `depth=` argument, and eyepiece before 0.15.0 renders through the
