@@ -152,8 +152,8 @@ north positions at every time and the opposite away coordinate.
 ## Observatory geometry
 
 `orbix.observatory` places the telescope on its L2 halo orbit and answers whether a target
-is outside the keepout zones at a given time (`Observatory.is_observable_at`) or for what
-fraction of an interval (`Observatory.observability`). `ecliptic_pointing` returns the
+is outside the keepout zones at a given time (`Spacecraft.is_observable_at`) or for what
+fraction of an interval (`Spacecraft.observability`). `ecliptic_pointing` returns the
 ecliptic latitude and helioecliptic longitude that the local zodiacal light models need.
 
 ## Scope

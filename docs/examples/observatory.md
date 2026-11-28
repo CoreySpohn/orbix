@@ -30,36 +30,36 @@ import jax
 import jax.numpy as jnp
 from hwoutils.epoch import Epoch
 
-from orbix.observatory import Observatory, ObservatoryL2Halo
+from orbix.observatory import Spacecraft, ObservatoryL2Halo
 
 jax.config.update("jax_enable_x64", True)
 
 epoch = Epoch(2462502.5)  # 2030-01-01, the day that time_d counts from
 ra_deg, dec_deg = 101.287, -16.716  # Sirius
 
-observatory = Observatory(
+spacecraft = Spacecraft(
     orbit=ObservatoryL2Halo.from_default(),
     keepout_min_deg=45.0,
     keepout_max_deg=180.0,
 )
 time_d = jnp.array([0.0, 91.0, 182.0, 273.0])
-print(observatory.is_observable_at(ra_deg, dec_deg, epoch, time_d))
+print(spacecraft.is_observable_at(ra_deg, dec_deg, epoch, time_d))
 ```
 
 The telescope position on its halo orbit takes the same two arguments, an epoch
 and days from it, and returns the heliocentric ecliptic position in AU.
 
 ```{code-cell} ipython3
-print(observatory.orbit.position_ecliptic(epoch, 91.0))
+print(spacecraft.orbit.position_ecliptic(epoch, 91.0))
 ```
 
 The keepout limits are solar elongations: the target must lie at least
 `keepout_min_deg` and at most `keepout_max_deg` from the Sun, as seen from the
-observatory on its halo orbit. A single time answers "now". To ask how long the
+spacecraft on its halo orbit. A single time answers "now". To ask how long the
 target stays visible, give `observability` an interval.
 
 ```{code-cell} ipython3
-window = observatory.observability(
+window = spacecraft.observability(
     ra_deg, dec_deg, epoch, 0.0, 365.25, n_samples=73
 )
 print("visible fraction:", float(window.fraction))

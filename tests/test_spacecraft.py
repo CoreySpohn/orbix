@@ -1,4 +1,7 @@
-"""Tests for orbix.Observatory composition wrapper."""
+"""Tests for orbix.Spacecraft composition wrapper."""
+
+import dataclasses
+import importlib
 
 import equinox as eqx
 import jax
@@ -8,10 +11,10 @@ import pytest
 from hwoutils.epoch import Epoch
 from hwoutils.testing import ulps
 
-from orbix.observatory import Observatory, ObservatoryL2Halo, is_observable
+from orbix.observatory import ObservatoryL2Halo, Spacecraft, is_observable
 
 _EPOCH = Epoch(2460000.0, 575.75)
-_compiled_interval = eqx.filter_jit(Observatory.observability)
+_compiled_interval = eqx.filter_jit(Spacecraft.observability)
 
 
 def _interval(obs, ra, dec, epoch, start, stop, *, n_samples=64):
@@ -24,18 +27,18 @@ def _interval(obs, ra, dec, epoch, start, stop, *, n_samples=64):
 
 
 @pytest.fixture(scope="module")
-def keepout_observatory():
+def keepout_spacecraft():
     """Reuse one halo structure, with an explicit 45-degree solar keepout."""
-    return Observatory(
+    return Spacecraft(
         ObservatoryL2Halo.from_default(),
         keepout_min_deg=jnp.asarray(45.0),
     )
 
 
-def test_observatory_defaults():
-    """Bare Observatory(orbit=...) uses documented scalar defaults."""
+def test_spacecraft_defaults():
+    """Bare Spacecraft(orbit=...) uses documented scalar defaults."""
     orbit = ObservatoryL2Halo.from_default()
-    obs = Observatory(orbit=orbit)
+    obs = Spacecraft(orbit=orbit)
 
     assert obs.orbit is orbit
     assert obs.settling_time_d == 1.0
@@ -43,43 +46,97 @@ def test_observatory_defaults():
     assert obs.keepout_max_deg == 180.0
 
 
-def test_observatory_custom_fields():
+def test_spacecraft_custom_fields():
     """Scalar fields accept overrides via keyword arguments."""
     orbit = ObservatoryL2Halo.from_default()
-    obs = Observatory(
+    obs = Spacecraft(
         orbit=orbit,
         settling_time_d=2.0,
     )
     assert obs.settling_time_d == 2.0
 
 
-def test_observatory_is_pytree():
-    """Observatory flattens and unflattens cleanly as a JAX pytree."""
+def test_spacecraft_is_pytree():
+    """Spacecraft flattens and unflattens cleanly as a JAX pytree."""
     orbit = ObservatoryL2Halo.from_default()
-    obs = Observatory(orbit=orbit, settling_time_d=2.0)
+    obs = Spacecraft(orbit=orbit, settling_time_d=2.0)
 
     leaves, treedef = jax.tree_util.tree_flatten(obs)
     rebuilt = jax.tree_util.tree_unflatten(treedef, leaves)
     assert rebuilt.settling_time_d == 2.0
 
 
-def test_observatory_delegates_orbit_method():
-    """Observatory.orbit retains the full ObservatoryL2Halo API surface."""
+def test_old_observatory_names_are_gone():
+    """Fails if an alias of the old class name or the old module path survives.
+
+    Truth: the rename contract (one class of that exact name in the stack);
+    absence is exact.
+    """
+    import orbix.observatory as package
+
+    assert not hasattr(package, "Observatory")
+    assert "Observatory" not in package.__all__
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("orbix.observatory.observatory")
+
+
+def test_observability_and_spacecraft_import_from_package():
+    """Fails if the result class or the renamed class leaves the package namespace.
+
+    Truth: the contract that both are imported from ``orbix.observatory``.
+    """
+    from orbix.observatory import Observability
+
+    assert Observability.__name__ == "Observability"
+    assert Spacecraft.__module__ == "orbix.observatory.spacecraft"
+
+
+def test_spacecraft_field_table():
+    """Fails if a field is renamed, reordered, retyped or given another default.
+
+    Truth: a fixed table written here (field order, leaf shape, default), not
+    read back from the class. The orbit has no default.
+    """
+    fields = dataclasses.fields(Spacecraft)
+    assert [f.name for f in fields] == [
+        "orbit",
+        "settling_time_d",
+        "keepout_min_deg",
+        "keepout_max_deg",
+    ]
+    defaults = {f.name: f.default for f in fields}
+    assert defaults["orbit"] is dataclasses.MISSING
+    assert defaults["settling_time_d"] == 1.0
+    assert defaults["keepout_min_deg"] == 0.0
+    assert defaults["keepout_max_deg"] == 180.0
+
+    sc = Spacecraft(orbit=ObservatoryL2Halo.from_default())
+    for name in ("settling_time_d", "keepout_min_deg", "keepout_max_deg"):
+        assert np.shape(getattr(sc, name)) == ()
+    orbit_leaves = jax.tree_util.tree_leaves(sc.orbit)
+    leaves = jax.tree_util.tree_leaves(sc)
+    scalar_leaves = leaves[len(orbit_leaves) :]
+    assert len(leaves) == len(orbit_leaves) + 3
+    assert [float(x) for x in scalar_leaves] == [1.0, 0.0, 180.0]
+
+
+def test_spacecraft_delegates_orbit_method():
+    """Spacecraft.orbit retains the full ObservatoryL2Halo API surface."""
     orbit = ObservatoryL2Halo.from_default()
-    obs = Observatory(orbit=orbit)
+    obs = Spacecraft(orbit=orbit)
 
     pos = obs.orbit.position_ecliptic(_EPOCH, 10.0)
     assert pos.shape == (3,)
 
 
-def test_is_observable_at_matches_scalar_calls(keepout_observatory):
+def test_is_observable_at_matches_scalar_calls(keepout_spacecraft):
     """Fails if epoch conversion, broadcasting, or configured keepouts drift.
 
     Truth: scalar per-element calls of the epoch-relative API; boolean equality
     is exact (no tolerance).
     The split epoch and nonzero/negative day offsets detect lost epoch parts.
     """
-    obs = keepout_observatory
+    obs = keepout_spacecraft
     ra = jnp.array([[0.0], [100.0]])
     dec = jnp.array([0.0, 17.0, 63.0])
     time = jnp.array([-30.25, 95.125, 400.75])
@@ -117,7 +174,7 @@ def test_is_observable_at_matches_scalar_calls(keepout_observatory):
     )
 
 
-def test_annual_observability_against_dense_grid(keepout_observatory):
+def test_annual_observability_against_dense_grid(keepout_spacecraft):
     """Fails if duration uses sample counts or refined boundaries are misplaced.
 
     Truth: 10^4 direct per-time decisions over a year for an ecliptic target.
@@ -128,7 +185,7 @@ def test_annual_observability_against_dense_grid(keepout_observatory):
     The coarse grid divides its span and scales the sample index, giving
     two rounding operations at the scale of the year.
     """
-    obs = keepout_observatory
+    obs = keepout_spacecraft
     year = 365.25
     result = _interval(obs, 180.0, 0.0, _EPOCH, 0.0, year, n_samples=16)
     times = jnp.linspace(0.0, year, 10000)
@@ -172,14 +229,14 @@ def test_annual_observability_against_dense_grid(keepout_observatory):
     )
 
 
-def test_full_and_empty_observability(keepout_observatory):
+def test_full_and_empty_observability(keepout_spacecraft):
     """Fails if always/never visible intervals lose endpoint or sentinel semantics.
 
     Truth: the ecliptic pole stays outside a 45-degree solar keepout;
     RA=180 deg, Dec=0 is Sunward for the first ten days of this epoch.
     Constant decisions, fractions, endpoints, and sentinels are exact.
     """
-    obs = keepout_observatory
+    obs = keepout_spacecraft
     pole = _interval(obs, 270.0, 66.56, _EPOCH, 0.0, 365.25)
     assert pole.all and pole.any
     assert pole.fraction == 1.0
@@ -197,7 +254,7 @@ def test_full_and_empty_observability(keepout_observatory):
         obs.observability(0.0, 0.0, _EPOCH, 0.0, 1.0, n_samples=1)
 
 
-def test_observability_jit_and_vmap(keepout_observatory):
+def test_observability_jit_and_vmap(keepout_spacecraft):
     """Fails if interval summaries change under tracing or target vectorization.
 
     Truth: an eager scalar call and a scalar loop, including a target with
@@ -206,7 +263,7 @@ def test_observability_jit_and_vmap(keepout_observatory):
     fusion at MJD ~60000 (a few MJD ULPs). Fraction allows that duration
     roundoff divided by 365.25 d. Boundary brackets must stay unchanged.
     """
-    obs = keepout_observatory
+    obs = keepout_spacecraft
     ras = jnp.array([0.0, 75.0, 270.0])
     decs = jnp.array([0.0, 11.5, 66.56])
     results = [

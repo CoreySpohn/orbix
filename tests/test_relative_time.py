@@ -18,7 +18,7 @@ from hwoutils.leaves import check_tree
 from hwoutils.numerics import roundoff
 from hwoutils.testing import precision_pair
 
-from orbix.observatory import Observatory, ObservatoryL2Halo, sun_ecliptic_longitude_deg
+from orbix.observatory import ObservatoryL2Halo, Spacecraft, sun_ecliptic_longitude_deg
 from orbix.observatory.orbit import epoch_mjd
 from orbix.observatory.solar_system import earth_position_ecliptic
 
@@ -83,7 +83,7 @@ def test_observability_mask_matches_base_code():
     from the 45 deg edge; the stored set has no point nearer than 0.66 deg, so the
     margin excludes nothing, and both outcomes occur.
     """
-    obs = Observatory(ObservatoryL2Halo.from_default(), keepout_min_deg=45.0)
+    obs = Spacecraft(ObservatoryL2Halo.from_default(), keepout_min_deg=45.0)
     kept = 0
     seen = set()
     for name, epoch in _EPOCHS.items():

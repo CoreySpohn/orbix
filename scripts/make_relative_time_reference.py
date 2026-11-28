@@ -22,7 +22,7 @@ import jax.numpy as jnp
 import numpy as np
 from hwoutils.epoch import Epoch
 
-from orbix.observatory import Observatory, ObservatoryL2Halo
+from orbix.observatory import ObservatoryL2Halo, Spacecraft
 from orbix.observatory.orbit import epoch_mjd
 from orbix.observatory.solar_system import earth_position_ecliptic
 
@@ -54,7 +54,7 @@ for h in (0.0, 30.0):
                     ).tolist(),
                 }
             )
-ob = Observatory(ObservatoryL2Halo.from_default(), keepout_min_deg=45.0)
+ob = Spacecraft(ObservatoryL2Halo.from_default(), keepout_min_deg=45.0)
 ras = [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0]
 decs = [10.0, -20.0, 0.0, 35.0, -60.0, 5.0, 50.0, -5.0]
 for k, (j1, j2) in EP.items():

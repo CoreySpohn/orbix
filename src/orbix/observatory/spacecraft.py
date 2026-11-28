@@ -1,4 +1,4 @@
-"""Observatory composition wrapper around ObservatoryL2Halo.
+"""Spacecraft composition wrapper around ObservatoryL2Halo.
 
 Bundles an orbit model with platform-level operational scalars
 (settling time, keepout limits).
@@ -31,7 +31,7 @@ class Observability(eqx.Module):
     ``inf``/``-inf`` if no grid sample is visible. ``any`` and ``all`` describe
     the grid decisions. All summaries are scalar arrays.
 
-    See :meth:`Observatory.observability` for resolution and missed-window
+    See :meth:`Spacecraft.observability` for resolution and missed-window
     limitations; boundary estimates need not themselves be observable.
 
     Attributes:
@@ -57,12 +57,12 @@ class Observability(eqx.Module):
     all: Array
 
 
-class Observatory(eqx.Module):
-    """Space telescope observatory platform.
+class Spacecraft(eqx.Module):
+    """Space telescope platform.
 
     Composes an :class:`ObservatoryL2Halo` orbit model with operational
     scalars (settling time, keepout limits). All scalar fields have sensible
-    defaults so a bare ``Observatory(orbit=orbit)`` constructs a reasonable
+    defaults so a bare ``Spacecraft(orbit=orbit)`` constructs a reasonable
     HWO-like platform.
 
     Attributes:
@@ -106,7 +106,7 @@ class Observatory(eqx.Module):
         """Check keepout at day offsets from a static ``epoch``.
 
         RA, Dec (degrees, J2000), and ``time_d`` broadcast to one common output shape.
-        Uses this observatory's orbit and solar keepout limits; Earth limits
+        Uses this spacecraft's orbit and solar keepout limits; Earth limits
         retain the keepout function's permissive defaults. No time-scale
         conversion is applied.
         Close over ``epoch`` or mark it static when using ``jax.jit``.

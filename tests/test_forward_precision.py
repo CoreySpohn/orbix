@@ -17,8 +17,8 @@ from hwoutils.testing import assert_precision_closed, precision_pair, ulps
 from orbix import equations as eq
 from orbix.kepler import Grid, Halley, Markley, kepler
 from orbix.observatory import (
-    Observatory,
     ObservatoryL2Halo,
+    Spacecraft,
     body_angle_deg,
     ecliptic_pointing,
     is_observable,
@@ -123,7 +123,7 @@ def cases(geometry):
     orbit, time, system = g["orbit"], g["time"], g["system"]
     frame, star, planets = g["frame"], g["star"], g["planets"]
     halo = g["halo"]
-    platform = Observatory(halo, keepout_min_deg=45.0)
+    platform = Spacecraft(halo, keepout_min_deg=45.0)
     r, v, mu0 = g["r"], g["v"], g["mu"]
     day = time[0]
     ra, dec = frame.ra_deg, frame.dec_deg
@@ -476,24 +476,24 @@ def cases(geometry):
             (halo, ra, dec, day),
             128,
         ),
-        "Observatory.is_observable_at": (
+        "Spacecraft.is_observable_at": (
             lambda h, ra, dec, t: h.is_observable_at(ra, dec, _EPOCH, t),
             (platform, ra, dec, time),
             16,
         ),
-        "Observatory.is_observable_at.host_sky": (
+        "Spacecraft.is_observable_at.host_sky": (
             lambda h, t: h.is_observable_at(110.0, 32.0, _EPOCH, t),
             (platform, time),
             16,
         ),
-        "Observatory.observability": (
+        "Spacecraft.observability": (
             lambda h, ra, dec, t: h.observability(
                 ra, dec, _EPOCH, t[0], t[-1], n_samples=8
             ),
             (platform, ra, dec, time),
             128,
         ),
-        "Observatory.observability.host_interval": (
+        "Spacecraft.observability.host_interval": (
             lambda h, ra, dec: h.observability(
                 ra, dec, _EPOCH, 11.0, 83.0, n_samples=8
             ),
@@ -548,8 +548,8 @@ def cases(geometry):
     ecliptic_pointing.host_sky body_angle_deg.host_sky
     ObservatoryL2Halo.position_ecliptic ObservatoryL2Halo.solar_elongation_deg
     ObservatoryL2Halo.position_ecliptic.custom
-    Observatory.is_observable_at Observatory.observability
-    Observatory.is_observable_at.host_sky Observatory.observability.host_interval
+    Spacecraft.is_observable_at Spacecraft.observability
+    Spacecraft.is_observable_at.host_sky Spacecraft.observability.host_interval
     """.split(),
 )
 def test_forward_precision(entry, cases):

@@ -60,3 +60,13 @@ orbix 5.0 changes the order of raw state rows, corrects the sky axes of
 * The observatory takes sky angles in degrees. `body_angle(obs_pos, body_pos,
   ra_rad, dec_rad, mjd)` is `body_angle_deg(obs_pos, body_pos, ra_deg, dec_deg)`, and
   `is_observable` takes `ra_deg` and `dec_deg`.
+
+# Migrating from 6.0
+
+* `orbix.observatory.Observatory` is `orbix.observatory.Spacecraft`, and its module is
+  `orbix.observatory.spacecraft` (the old module path no longer imports). Fields, defaults and
+  methods are unchanged; replace the name in imports and constructors, for example
+  `Spacecraft(orbit=orbit, keepout_min_deg=45.0)`. `Observability` is imported from
+  `orbix.observatory`. The subpackage keeps the name `orbix.observatory`, and `ObservatoryL2Halo`
+  keeps its name. `optixstuff.Observatory` is the hardware model of the stack and is unrelated.
+  The change gives the stack one class named `Observatory`.

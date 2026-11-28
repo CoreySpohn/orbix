@@ -57,7 +57,7 @@ def body_angle_deg(
     """Angle between a solar system body and a target as seen from the observatory.
 
     Args:
-        obs_pos_eclip: Observatory heliocentric ecliptic position (AU).
+        obs_pos_eclip: Spacecraft heliocentric ecliptic position (AU).
         body_pos_eclip: Body heliocentric ecliptic position (AU).
         ra_deg: Target right ascension [deg], J2000.
         dec_deg: Target declination [deg], J2000.
@@ -88,7 +88,7 @@ def is_observable(
     """Check if a target is observable (outside all keepout zones).
 
     Args:
-        obs_pos_eclip: Observatory heliocentric ecliptic position (AU), shape ``(3,)``.
+        obs_pos_eclip: Spacecraft heliocentric ecliptic position (AU), shape ``(3,)``.
         ra_deg: Target right ascension [deg], J2000.
         dec_deg: Target declination [deg], J2000.
         epoch: Static day zero of ``time_d``.
