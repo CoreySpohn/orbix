@@ -57,6 +57,7 @@ from orbix.system import (
     plane_to_disk,
 )
 from orbix.system import observables as obs
+from orbix.system.charts import _wrap_angles
 from orbix.system.linear import (
     frame_to_sky_block,
     line_of_sight_sheet,
@@ -751,6 +752,30 @@ def test_classical_wrap_follows_angle_precision(mode):
     np.testing.assert_allclose(
         node, 2 * np.pi - 0.4, rtol=float(ulps(16, dtype.type(1))), atol=0
     )
+
+
+@pytest.mark.parametrize("mode", ["eager", "jit"])
+def test_half_open_wraps_never_return_the_period_in_float32(mode):
+    """A tiny negative angle wraps to the start of [0, period), never to the period.
+
+    Truth source: the documented half-open range. In float32 the remainder of a
+    negative angle smaller than half a unit in the last place of the period rounds
+    to the period itself, so an unguarded wrap returns 2 pi or 360 exactly.
+    Tolerance basis: exact-algebra (the result must be below the period and equal
+    to zero here). Fails if a chart or the ecliptic longitude drops the guard.
+    """
+    wrap = partial(_wrap_angles, columns=(1,))
+    coords = jnp.array([[0.1, -1e-9]], dtype=jnp.float32)
+    chart = (jax.jit(wrap) if mode == "jit" else wrap)(coords)
+    to_ecliptic = (
+        jax.jit(equatorial_to_ecliptic_deg)
+        if mode == "jit"
+        else (equatorial_to_ecliptic_deg)
+    )
+    longitude, _ = to_ecliptic(jnp.float32(0.0), jnp.float32(-1e-6))
+    assert chart.dtype == longitude.dtype == np.float32
+    assert float(chart[0, 1]) == 0.0
+    assert float(longitude) == 0.0
 
 
 @pytest.mark.parametrize("mode", ["eager", "jit"])

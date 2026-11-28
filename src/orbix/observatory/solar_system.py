@@ -115,6 +115,8 @@ def equatorial_to_ecliptic_deg(ra_deg: ArrayLike, dec_deg: ArrayLike) -> tuple:
     )
     x, y, z = jnp.moveaxis(equat2eclip(direction), -1, 0)
     longitude = jnp.degrees(jnp.arctan2(y, x)) % 360
+    # A tiny negative longitude rounds up to exactly 360 in float32.
+    longitude = jnp.where(longitude == 360, jnp.zeros_like(longitude), longitude)
     return longitude, jnp.degrees(jnp.arctan2(z, jnp.hypot(x, y)))
 
 
@@ -418,4 +420,5 @@ def sun_ecliptic_longitude_deg(epoch: Epoch, time_d: ArrayLike) -> Array:
         r_earth = _planet_position_ecliptic_rel("Earth", epoch, d)
         return jnp.degrees(jnp.arctan2(-r_earth[1], -r_earth[0]))
 
-    return jnp.vectorize(longitude)(jnp.asarray(time_d)) % 360
+    wrapped = jnp.vectorize(longitude)(jnp.asarray(time_d)) % 360
+    return jnp.where(wrapped == 360, jnp.zeros_like(wrapped), wrapped)

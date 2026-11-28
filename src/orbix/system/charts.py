@@ -126,7 +126,10 @@ _LOG_HAAR = math.log(8 * math.pi**2)
 def _wrap_angles(coords, columns):
     """Reduce the listed coordinate columns to ``[0, 2 pi)``."""
     cols = jnp.asarray(columns)
-    return coords.at[..., cols].set(jnp.mod(coords[..., cols], two_pi))
+    angles = jnp.mod(coords[..., cols], two_pi)
+    # A tiny negative angle rounds up to exactly the period in float32.
+    angles = jnp.where(angles == two_pi, jnp.zeros_like(angles), angles)
+    return coords.at[..., cols].set(angles)
 
 
 def _chi_four_icdf(q):
