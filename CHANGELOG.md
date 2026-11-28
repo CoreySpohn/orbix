@@ -1,5 +1,12 @@
 # Changelog
 
+## [6.0.1](https://github.com/CoreySpohn/orbix/compare/v6.0.0...v6.0.1) (2026-11-28)
+
+
+### Bug Fixes
+
+* **orbix:** keep float32 angle wraps inside their half-open range ([718ede5](https://github.com/CoreySpohn/orbix/commit/718ede51d24ef4fef5aebc79ec5aa25285a7436f))
+
 ## [6.0.0](https://github.com/CoreySpohn/orbix/compare/v5.0.0...v6.0.0) (2026-11-28)
 
 
