@@ -1,5 +1,65 @@
 # Changelog
 
+## [6.0.0](https://github.com/CoreySpohn/orbix/compare/v5.0.0...v6.0.0) (2026-11-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* **orbit:** decide radial and parabolic states within roundoff and enforce the precision guard
+* **orbix:** close Kepler, orbit, sky geometry, clock and observatory forwards at their working precision
+* **orbix:** derive orbit and star-mass walls from the current laws, with traced wall flags
+* **orbix:** decide supports, walls, gauges and sheets the same way in both precision lanes; block inference requires float64
+* **system:** Ephemeris takes a static batch_ndim (default 0, one system) and refuses a dist_pc whose shape is not exactly that batch shape, so a distance history is no longer accepted. state_vector_to_keplerian tests degeneracy relative to the scale of the state, so its circular, equatorial and parabolic branches no longer depend on the units; a face-on state now has an exact zero inclination (was 4.47e-4 rad), and a circular inclined body near its node keeps its anomaly (was clipped to 4.47e-4 rad). Adds barycentric_to_jacobi and System.from_cartesian.
+* **system:** a block with a row beyond the orbit's planet count now raises ValueError instead of clamping or dropping the write; draws from an OrbitLaw whose parameters have shape (1,) are now independent per planet (they were one shared draw). Drop or correct such rows, and re-run fits that relied on the shared draw.
+* **observatory:** position_ecliptic, planet_position_ecliptic, planet_position_equatorial, earth_position_ecliptic, earth_position_equatorial and is_observable take (epoch, time_d) in place of an MJD; epoch_mjd is host-only and returns float64 NumPy; ObservatoryL2Halo keeps its equinox and period as static fields, so its pytree has only the interpolators as leaves
+* **system:** a block whose law bounds the size names that coordinate mapped_ln_a_AU or mapped_ln_n_rad_per_d instead of logit_ln_a_AU or logit_ln_n_rad_per_d; the sort position among the chart's names is unchanged.
+* **system:** SkyFrame.time_d takes jd=, mjd= or an object with jd1 and jd2
+* **observatory:** remove the temperature_K field, owned by optixstuff WarmEmission
+* **observatory:** remove overhead_multi, overhead_fixed_s and stability_fact fields
+* **system:** one home for kepler solvers, export rotate helpers, constant from hwoutils
+* **system:** line_of_sight_branch is now line_of_sight_sheet; ThieleInnesChart(branch=) is now ThieleInnesChart(sheet=); sky_block_to_frame(branch=) is now sky_block_to_frame(sheet=); reflect_line_of_sight(orbits, row) is now reflect_line_of_sight(orbits, planet).
+
+### Features
+
+* **observatory:** remove the temperature_K field, owned by optixstuff WarmEmission ([2310a1e](https://github.com/CoreySpohn/orbix/commit/2310a1e7cb8ad82e2e39c2d8584d01635b65a62e))
+* **observatory:** take epoch and relative days instead of an absolute MJD ([52bae78](https://github.com/CoreySpohn/orbix/commit/52bae7812ed5997b4eeb164673fd9f8d6c37c2db))
+* **system:** add SkyPositionBlock to free planet sky offsets at one time ([b127e37](https://github.com/CoreySpohn/orbix/commit/b127e37ccc18e6e0a441ceb6b4cec5b52ac63b76))
+* **system:** build Jacobi chains from Cartesian states ([3182dea](https://github.com/CoreySpohn/orbix/commit/3182dea6546ab3d01c92c022cfca4109e7508501))
+* **system:** one home for kepler solvers, export rotate helpers, constant from hwoutils ([0b189da](https://github.com/CoreySpohn/orbix/commit/0b189da009b4d4370d0f7d1b4bdade3c289ab1b0))
+* **system:** orbit laws report their edges and orbit blocks list the walls their charts do not map ([c363e0e](https://github.com/CoreySpohn/orbix/commit/c363e0ebd1adf2767705e8827ae7d410f59c37c1))
+* **system:** SkyFrame.time_d takes jd=, mjd= or an object with jd1 and jd2 ([53e819b](https://github.com/CoreySpohn/orbix/commit/53e819b6512ad1d5f86c6571d58d79c548923c45))
+* **system:** System declares its orbits tied to the star and planet masses ([868c67c](https://github.com/CoreySpohn/orbix/commit/868c67c583d0df72ca213891af1f82b880c667ae))
+
+
+### Bug Fixes
+
+* **equations:** nondimensionalize the state so float32 SI derivatives stay exact ([041677a](https://github.com/CoreySpohn/orbix/commit/041677a41b7162c1a00bfdccb6c34d0146639184))
+* **equations:** normalize before products so float32 elements stay finite ([62d2869](https://github.com/CoreySpohn/orbix/commit/62d28690abfe8aeb486d75b7d114876c53da7535))
+* **equations:** recover orbit angles with a guarded atan2 for float32 derivatives ([f6147cb](https://github.com/CoreySpohn/orbix/commit/f6147cbe90faf0b95bef32c46b7146021be58654))
+* **kepler:** recover the phase of a subnormal mean anomaly under flush-to-zero ([801b5a8](https://github.com/CoreySpohn/orbix/commit/801b5a8802053d5e06edb73a760b84ec16955fb0))
+* **observatory:** reduce time_d modulo the halo period before adding the phase ([41c2d07](https://github.com/CoreySpohn/orbix/commit/41c2d07d091fe650b88b064e1f6f8d45fae6caf5))
+* **orbit:** decide radial and parabolic states within roundoff and enforce the precision guard ([1c96e3d](https://github.com/CoreySpohn/orbix/commit/1c96e3d3c6e6c41bd0d5cb2cc8ca675e85b34a3c))
+* **orbix:** close Kepler, orbit, sky geometry, clock and observatory forwards at their working precision ([2cbce53](https://github.com/CoreySpohn/orbix/commit/2cbce5354f72a0853787d8dbf1ccad509de9d2ce))
+* **orbix:** decide supports, walls, gauges and sheets the same way in both precision lanes; block inference requires float64 ([655e026](https://github.com/CoreySpohn/orbix/commit/655e02683eacf14f8c2ba9084945eb2aadf7e73d))
+* **orbix:** derive orbit and star-mass walls from the current laws, with traced wall flags ([a0caea9](https://github.com/CoreySpohn/orbix/commit/a0caea97d465ddfd1dce2615c3812afecbc20ff1))
+* **system:** a negative size edge is no wall, tied fields are read-only and the docstrings state the hull and mass-wall rules ([25883b0](https://github.com/CoreySpohn/orbix/commit/25883b026767869a6e54d6145e915661001e7408))
+* **system:** a size edge at or below zero is clipped at zero before the log, so the mapped size has an open lower end instead of NaN ([e388ed7](https://github.com/CoreySpohn/orbix/commit/e388ed7d582254a4cd49f009dda1da211569ee82))
+* **system:** a size law whose support starts at zero maps its upper edge by a softplus instead of reading NaN everywhere ([2a60016](https://github.com/CoreySpohn/orbix/commit/2a6001667418b500fbc9682134f7c58938bcefde))
+* **system:** check the ephemeris vector rank before the batch rank ([e830c3e](https://github.com/CoreySpohn/orbix/commit/e830c3e7d1811fa29255e7d5e8d2400bf12c1b48))
+* **system:** draw batched laws once per element and refuse vector-event laws ([c4cbb40](https://github.com/CoreySpohn/orbix/commit/c4cbb4034553827c8c36b5e5709ecafe2ed041be))
+* **system:** draw each planet independently and refuse block rows past the planet count ([998f3e7](https://github.com/CoreySpohn/orbix/commit/998f3e713b152ee912cbe8d0a787618f11152777))
+* **system:** draw laws through the sample shape rule and refuse laws that break it ([45edc48](https://github.com/CoreySpohn/orbix/commit/45edc487278f0cfcd25e0149120618aa13353802))
+* **system:** draw parameter-free laws and mixtures per planet and check rows in every block call ([5fb6107](https://github.com/CoreySpohn/orbix/commit/5fb61072902a9eefa81cfc633cd88cb47b4daaf1))
+* **system:** mark a zero sky separation NaN with a safe gradient and document the outer rows ([f88a329](https://github.com/CoreySpohn/orbix/commit/f88a329e4b234d8dad2515dae035da1311babd2e))
+* **system:** name a mapped size coordinate mapped_ rather than logit_, since a size law from zero maps it by a softplus ([1325a84](https://github.com/CoreySpohn/orbix/commit/1325a847065907b9473e3b6f02a97321f422e873))
+* **system:** take one Cartesian epoch per system and derive the ephemeris batch rank ([51049a7](https://github.com/CoreySpohn/orbix/commit/51049a728256b7d2382fcece29559655f02ea5e3))
+
+
+### Code Refactoring
+
+* **observatory:** remove overhead_multi, overhead_fixed_s and stability_fact fields ([710f387](https://github.com/CoreySpohn/orbix/commit/710f387b3bd8d3b0aadbd5145f408acfc4133618))
+* **system:** name the line-of-sight sign a sheet and the reflected planet an index ([80ab3de](https://github.com/CoreySpohn/orbix/commit/80ab3de867cbb9c353317997bac7d6dd7428651c))
+
 ## [5.0.0](https://github.com/CoreySpohn/orbix/compare/v4.2.0...v5.0.0) (2026-11-19)
 
 
